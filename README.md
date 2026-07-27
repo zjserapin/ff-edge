@@ -16,9 +16,16 @@ uv run python bootstrap.py --light   # ~2 min cold, hydrates everything but pbp
 uv run python peek.py                # four worked examples
 ```
 
-To pull your own league data, set `SLEEPER_USERNAME` in `config.py` to your
-Sleeper **display name** (not your email), then re-run bootstrap. Without it the
-Sleeper section is skipped cleanly.
+To pull your own league data, export your Sleeper **display name** (not your
+email) and re-run bootstrap. It's read from the shell rather than committed so a
+personal handle doesn't end up in the repo:
+
+```bash
+export FF_EDGE_SLEEPER_USER=yourname
+uv run python bootstrap.py --light
+```
+
+Without it the Sleeper section is skipped cleanly.
 
 Drop `--light` to also pull play-by-play (~1GB, several minutes).
 
@@ -98,10 +105,12 @@ Also verified by running it:
   0.2839. Same price, ~75x difference in whether you can wait.
 - **MCP**: all 14 tools register and return real data under `fastmcp.Client`.
 
-**Not verified**: the Sleeper section. `SLEEPER_USERNAME` is still `CHANGE_ME`,
-so no league endpoint has been exercised against a live account. The client is
-written to Sleeper's documented v1 API and bootstrap skips the section cleanly,
-but treat it as untested until you set a username and run it.
+The Sleeper section is verified too, against a live account (**33/33 pulls ok**):
+user resolves, 1 league, 10 managers, 10 rosters. The `previous_league_id` walk
+returned **470 picks across 3 prior seasons** (2023/2024/2025), joining to
+nflverse at **96.0%**. `all_transactions` on the 2025 league returned **691**
+(359 waiver, 318 free agent, 14 trade). All 14 MCP tools return real data,
+including the four league tools.
 
 ## Notes
 

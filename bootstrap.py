@@ -92,7 +92,7 @@ def run(light: bool = False) -> None:
 
     _section("Sleeper")
     if SLEEPER_USERNAME == "CHANGE_ME":
-        print("  skipped — set SLEEPER_USERNAME in config.py to pull league data")
+        print("  skipped — export FF_EDGE_SLEEPER_USER=<display name> to pull league data")
     else:
         step("nfl_state", sleeper.nfl_state)
         step("sleeper players", sleeper.players_nfl)

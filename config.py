@@ -7,6 +7,7 @@ should be a one-line edit, not a grep.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 # --- Season -----------------------------------------------------------------
@@ -17,7 +18,10 @@ SEASON = 2026
 
 # Your Sleeper *display name* (what leaguemates see), not the email you log in
 # with. Sleeper's public API has no auth and resolves users by username only.
-SLEEPER_USERNAME = "CHANGE_ME"
+#
+# Read from the shell first so a personal handle never lands in a public repo:
+#   export FF_EDGE_SLEEPER_USER=yourname
+SLEEPER_USERNAME = os.environ.get("FF_EDGE_SLEEPER_USER", "CHANGE_ME")
 
 # Populate to skip league discovery entirely (useful if you're in leagues under
 # a different account, or want to pin the pipeline to one league).
