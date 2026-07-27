@@ -21,6 +21,8 @@ import altair as alt
 import polars as pl
 import streamlit as st
 
+from src import archetypes as ar
+from src import features as ft
 from src import landscape as ls
 from src import scoring as sc
 from src import theme
@@ -428,6 +430,150 @@ def _tab_landscape(p: dict[str, Any]) -> None:
         st.dataframe(conc.to_pandas(), use_container_width=True, hide_index=True)
 
 
+@st.cache_data(show_spinner="Building features…")
+def _features() -> pl.DataFrame:
+    return ft.build()
+
+
+@st.cache_data(show_spinner="Clustering…")
+def _clusters(season: int, k: int | None, min_games: int) -> pl.DataFrame:
+    return ar.cluster(season, min_games=min_games, k=k, df=_features())
+
+
+@st.cache_data(show_spinner=False)
+def _profiles(season: int, k: int | None, min_games: int) -> pl.DataFrame:
+    return ar.cluster_profiles(_clusters(season, k, min_games), _features(), season=season)
+
+
+@st.cache_data(show_spinner=False)
+def _silhouette(season: int, position: str, min_games: int) -> pl.DataFrame:
+    pool = _features().filter(
+        (pl.col("season") == season) & (pl.col("games") >= min_games)
+        & (pl.col("position") == position)
+    )
+    x, used = ar._matrix(pool, ft.cluster_feature_columns(position))
+    if not used or pool.height < 12:
+        return pl.DataFrame()
+    return ar.choose_k(x, (2, ar.K_CEILING.get(position, 6)))
+
+
+def _tab_players(p: dict[str, Any]) -> None:
+    dark = p["dark"]
+    feats = _features()
+    if not feats.height:
+        st.warning("No features built. Run `uv run python -m src.bootstrap --light`.")
+        return
+
+    season = int(feats.get_column("season").max())
+    st.subheader("Usage archetypes")
+    st.caption(
+        f"Grouping {season} players by *how they were used* — shares, rates, and "
+        "role — not by what they scored. Expected points and draft pedigree are "
+        "deliberately excluded from the distance metric, so these are not "
+        "scoring tiers in disguise."
+    )
+    st.warning(
+        "**Clusters describe. They do not predict.** A receiver sitting with "
+        "three alphas means his target share, air-yards share and route role "
+        "rhyme with theirs. It does not mean he will produce like them — what "
+        "separates him from them may be talent, and talent is not in this "
+        "feature set.",
+        icon="⚠️",
+    )
+
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        auto = st.checkbox("Choose the number of groups automatically", value=True)
+    with c2:
+        min_games = st.slider("Minimum games", 4, 14, 8, key="cluster_min_games")
+    k = None if auto else st.slider("Groups per position", 2, 6, 4, key="cluster_k")
+
+    clusters = _clusters(season, k, min_games)
+    if not clusters.height:
+        st.info("Not enough qualified players to cluster.")
+        return
+
+    profiles = _profiles(season, k, min_games)
+
+    st.info(
+        "**Silhouette peaks at two groups for every position and falls from "
+        "there** — NFL usage has one dominant axis, how much of his offense a "
+        "player commands. The honest answer is 'featured' and 'not'. The one "
+        "real exception is quarterback, where the split is rushing versus "
+        "pocket rather than good versus bad. Turning off automatic selection "
+        "lets you assert finer archetypes; the curve below shows what that costs.",
+        icon="ℹ️",
+    )
+
+    st.markdown("#### What each group is")
+    st.dataframe(
+        profiles.select("position", "cluster", "n", "mean_ppg", "label").to_pandas(),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.markdown("#### Find comparable usage")
+    st.caption(
+        "The players whose role most resembles this one, ranked by distance in "
+        "the standardized usage space. A cheap player next to expensive ones is "
+        "the thing worth a second look."
+    )
+    pos = st.selectbox("Position", sorted(clusters.get_column("position").unique().to_list()))
+    pool = clusters.filter(pl.col("position") == pos).sort("pos_rank")
+    names = pool.get_column("player_name").to_list()
+    who = st.selectbox("Player", names)
+    pid = pool.filter(pl.col("player_name") == who).get_column("player_id")[0]
+
+    nb = ar.neighbors(pid, clusters, feats, n=8, season=season)
+    if nb.height:
+        st.dataframe(
+            nb.select("player_name", "team", "distance", "ppg", "pos_rank", "games").to_pandas(),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    with st.expander("How many groups the data actually supports"):
+        sil = _silhouette(season, pos, min_games)
+        if sil.height:
+            st.caption(
+                "Higher silhouette means tighter, better-separated groups. "
+                "Solutions marked not viable have a group of fewer than four "
+                "players — k-means quarantining an outlier, not an archetype."
+            )
+            sil_pd = sil.to_pandas()
+            curve = (
+                alt.Chart(sil_pd)
+                .mark_line(strokeWidth=2, point=alt.OverlayMarkDef(size=70, filled=True))
+                .encode(
+                    x=alt.X("k:O", title="Groups"),
+                    y=alt.Y("silhouette:Q", title="Silhouette"),
+                    tooltip=[
+                        alt.Tooltip("k:O", title="Groups"),
+                        alt.Tooltip("silhouette:Q", format=".3f"),
+                        alt.Tooltip("smallest:Q", title="Smallest group"),
+                        alt.Tooltip("viable:N", title="Viable"),
+                    ],
+                )
+                .properties(height=200)
+            )
+            st.altair_chart(theme.base_chart(curve, dark), use_container_width=True)
+            st.dataframe(sil_pd, use_container_width=True, hide_index=True)
+
+    with st.expander("Feature coverage"):
+        st.caption(
+            "Next Gen Stats cover qualified receivers only, so ~30% non-null is "
+            "expected there. Snap share below ~90% would mean the "
+            "pfr_id → gsis_id bridge broke."
+        )
+        st.dataframe(
+            ft.coverage_report(feats).filter(pl.col("scope") == "ALL").to_pandas(),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.caption("Breakout backtest and rookie board arrive in phase 3.")
+
+
 def _placeholder(name: str, phase: str) -> None:
     st.subheader(name)
     st.info(f"Not built yet — {phase}.", icon="🚧")
@@ -443,7 +589,7 @@ def main() -> None:
     with landscape:
         _tab_landscape(p)
     with players:
-        _placeholder("Players", "phase 2 (clusters) and phase 3 (breakout backtest)")
+        _tab_players(p)
     with strategy:
         _placeholder("Strategy", "phase 4 (draft simulation)")
     with board:
