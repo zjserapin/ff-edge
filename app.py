@@ -21,6 +21,7 @@ import altair as alt
 import polars as pl
 import streamlit as st
 
+from src import adp as adp_mod
 from src import archetypes as ar
 from src import breakout as bo
 from src import features as ft
@@ -1001,6 +1002,200 @@ def _tab_strategy(p: dict[str, Any]) -> None:
                 st.warning("No simulations produced under these settings.")
 
 
+@st.cache_data(show_spinner="Building the board…")
+def _board_base(
+    scoring_key: tuple[tuple[str, float], ...],
+    roster: tuple[str, ...],
+    teams: int,
+    flex_split: tuple[tuple[str, float], ...] | None,
+) -> pl.DataFrame:
+    """The static half of the board: market value and model score per player.
+
+    Cached because it is pure. Everything downstream of session state — who is
+    gone, who is cut, what pick you are on — is computed fresh on every rerun,
+    because a cached board is a stale board and a stale draft board is worse
+    than none.
+    """
+    board = bo.adp_board(SEASON)
+    if not board.height:
+        return pl.DataFrame()
+
+    board = ls.market_implied_value(
+        board,
+        scoring=dict(scoring_key),
+        roster_positions=list(roster),
+        teams=teams,
+        flex_split=dict(flex_split) if flex_split else None,
+        season_points=_season_points(scoring_key),
+    )
+
+    scored = bo.score_current(features=_features())
+    if scored.height:
+        board = board.join(
+            scored.select("gsis_id", "p_breakout"), on="gsis_id", how="left"
+        )
+    return board.sort("adp")
+
+
+def _init_state() -> None:
+    for key, default in (
+        ("drafted", set()),
+        ("excluded", set()),
+        ("queue", []),
+        ("my_slot", 1),
+    ):
+        if key not in st.session_state:
+            st.session_state[key] = default
+
+
+def _next_pick(taken: int, slot: int, teams: int) -> int:
+    """Your next pick number in a snake draft, given how many are already gone."""
+    rnd = taken // teams
+    while True:
+        pick = rnd * teams + (slot if rnd % 2 == 0 else teams - slot + 1)
+        if pick > taken:
+            return pick
+        rnd += 1
+
+
+def _tab_board(p: dict[str, Any]) -> None:
+    _init_state()
+    teams = p["teams"]
+
+    st.subheader("Draft board")
+    base = _board_base(p["scoring_key"], p["roster_positions"], teams, p["flex_split"])
+    if not base.height:
+        st.warning(f"No {SEASON} ADP available yet.")
+        return
+
+    st.info(
+        "**`market_value` is not a projection, and the distinction matters.** "
+        "This project has no points forecast — building one honestly is a bigger "
+        "job than everything else here, and building one dishonestly is worse "
+        "than having none. So the column inverts the question: it is the median "
+        "historical value of *the draft slot* this player is going at. Two backs "
+        "at RB14 get the same number, because it knows nothing about either of "
+        "them. Its use is as a baseline to disagree with.",
+        icon="ℹ️",
+    )
+
+    c1, c2, c3 = st.columns([1, 1, 2])
+    with c1:
+        st.session_state["my_slot"] = st.number_input(
+            "Your draft slot", 1, teams, st.session_state["my_slot"]
+        )
+    taken = len(st.session_state["drafted"])
+    pick = _next_pick(taken, int(st.session_state["my_slot"]), teams)
+    with c2:
+        st.metric("Your next pick", f"#{pick}", help=f"{taken} players off the board")
+    with c3:
+        pos_filter = st.multiselect(
+            "Positions", ["QB", "RB", "WR", "TE"], default=["QB", "RB", "WR", "TE"]
+        )
+
+    gone = st.session_state["drafted"] | st.session_state["excluded"]
+    available = base.filter(
+        ~pl.col("gsis_id").is_in(list(gone)) if gone else pl.lit(True)
+    ).filter(pl.col("position").is_in(pos_filter or ["QB", "RB", "WR", "TE"]))
+
+    # Survival is computed on the *available* pool, so cuts and picks propagate
+    # into the math rather than just the display.
+    available = adp_mod.survival(available, pick)
+    p_col = f"p_available_at_{pick}"
+
+    st.markdown("#### Available")
+    st.caption(
+        f"`{p_col}` is the chance a player lasts to your pick, from his ADP and "
+        "its observed dispersion. Two players at the same price can differ "
+        "enormously here — that gap, not raw ranking, is what decides who you "
+        "have to take now."
+    )
+
+    reachable_only = st.checkbox(
+        "Only players with a real chance of reaching me",
+        value=taken > 0,
+        help=(
+            "Sorting by value puts the best players on top, and once the draft "
+            "starts most of them will be gone before your turn. This hides "
+            "anyone under a 10% chance of lasting."
+        ),
+    )
+    view = available
+    if reachable_only:
+        view = view.filter(pl.col(p_col) >= 0.10)
+
+    view = view.select(
+        "name", "position", "team", "adp", "stdev", "adp_pos_rank",
+        "market_ppg", "market_var",
+        *(["p_breakout"] if "p_breakout" in available.columns else []),
+        p_col,
+    ).sort("market_var", descending=True)
+
+    if not view.height:
+        st.info("Nobody clears the threshold — every remaining player is a reach or a lock.")
+    else:
+        st.dataframe(view.head(60).to_pandas(), use_container_width=True, hide_index=True)
+        st.caption(
+            f"{view.height} of {available.height} available players shown. "
+            "Sort any column by clicking its header."
+        )
+
+    st.markdown("#### Track the draft")
+    names = available.get_column("name").to_list()
+    lookup = dict(zip(available.get_column("name").to_list(), available.get_column("gsis_id").to_list()))
+
+    b1, b2, b3 = st.columns(3)
+    with b1:
+        pick_name = st.selectbox("Someone was drafted", [""] + names, key="mark_drafted")
+        if st.button("Mark drafted", disabled=not pick_name):
+            st.session_state["drafted"].add(lookup[pick_name])
+            st.rerun()
+    with b2:
+        cut_name = st.selectbox("Cut from my board", [""] + names, key="mark_cut")
+        if st.button("Cut player", disabled=not cut_name):
+            st.session_state["excluded"].add(lookup[cut_name])
+            st.rerun()
+    with b3:
+        q_name = st.selectbox("Add to queue", [""] + names, key="mark_queue")
+        if st.button("Queue player", disabled=not q_name):
+            if lookup[q_name] not in st.session_state["queue"]:
+                st.session_state["queue"].append(lookup[q_name])
+            st.rerun()
+
+    if st.session_state["queue"]:
+        st.markdown("#### Your queue")
+        queued = available.filter(pl.col("gsis_id").is_in(st.session_state["queue"]))
+        if queued.height:
+            st.dataframe(
+                queued.select("name", "position", "adp", "market_var", p_col)
+                .sort(p_col)
+                .to_pandas(),
+                use_container_width=True,
+                hide_index=True,
+            )
+            st.caption("Sorted by least likely to survive — take the top one first.")
+        stale = set(st.session_state["queue"]) & gone
+        if stale:
+            st.caption(f"{len(stale)} queued player(s) are already gone.")
+
+    with st.expander(f"Cut list ({len(st.session_state['excluded'])}) and drafted ({taken})"):
+        if st.session_state["excluded"]:
+            cuts = base.filter(pl.col("gsis_id").is_in(list(st.session_state["excluded"])))
+            st.dataframe(
+                cuts.select("name", "position", "adp").to_pandas(),
+                use_container_width=True,
+                hide_index=True,
+            )
+        c1, c2 = st.columns(2)
+        if c1.button("Clear cut list"):
+            st.session_state["excluded"] = set()
+            st.rerun()
+        if c2.button("Reset draft"):
+            st.session_state["drafted"] = set()
+            st.session_state["queue"] = []
+            st.rerun()
+
+
 def _placeholder(name: str, phase: str) -> None:
     st.subheader(name)
     st.info(f"Not built yet — {phase}.", icon="🚧")
@@ -1020,7 +1215,7 @@ def main() -> None:
     with strategy:
         _tab_strategy(p)
     with board:
-        _placeholder("Board", "phase 5 (draft-day view)")
+        _tab_board(p)
 
 
 if __name__ == "__main__":

@@ -3,6 +3,31 @@
 Design agreement for the three analysis tracks and the Streamlit app that fronts
 them. Written 2026-07-27, after the data layer was built and verified.
 
+> **Status: built. Five assumptions below turned out to be wrong**, each caught by
+> running against real data rather than reasoning about it. They are corrected
+> inline and collected here so the original reasoning stays legible:
+>
+> 1. **`ff_opportunity` does not start in 2022.** Its floor is 2006 and every
+>    season back to then downloads fine — 2020-2025 returns 36,063 rows with an
+>    identical 159-column schema. The Tier A / Tier B split existed only because
+>    of an incorrect comment in `config.py`, so it is gone. FTN charting is the
+>    one table with a real floor above the window.
+> 2. **`ff_opportunity`'s expected points are hardcoded to full PPR.** Under
+>    half-PPR every `*_exp` and `*_diff` column is wrong by `0.5 x
+>    receptions_exp`. They are rebuilt from components.
+> 3. **The "beat ADP by a positional tier" label is degenerate.** Base rate is
+>    exactly 0.000 at tier 1 — a quarter of the sample cannot qualify — then
+>    climbs to 0.451 by tier 6. It measures price, not performance. Replaced by a
+>    ratio rule; tiers retained for display.
+> 4. **n is 629 labeled player-seasons, not ~1,400**, with two test folds.
+> 5. **The Board's VOR has no projection source**, and this project has no
+>    business inventing one. Replaced with market-implied value, which describes
+>    the draft slot rather than the player and is never called a projection.
+>
+> What the build found is in the README. The short version: the breakout model
+> fails, the rookie model works, two QB-timing strategies beat ADP, and which
+> season you land in matters more than which strategy you pick.
+
 ## Decisions locked in interview
 
 | Decision | Choice |

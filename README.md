@@ -13,8 +13,13 @@ data onto your disk so you can ask your own questions.
 ```bash
 uv sync
 uv run python -m src.bootstrap --light   # ~2 min cold, hydrates everything but pbp
-uv run python -m src.peek                # four worked examples
+uv run python -m src.simulate --sims 4000  # ~3s, writes the strategy artifact
+uv run streamlit run app.py              # the app: Landscape / Players / Strategy / Board
 ```
+
+`uv run python -m src.bootstrap --light --analysis` does the cache and the
+derived artifacts in one command. `uv run pytest` runs the suite (82 tests,
+~6s); it reads the local cache and skips cleanly when cold.
 
 To pull your own league data, export your Sleeper **display name** (not your
 email) and re-run bootstrap. It's read from the shell rather than committed so a
@@ -86,10 +91,52 @@ directly.
 
 Run bootstrap once before first use so the tools answer from cache.
 
+## What the analysis found
+
+Four findings, two of them negative. The negative ones are the point — a
+research tool that only ever confirms things isn't measuring anything.
+
+**Prior-season usage does not predict beating ADP.** Out-of-sample AUC 0.401
+against 0.472 for draft price alone, difference interval [-0.173, +0.028]. A
+sub-0.5 AUC is usually a sign error, so: shuffling labels gives 0.497 across
+twelve seeds (pipeline is correct), in-sample AUC is 0.630 (the fit finds
+structure), and *tightening* regularization makes out-of-sample worse, which
+overfitting noise does not do. The relationship reverses between training and
+test seasons. Nothing inverts the model and calls it a signal.
+
+**The rookie model works.** Out-of-sample correlation 0.568, 22% less error than
+predicting the mean, consistent across all four positions. Draft capital does
+nearly all of it; combine numbers are close to noise.
+
+**Two quarterback-timing strategies beat drafting by ADP** — late-QB +3.6pp and
+elite-QB +2.8pp on title rate, with Bonferroni-corrected intervals excluding
+zero. Early-TE is significantly worse.
+
+**But season choice dominates strategy choice.** Zero-RB averages 8.5 wins in
+2022 and 5.1 in 2024. That 3.4-win swing is larger than any gap between
+strategies within a season, and it matches the Landscape tab showing running
+back value climbing after 2023.
+
+**Usage has one dominant axis.** Silhouette peaks at two clusters for every
+position and falls from there. The honest grouping is "featured" and "not" — the
+one real exception is quarterback, where the split is rushing versus pocket.
+
 ## What's verified
 
-Row counts from a real run on 2026-07-27. `uv run python bootstrap.py --light`
-reported **26/26 pulls ok**, 39.2 MB cached.
+Row counts from a real run on 2026-07-27. `uv run python -m src.bootstrap --light`
+reported **38/38 pulls ok**, 57 MB cached.
+
+Checks that run in the test suite:
+
+- **Scoring is exact.** Our compiled half-PPR expression equals nflverse's
+  independently-computed `fantasy_points_ppr - 0.5 * receptions` to 1e-15 across
+  all 34,882 cached skill player-weeks. The one exception is real: RB Dare
+  Ogunbowale kicked a field goal in 2023 week 9, and Sleeper scores by stat line.
+- **ADP joins at 97-99%** on skill positions (the 82% figure is all-positions,
+  dragged down by kickers and defenses that have no `gsis_id`).
+- **The simulation hits its structural baselines**: ADP-following gets a 0.611
+  playoff rate and 7.01 wins where the format guarantees 0.60 and 7.0.
+- **Greedy lineup selection matches brute force** on the real slot structure.
 
 | table | rows |
 |---|---:|

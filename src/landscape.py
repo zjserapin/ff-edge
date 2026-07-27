@@ -340,3 +340,83 @@ def crossover_table(
                 )
 
     return pl.DataFrame(rows).sort(["season", "anchor_position", "other_position"]) if rows else pl.DataFrame()
+
+
+def market_implied_value(
+    adp_board: pl.DataFrame,
+    seasons: list[int] | None = None,
+    scoring: Mapping[str, float] | None = None,
+    roster_positions: list[str] | None = None,
+    teams: int = DEFAULT_TEAMS,
+    flex_split: Mapping[str, float] | None = None,
+    season_points: pl.DataFrame | None = None,
+) -> pl.DataFrame:
+    """What a player's draft slot has historically been worth. Not a projection.
+
+    The Board wants value over replacement, which normally needs a points
+    projection — and this project deliberately has none, because building one
+    honestly is a bigger job than everything else here combined and building one
+    dishonestly is worse than having none.
+
+    So invert the question. Rather than "how many points will this player score",
+    ask "what has the *slot he is being drafted at* returned historically". Take
+    his 2026 ADP positional rank, look up the median points at that rank across
+    the seasons in the window, and subtract replacement. It answers: if this
+    player performs like the typical player drafted here, what is he worth?
+
+    That is a real and useful number, and it is emphatically not a forecast about
+    him. It knows nothing about the player — two backs at RB14 get the same
+    figure. Its value is as a *baseline to disagree with*: the interesting column
+    on the Board is the gap between this and what you believe.
+
+    Returns the input frame plus market_points, market_ppg, replacement_ppg,
+    market_var (value above replacement), and rank_seasons (how many seasons
+    supported the estimate).
+    """
+    if not adp_board.height:
+        return adp_board
+
+    curve = scarcity_curve(
+        seasons,
+        scoring,
+        max_rank=200,
+        roster_positions=roster_positions,
+        teams=teams,
+        flex_split=flex_split,
+        basis="total",
+        season_points=season_points,
+    )
+    if not curve.height:
+        return adp_board
+
+    # Median across seasons, not mean: one wrecked year at a rank should not
+    # drag the estimate for that slot.
+    by_rank = curve.group_by(["position", "pos_rank"]).agg(
+        pl.col("fantasy_points").median().alias("market_points"),
+        pl.col("ppg").median().alias("market_ppg"),
+        pl.len().alias("rank_seasons"),
+    )
+
+    repl = (
+        sc.replacement_level(
+            _season_points(seasons, scoring, season_points),
+            roster_positions,
+            teams,
+            flex_split,
+        )
+        .group_by("position")
+        .agg(pl.col("replacement_ppg").median())
+    )
+
+    return (
+        adp_board.join(
+            by_rank,
+            left_on=["position", "adp_pos_rank"],
+            right_on=["position", "pos_rank"],
+            how="left",
+        )
+        .join(repl, on="position", how="left")
+        .with_columns(
+            (pl.col("market_ppg") - pl.col("replacement_ppg")).round(2).alias("market_var")
+        )
+    )
