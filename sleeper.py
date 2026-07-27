@@ -187,6 +187,32 @@ def players_nfl(force: bool = False) -> pl.DataFrame:
 # --- Composites -------------------------------------------------------------
 
 
+def league_chain(
+    league_id: str, seasons_back: int = 4, force: bool = False
+) -> list[tuple[str, str]]:
+    """Walk `previous_league_id` backwards, returning [(league_id, season), ...].
+
+    Sleeper models a recurring league as a linked list, one node per season. This
+    is the traversal that makes multi-year history possible at all, so it lives
+    in one place rather than being re-implemented by every caller that wants it.
+
+    Newest season first. Stops early if the chain ends (the league's first year).
+    """
+    chain: list[tuple[str, str]] = []
+    current: str | None = league_id
+
+    for _ in range(seasons_back):
+        if not current:
+            break
+        meta = league(current, force=force)
+        if not meta:
+            break
+        chain.append((current, str(meta.get("season"))))
+        current = meta.get("previous_league_id")
+
+    return chain
+
+
 def all_transactions(league_id: str, weeks: int = 18, force: bool = False) -> pl.DataFrame:
     """Every transaction in a season, week-tagged.
 
@@ -219,15 +245,8 @@ def draft_history(league_id: str, seasons_back: int = 4, force: bool = False) ->
     Rows are tagged with `season` and `league_id` so you can compare across years.
     """
     parts = []
-    current: str | None = league_id
 
-    for _ in range(seasons_back):
-        if not current:
-            break
-        meta = league(current, force=force)
-        if not meta:
-            break
-
+    for current, season in league_chain(league_id, seasons_back, force=force):
         season_drafts = drafts(current, force=force)
         draft_ids = (
             season_drafts.get_column("draft_id").to_list()
@@ -239,11 +258,40 @@ def draft_history(league_id: str, seasons_back: int = 4, force: bool = False) ->
             if picks.height:
                 parts.append(
                     picks.with_columns(
-                        pl.lit(str(meta.get("season"))).alias("season"),
+                        pl.lit(season).alias("season"),
                         pl.lit(current).alias("league_id"),
                     )
                 )
-        current = meta.get("previous_league_id")
+
+    if not parts:
+        return pl.DataFrame()
+    return pl.concat(parts, how="diagonal_relaxed")
+
+
+def transaction_history(
+    league_id: str, seasons_back: int = 4, weeks: int = 18, force: bool = False
+) -> pl.DataFrame:
+    """Every transaction across prior seasons of the same league.
+
+    The seasonal counterpart to `draft_history`, and the reason it exists: during
+    the offseason the *current* league has zero transactions, so asking only
+    about it tells you nothing. The behavior worth modeling — FAAB aggression,
+    how long a manager holds an injured player, who actually trades — is all in
+    the seasons that already finished.
+
+    Rows are tagged with `season` and `league_id`.
+    """
+    parts = []
+
+    for current, season in league_chain(league_id, seasons_back, force=force):
+        df = all_transactions(current, weeks=weeks, force=force)
+        if df.height:
+            parts.append(
+                df.with_columns(
+                    pl.lit(season).alias("season"),
+                    pl.lit(current).alias("league_id"),
+                )
+            )
 
     if not parts:
         return pl.DataFrame()
@@ -260,5 +308,5 @@ def league_bundle(league_id: str, force: bool = False) -> dict:
         "users": league_users(league_id, force=force),
         "rosters": rosters(league_id, force=force),
         "draft_history": draft_history(league_id, force=force),
-        "transactions": all_transactions(league_id, force=force),
+        "transactions": transaction_history(league_id, force=force),
     }

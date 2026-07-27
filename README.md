@@ -108,9 +108,14 @@ Also verified by running it:
 The Sleeper section is verified too, against a live account (**33/33 pulls ok**):
 user resolves, 1 league, 10 managers, 10 rosters. The `previous_league_id` walk
 returned **470 picks across 3 prior seasons** (2023/2024/2025), joining to
-nflverse at **96.0%**. `all_transactions` on the 2025 league returned **691**
-(359 waiver, 318 free agent, 14 trade). All 14 MCP tools return real data,
-including the four league tools.
+nflverse at **96.0%**. `transaction_history` returned **1,984 transactions**
+across 2023-2025 (1,071 waiver, 884 free agent, 32 trade). All 14 MCP tools
+return real data, including the four league tools.
+
+Note that both multi-season pulls run off the same `sleeper.league_chain()`
+traversal, and that transactions deliberately span prior seasons — during the
+offseason the current league is empty, so a single-season pull returns 0 and
+tells you nothing about how these managers behave.
 
 ## Notes
 

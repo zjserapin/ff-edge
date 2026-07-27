@@ -115,14 +115,17 @@ def draft_history(league_id: str, seasons_back: int = 4) -> str:
 
 
 @mcp.tool
-def transactions(league_id: str, weeks: int = 18) -> str:
-    """Season-long adds, drops, trades, and FAAB bids.
+def transactions(league_id: str, seasons_back: int = 4) -> str:
+    """Adds, drops, trades, and FAAB bids across this league's prior seasons.
 
     Use to profile manager tendencies before a draft or a trade offer: FAAB
     aggression, how long people hold injured players, who churns the bottom of
-    their bench weekly.
+    their bench weekly, who will actually engage on a trade.
+
+    Spans prior seasons by design — during the offseason the current league has
+    zero transactions, so a single-season view would come back empty.
     """
-    return _out(sleeper.all_transactions(league_id, weeks), limit=150)
+    return _out(sleeper.transaction_history(league_id, seasons_back), limit=150)
 
 
 # --- Market tools -----------------------------------------------------------

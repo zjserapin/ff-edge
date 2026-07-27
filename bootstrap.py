@@ -107,7 +107,9 @@ def run(light: bool = False) -> None:
             step(f"users {lid}", lambda lid=lid: sleeper.league_users(lid))
             step(f"rosters {lid}", lambda lid=lid: sleeper.rosters(lid))
             step(f"draft_history {lid}", lambda lid=lid: sleeper.draft_history(lid))
-            step(f"transactions {lid}", lambda lid=lid: sleeper.all_transactions(lid))
+            # transaction_history, not all_transactions: in the offseason the
+            # current league is empty and the behavior data is in prior seasons.
+            step(f"transactions {lid}", lambda lid=lid: sleeper.transaction_history(lid))
 
 
 def sanity() -> None:
