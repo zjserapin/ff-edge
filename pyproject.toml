@@ -1,0 +1,26 @@
+[project]
+name = "ff-edge"
+version = "0.1.0"
+description = "Free-data fantasy football research foundation for 2026 redraft"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "nflreadpy>=0.1.5",
+    "polars>=1.0",
+    "pyarrow>=15.0",
+    "requests>=2.31",
+    "pandas>=2.0",
+    "numpy>=1.26",
+    "fastmcp>=3.0",
+]
+
+[dependency-groups]
+notebook = [
+    "jupyter",
+    "matplotlib",
+    "seaborn",
+    "scikit-learn",
+]
+
+[tool.uv]
+package = false
