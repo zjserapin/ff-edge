@@ -133,3 +133,38 @@ def match_report(df: pl.DataFrame, id_col: str = "gsis_id") -> dict:
         "matched": matched,
         "rate": round(matched / rows, 4) if rows else 0.0,
     }
+
+
+# --- Team codes -------------------------------------------------------------
+
+# nflverse's own tables do not agree on team abbreviations. `draft_picks` comes
+# from Pro Football Reference and uses its three-letter codes; rosters, weekly
+# stats and ff_opportunity use the standard nflverse ones. Eight teams differ —
+# a quarter of the league — and joining across them fails silently, leaving the
+# affected players with null landing-spot data that then gets imputed to a
+# league median. Verified against the 2020-2026 draft classes.
+_PFR_TEAMS: dict[str, str] = {
+    "GNB": "GB",
+    "KAN": "KC",
+    "LAR": "LA",
+    "LVR": "LV",
+    "NOR": "NO",
+    "NWE": "NE",
+    "SFO": "SF",
+    "TAM": "TB",
+    # Relocations, for historical seasons: teams.parquet carries 36 rows because
+    # the old codes still appear in older files.
+    "OAK": "LV",
+    "SD": "LAC",
+    "SDG": "LAC",
+    "STL": "LA",
+}
+
+
+def normalize_team(col: str = "team") -> pl.Expr:
+    """Map any source's team code onto the nflverse standard.
+
+    Use on both sides of any join whose keys include a team. The failure mode is
+    not an error — it is a left join that quietly drops a quarter of the league.
+    """
+    return pl.col(col).replace(_PFR_TEAMS).alias(col)

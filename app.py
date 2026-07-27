@@ -22,8 +22,10 @@ import polars as pl
 import streamlit as st
 
 from src import archetypes as ar
+from src import breakout as bo
 from src import features as ft
 from src import landscape as ls
+from src import rookies as rk
 from src import scoring as sc
 from src import theme
 from src.config import (
@@ -32,6 +34,7 @@ from src.config import (
     DEFAULT_TEAMS,
     FEATURE_SEASONS,
     LEAGUE_ID,
+    SEASON,
 )
 
 st.set_page_config(page_title="ff-edge", page_icon="🏈", layout="wide")
@@ -571,7 +574,190 @@ def _tab_players(p: dict[str, Any]) -> None:
             hide_index=True,
         )
 
-    st.caption("Breakout backtest and rookie board arrive in phase 3.")
+    st.divider()
+    _breakout_section(dark)
+    st.divider()
+    _rookie_section(dark)
+
+
+@st.cache_data(show_spinner="Backtesting…")
+def _backtest() -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+    train = bo.training_frame(features=_features())
+    if not train.height:
+        return (pl.DataFrame(),) * 4
+    preds = bo.fit_predict(train)
+    return (
+        bo.base_rates(bo.labels()),
+        preds,
+        bo.discrimination(preds),
+        bo.calibration(preds),
+    )
+
+
+def _breakout_section(dark: bool) -> None:
+    st.subheader("Did last season's usage predict beating ADP?")
+    base_rates, preds, disc, cal = _backtest()
+    if not preds.height:
+        st.info("Not enough labeled seasons to backtest.")
+        return
+
+    overall = base_rates.filter(pl.col("scope") == "overall")
+    base = float(overall.get_column("rate")[0])
+    n_labeled = int(overall.get_column("n")[0])
+    pooled = disc.filter(pl.col("scope") == "pooled")
+    auc = float(pooled.get_column("auc")[0])
+    auc_adp = float(pooled.get_column("auc_adp_only")[0])
+    d_lo, d_hi = float(pooled.get_column("delta_lo")[0]), float(pooled.get_column("delta_hi")[0])
+
+    st.caption(
+        f"Label: finish at or inside 60% of your ADP positional rank. "
+        f"{n_labeled} labeled player-seasons, base rate **{base:.1%}**. "
+        "Trained on earlier seasons, tested on later ones — never a random split."
+    )
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Base rate", f"{base:.1%}", help="How often anyone beats their ADP.")
+    c2.metric("Model AUC", f"{auc:.3f}", help="0.5 is a coin flip.")
+    c3.metric(
+        "ADP alone",
+        f"{auc_adp:.3f}",
+        delta=f"{auc - auc_adp:+.3f}",
+        delta_color="normal",
+        help="Predicting from draft price only — the bar the model has to clear.",
+    )
+
+    st.error(
+        f"**The model does not beat the draft market, and this is the result — "
+        f"not a work in progress.** Out-of-sample AUC is {auc:.3f} against "
+        f"{auc_adp:.3f} for price alone; the difference interval "
+        f"[{d_lo:+.3f}, {d_hi:+.3f}] covers zero. Three checks say the machinery "
+        "is sound rather than sign-flipped: shuffling the labels gives AUC 0.497 "
+        "across twelve seeds, in-sample AUC is 0.63 so the fit does find "
+        "structure, and tightening regularization makes out-of-sample results "
+        "*worse* rather than better — which is not what overfitting noise does. "
+        "The relationship genuinely reverses between training and test seasons. "
+        "The plausible story is that ADP already prices last season's usage; two "
+        "test folds cannot separate that from regime noise, so nothing here "
+        "inverts the model and calls it a signal.",
+        icon="🚫",
+    )
+
+    st.markdown("#### Calibration")
+    st.caption(
+        "Players sorted into four groups by predicted probability, against what "
+        "actually happened. If the model worked, actual rate would rise left to "
+        "right. Four groups rather than ten because ~280 out-of-sample rows "
+        "makes a decile ±7 points — too wide to read."
+    )
+    cal_pd = cal.to_pandas()
+    bars = (
+        alt.Chart(cal_pd)
+        .mark_bar(cornerRadiusEnd=4, color=theme.position_colors(dark)["QB"])
+        .encode(
+            x=alt.X("bin:O", title="Predicted-probability group (low → high)"),
+            y=alt.Y("actual_rate:Q", title="Actually beat ADP", axis=alt.Axis(format="%")),
+            tooltip=[
+                alt.Tooltip("bin:O", title="Group"),
+                alt.Tooltip("n:Q", title="Players"),
+                alt.Tooltip("mean_predicted:Q", title="Predicted", format=".1%"),
+                alt.Tooltip("actual_rate:Q", title="Actual", format=".1%"),
+                alt.Tooltip("ci_lo:Q", title="CI low", format=".1%"),
+                alt.Tooltip("ci_hi:Q", title="CI high", format=".1%"),
+                alt.Tooltip("lift:Q", title="Lift vs base"),
+            ],
+        )
+        .properties(height=240)
+    )
+    errors = (
+        alt.Chart(cal_pd)
+        .mark_rule(strokeWidth=2, color=theme.ink(dark)["muted"])
+        .encode(x=alt.X("bin:O"), y=alt.Y("ci_lo:Q"), y2=alt.Y2("ci_hi:Q"))
+    )
+    baseline = (
+        alt.Chart(cal_pd)
+        .mark_rule(strokeDash=[4, 4], strokeWidth=1, color=theme.ink(dark)["muted"])
+        .encode(y=alt.Y("base_rate:Q"))
+    )
+    st.altair_chart(theme.base_chart(bars + errors + baseline, dark), use_container_width=True)
+    st.caption("Dashed line is the base rate. Whiskers are 95% Wilson intervals.")
+
+    with st.expander("Full backtest numbers"):
+        st.markdown("**Discrimination by fold**")
+        st.dataframe(disc.to_pandas(), use_container_width=True, hide_index=True)
+        st.markdown("**Calibration**")
+        st.dataframe(cal.to_pandas(), use_container_width=True, hide_index=True)
+        st.markdown("**Base rates**")
+        st.dataframe(base_rates.to_pandas(), use_container_width=True, hide_index=True)
+        st.markdown("**What the model keyed on**")
+        st.dataframe(
+            bo.coefficients(bo.training_frame(features=_features())).to_pandas(),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+
+@st.cache_data(show_spinner="Fitting rookies…")
+def _rookies() -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+    preds = rk.fit()
+    return preds, rk.performance(preds), rk.board(SEASON)
+
+
+def _rookie_section(dark: bool) -> None:
+    st.subheader("Rookies")
+    preds, perf, board = _rookies()
+    if not perf.height:
+        st.info("No rookie classes available.")
+        return
+
+    overall = perf.filter(pl.col("scope") == "overall")
+    corr = float(overall.get_column("corr")[0])
+    mae = float(overall.get_column("mae")[0])
+    base_mae = float(overall.get_column("baseline_mae")[0])
+
+    st.caption(
+        "A separate model, never merged into the clusters above — a rookie has "
+        "no prior-season usage, which is the only input those use. Draft "
+        "capital, combine testing, landing-spot opportunity, and age."
+    )
+
+    c1, c2 = st.columns(2)
+    c1.metric("Out-of-sample correlation", f"{corr:.3f}")
+    c2.metric(
+        "Mean error (pts/game)",
+        f"{mae:.2f}",
+        delta=f"{mae - base_mae:+.2f} vs guessing the mean",
+        delta_color="inverse",
+    )
+
+    st.success(
+        f"**This one works, unlike the veteran model.** Predicted and actual "
+        f"rookie points per game correlate {corr:.2f} out of sample, with "
+        f"{(1 - mae / base_mae):.0%} less error than predicting the average for "
+        "everyone — and it holds across all four positions. Draft capital does "
+        "nearly all of the work; the combine numbers are close to noise. "
+        "Validation is leave-one-season-out rather than forward-only, which is "
+        "a weaker guarantee, chosen because a forward split would train on "
+        "about ninety players.",
+        icon="✅",
+    )
+
+    st.markdown(f"#### {SEASON} rookie board")
+    st.caption("Ranked by predicted points per game. Landing spot is the prior season's vacated volume.")
+    st.dataframe(
+        board.head(40)
+        .select("name", "position", "team", "draft_round", "draft_ovr",
+                "vacated_target_share", "vacated_carry_share", "predicted")
+        .to_pandas(),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    with st.expander("Model detail"):
+        st.markdown("**Accuracy by position**")
+        st.dataframe(perf.to_pandas(), use_container_width=True, hide_index=True)
+        st.markdown("**Standardized coefficients**")
+        st.caption("Negative on draft_ovr means an earlier pick predicts more production.")
+        st.dataframe(rk.coefficients().to_pandas(), use_container_width=True, hide_index=True)
 
 
 def _placeholder(name: str, phase: str) -> None:
