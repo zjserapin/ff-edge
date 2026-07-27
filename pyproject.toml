@@ -25,6 +25,15 @@ notebook = [
     "matplotlib",
     "seaborn",
 ]
+dev = [
+    "pytest>=8.0",
+]
 
 [tool.uv]
 package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The repo is not an installed package (package = false), so pytest needs the
+# root on sys.path the same way `uv run python -m src.x` gets it.
+pythonpath = ["."]
