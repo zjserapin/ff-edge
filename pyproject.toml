@@ -12,6 +12,11 @@ dependencies = [
     "pandas>=2.0",
     "numpy>=1.26",
     "fastmcp>=3.0",
+    "streamlit>=1.40",
+    "altair>=5.4",
+    # Promoted out of the notebook group: clustering and the breakout backtest
+    # are part of the app now, not exploratory work.
+    "scikit-learn>=1.5",
 ]
 
 [dependency-groups]
@@ -19,7 +24,6 @@ notebook = [
     "jupyter",
     "matplotlib",
     "seaborn",
-    "scikit-learn",
 ]
 
 [tool.uv]

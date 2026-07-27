@@ -5,9 +5,9 @@ failing source (a nflverse file that hasn't been published for the new season,
 a host your network blocks) is recorded and stepped past, because a partial
 cache is far more useful than an exception traceback and nothing on disk.
 
-    uv run python bootstrap.py            # everything, including play-by-play
-    uv run python bootstrap.py --light    # skip pbp (minutes -> seconds)
-    uv run python bootstrap.py --sanity   # + run the ADP->nflverse match report
+    uv run python -m src.bootstrap            # everything, including play-by-play
+    uv run python -m src.bootstrap --light    # skip pbp (minutes -> seconds)
+    uv run python -m src.bootstrap --sanity   # + run the ADP->nflverse match report
 """
 
 from __future__ import annotations
@@ -19,12 +19,21 @@ from typing import Any, Callable
 
 import polars as pl
 
-import adp
-import cache
-import ids
-import nflverse as nv
-import sleeper
-from config import HISTORY_SEASONS, OUTPUT_DIR, PBP_SEASONS, SEASON, SLEEPER_USERNAME
+from src import adp, cache, ids
+from src import nflverse as nv
+from src import sleeper
+from src.config import (
+    ADP_MISSING_YEARS,
+    FEATURE_SEASONS,
+    FTN_SEASONS,
+    HISTORY_SEASONS,
+    LEAGUE_ADP_SCORING,
+    LEAGUE_ADP_TEAMS,
+    OUTPUT_DIR,
+    PBP_SEASONS,
+    SEASON,
+    SLEEPER_USERNAME,
+)
 
 RESULTS: list[dict[str, Any]] = []
 
@@ -57,7 +66,11 @@ def run(light: bool = False) -> None:
     step("teams", nv.teams)
     step("ff_playerids", nv.ff_playerids, required=True)
     step("crosswalk", ids.crosswalk)
+    # Every season in the window, not just the current one: rookies.py diffs a
+    # team's prior-season producers against its current roster to find vacated
+    # opportunity, which needs both ends of every year pair.
     step(f"rosters {SEASON}", lambda: nv.rosters(SEASON))
+    step("rosters (window)", lambda: nv.rosters(FEATURE_SEASONS + [SEASON]))
     step(f"schedules {SEASON}", lambda: nv.schedules(SEASON))
     step("depth_charts", lambda: nv.depth_charts(HISTORY_SEASONS))
     step("draft_picks", nv.draft_picks)
@@ -75,9 +88,16 @@ def run(light: bool = False) -> None:
     step("snap_counts", nv.snap_counts)
     step("injuries", nv.injuries)
     step("participation", nv.participation)
-    step("ftn_charting", nv.ftn_charting)
+    # Explicit rather than relying on the default: FTN is the one table that
+    # cannot span the analysis window, and nflreadpy raises rather than
+    # returning empty when asked for a season below 2022.
+    step("ftn_charting", lambda: nv.ftn_charting(FTN_SEASONS))
     step("nextgen receiving", lambda: nv.nextgen("receiving"))
+    step("nextgen rushing", lambda: nv.nextgen("rushing"))
+    step("nextgen passing", lambda: nv.nextgen("passing"))
     step("pfr_advstats rec", lambda: nv.pfr_advstats("rec"))
+    step("pfr_advstats rush", lambda: nv.pfr_advstats("rush"))
+    step("pfr_advstats pass", lambda: nv.pfr_advstats("pass"))
 
     if light:
         print("\nplay-by-play\n------------\n  skipped (--light)")
@@ -88,7 +108,25 @@ def run(light: bool = False) -> None:
     _section("ADP (fantasyfootballcalculator.com)")
     step("adp ppr", lambda: adp.fetch("ppr"))
     step("adp multi-format", adp.multi_format)
-    step("adp snapshot", adp.snapshot)
+    step("adp snapshot ppr/12", adp.snapshot)
+    # The league's actual format. Snapshotted separately from ppr/12 rather than
+    # instead of it — the ppr/12 history has already been accumulating and ADP
+    # history is the one thing in this project that cannot be backfilled.
+    step(
+        f"adp snapshot {LEAGUE_ADP_SCORING}/{LEAGUE_ADP_TEAMS}",
+        lambda: adp.snapshot(LEAGUE_ADP_SCORING, LEAGUE_ADP_TEAMS),
+    )
+
+    _section("ADP history — backtest labels")
+    for year in FEATURE_SEASONS + [SEASON]:
+        if year in ADP_MISSING_YEARS:
+            print(f"  adp {LEAGUE_ADP_SCORING}/{LEAGUE_ADP_TEAMS} {year:<15} skipped  "
+                  "FFC has no rows for this year at any format")
+            continue
+        step(
+            f"adp {LEAGUE_ADP_SCORING}/{LEAGUE_ADP_TEAMS} {year}",
+            lambda y=year: adp.fetch(LEAGUE_ADP_SCORING, LEAGUE_ADP_TEAMS, y),
+        )
 
     _section("Sleeper")
     if SLEEPER_USERNAME == "CHANGE_ME":
@@ -167,13 +205,34 @@ def report() -> None:
     print(f"\nwrote {path}  ({ok}/{len(RESULTS)} ok, {total_mb} MB cached)")
 
 
+def analysis() -> None:
+    """Materialize the derived artifacts the app reads.
+
+    Separate from `run` because these are minutes of compute over data that is
+    already local, not network pulls. Imports are deferred so a cold checkout can
+    still hydrate its cache before the analysis layer exists or its dependencies
+    are installed.
+    """
+    _section("analysis artifacts")
+    from src import archetypes, features, simulate
+
+    step("features (player-season)", features.build)
+    step("archetypes (current season)", archetypes.cluster)
+    step("simulation baseline", simulate.baseline)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Hydrate the ff-edge cache.")
     parser.add_argument("--light", action="store_true", help="skip play-by-play")
     parser.add_argument("--sanity", action="store_true", help="run join match report")
+    parser.add_argument(
+        "--analysis", action="store_true", help="also build features/clusters/sim"
+    )
     args = parser.parse_args()
 
     run(light=args.light)
     if args.sanity:
         sanity()
+    if args.analysis:
+        analysis()
     report()

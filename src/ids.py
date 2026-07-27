@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import polars as pl
 
-from cache import frame
-from nflverse import ff_playerids
+from src.cache import frame
+from src.nflverse import ff_playerids
 
 # Generational suffixes carried inconsistently across sources: nflverse says
 # "Marvin Harrison", FantasyPros says "Marvin Harrison Jr.".

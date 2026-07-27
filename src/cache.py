@@ -18,7 +18,7 @@ from typing import Any, Callable
 
 import polars as pl
 
-from config import DATA_DIR, TTL
+from src.config import DATA_DIR, TTL
 
 
 def _resolve_ttl(ttl: str | float) -> float:

@@ -17,8 +17,8 @@ from __future__ import annotations
 import nflreadpy as nfl
 import polars as pl
 
-from cache import frame
-from config import HISTORY_SEASONS, PBP_SEASONS, SEASON
+from src.cache import frame
+from src.config import FTN_SEASONS, HISTORY_SEASONS, PBP_SEASONS, SEASON
 
 
 def _key(seasons: list[int] | int) -> str:
@@ -135,8 +135,15 @@ def participation(
 def ftn_charting(
     seasons: list[int] | None = None, force: bool = False
 ) -> pl.DataFrame:
-    """FTN manual charting — play action, motion, blitz, coverage."""
-    seasons = seasons or HISTORY_SEASONS
+    """FTN manual charting — play action, motion, blitz, coverage.
+
+    Defaults to FTN_SEASONS rather than HISTORY_SEASONS because 2022 is a real
+    floor here and nflreadpy raises rather than returning empty. This is the one
+    table in the feature set that genuinely cannot reach back as far as the
+    analysis window, which is why it stays a current-year display column and
+    never becomes a training feature.
+    """
+    seasons = seasons or FTN_SEASONS
     return frame(
         f"ftn_charting_{_key(seasons)}",
         "weekly",

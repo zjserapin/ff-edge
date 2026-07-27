@@ -12,8 +12,8 @@ data onto your disk so you can ask your own questions.
 
 ```bash
 uv sync
-uv run python bootstrap.py --light   # ~2 min cold, hydrates everything but pbp
-uv run python peek.py                # four worked examples
+uv run python -m src.bootstrap --light   # ~2 min cold, hydrates everything but pbp
+uv run python -m src.peek                # four worked examples
 ```
 
 To pull your own league data, export your Sleeper **display name** (not your
@@ -22,7 +22,7 @@ personal handle doesn't end up in the repo:
 
 ```bash
 export FF_EDGE_SLEEPER_USER=yourname
-uv run python bootstrap.py --light
+uv run python -m src.bootstrap --light
 ```
 
 Without it the Sleeper section is skipped cleanly.
@@ -31,17 +31,35 @@ Drop `--light` to also pull play-by-play (~1GB, several minutes).
 
 ## Modules
 
+**Data layer** — everything that touches a network, and everything that
+normalizes what comes back.
+
 | File | What it's for |
 |---|---|
-| `config.py` | Season, paths, cache TTLs, season ranges. One place to roll the year. |
-| `cache.py` | TTL-aware parquet/JSON cache. Every network pull goes through it. |
-| `nflverse.py` | Cached wrappers over `nflreadpy` — production, opportunity, context. |
-| `sleeper.py` | Read-only Sleeper client, including the `previous_league_id` walk. |
-| `adp.py` | FFC ADP, daily snapshots, and pick-survival probability. |
-| `ids.py` | The join layer. All cross-source ID and name matching lives here. |
-| `bootstrap.py` | One command to hydrate the cache. Never dies on one bad source. |
-| `peek.py` | Four worked examples that prove the joins hold. |
-| `mcp_server.py` | FastMCP server so the same cache is queryable in conversation. |
+| `src/config.py` | Season window, league params, paths, cache TTLs. One place to roll the year. |
+| `src/cache.py` | TTL-aware parquet/JSON cache. Every network pull goes through it. |
+| `src/nflverse.py` | Cached wrappers over `nflreadpy` — production, opportunity, context. |
+| `src/sleeper.py` | Read-only Sleeper client, including the `previous_league_id` walk. |
+| `src/adp.py` | FFC ADP, daily snapshots, and pick-survival probability. |
+| `src/ids.py` | The join layer. All cross-source ID and name matching lives here. |
+| `src/bootstrap.py` | One command to hydrate the cache. Never dies on one bad source. |
+| `src/peek.py` | Four worked examples that prove the joins hold. |
+| `src/mcp_server.py` | FastMCP server so the same cache is queryable in conversation. |
+
+**Analysis layer** — turns the cache into answers. Never touches a network
+directly.
+
+| File | What it's for |
+|---|---|
+| `src/scoring.py` | Sleeper scoring settings → points, replacement level, PAR. |
+| `src/landscape.py` | How positional value has moved over time, in *your* scoring. |
+| `src/features.py` | One row per player-season: usage shares and rates, never totals. |
+| `src/archetypes.py` | Per-position clustering. Describes usage profiles; does not predict. |
+| `src/breakout.py` | The beat-ADP backtest, with calibration against the ADP-only baseline. |
+| `src/rookies.py` | Separate rookie model — draft capital, combine, vacated opportunity. |
+| `src/simulate.py` | Monte Carlo draft + season sim comparing draft strategies. |
+| `src/uncertainty.py` | Wilson, bootstrap, and season-clustered intervals. |
+| `app.py` | Streamlit app: Landscape / Players / Strategy / Board. |
 
 ## MCP
 
@@ -175,7 +193,7 @@ backfilled** — `adp.movement()` returns empty until you have two days of
 snapshots, and every day you don't run it is a day permanently missing.
 
 ```cron
-0 6 * * * cd /absolute/path/to/ff-edge && uv run python -c "import adp; adp.snapshot()"
+0 6 * * * cd /absolute/path/to/ff-edge && uv run python -c "from src import adp; adp.snapshot(); adp.snapshot('half-ppr', 10)"
 ```
 
 Start it now, not in August.

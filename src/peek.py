@@ -5,15 +5,15 @@ actually hold on real data and (b) give you something to poke at on day one.
 Each returns a polars frame, so any of them is a starting point for a notebook
 rather than a dead end.
 
-    uv run python peek.py
+    uv run python -m src.peek
 """
 
 from __future__ import annotations
 
 import polars as pl
 
-import nflverse as nv
-from config import OUTPUT_DIR
+from src import nflverse as nv
+from src.config import OUTPUT_DIR
 
 
 def regression_candidates(season: int = 2025, min_games: int = 10) -> pl.DataFrame:
@@ -32,7 +32,14 @@ def regression_candidates(season: int = 2025, min_games: int = 10) -> pl.DataFra
     table can't tell you which is which, it can only tell you where to look.
     """
     opp = nv.ff_opportunity(stat_type="weekly").filter(
-        pl.col("season").cast(pl.Int64) == season
+        (pl.col("season").cast(pl.Int64) == season)
+        # 7% of rows are unattributed team plays with a null player_id. They all
+        # collapse into a single group and land at the top of the sort — the
+        # "player" with 423 games and -1274 points over expected.
+        & pl.col("player_id").is_not_null()
+        # This table has no season_type column and does carry weeks 19-22.
+        # Without the cap, playoff production folds into the season total.
+        & (pl.col("week") <= 18)
     )
 
     return (

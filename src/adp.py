@@ -15,14 +15,19 @@ from __future__ import annotations
 
 import math
 from datetime import date
+from typing import Any
 
+import numpy as np
 import polars as pl
 import requests
 
-from cache import frame
-from config import ADP_SCORING, ADP_TEAMS, ADP_YEAR, DATA_DIR
+from src.cache import frame
+from src.config import ADP_SCORING, ADP_TEAMS, ADP_YEAR, DATA_DIR
 
 BASE = "https://fantasyfootballcalculator.com/api/v1/adp"
+
+# Minimum standard deviation, in picks, for a player's draft slot. See slot_scale.
+_MIN_SLOT_SD = 0.5
 
 _session = requests.Session()
 _session.headers.update({"User-Agent": "ff-edge/0.1 (personal research)"})
@@ -144,6 +149,23 @@ def movement(
     )
 
 
+def slot_scale(stdev: Any) -> np.ndarray:
+    """FFC's draft-slot dispersion, floored — the one place that floor is defined.
+
+    FFC reports stdev 0 for players with almost no draft sample. Taken literally
+    that makes a player's draft slot deterministic, which turns `survival()` into
+    a step function and makes the simulator's draft board identical in every run.
+    0.5 picks is small enough to be honest about a genuinely tightly-drafted
+    player and large enough to keep the math continuous.
+
+    Shared deliberately: `survival()` evaluates the normal CDF at one pick, and
+    `simulate.draft_orders()` samples from the same normal. They must agree about
+    the distribution or the board you plan against isn't the board you tested.
+    """
+    sd = np.asarray(stdev, dtype=float)
+    return np.maximum(np.nan_to_num(sd, nan=0.0), _MIN_SLOT_SD)
+
+
 def survival(adp_df: pl.DataFrame, pick_no: int) -> pl.DataFrame:
     """P(player is still on the board at `pick_no`).
 
@@ -156,8 +178,8 @@ def survival(adp_df: pl.DataFrame, pick_no: int) -> pl.DataFrame:
     available" is the wrong question; "who do I lose by waiting" is the right one,
     and only the second one uses the dispersion you already have for free.
 
-    stdev is floored at 0.5 — FFC reports 0 for players with almost no draft
-    sample, which would otherwise make survival a hard step function.
+    stdev is floored by `slot_scale`, which the draft simulator samples from too
+    so both agree about the distribution.
     """
     if adp_df.height == 0:
         return adp_df
@@ -167,7 +189,7 @@ def survival(adp_df: pl.DataFrame, pick_no: int) -> pl.DataFrame:
     def _p(adp: float | None, sd: float | None) -> float | None:
         if adp is None:
             return None
-        sd = max(float(sd or 0.0), 0.5)
+        sd = float(slot_scale(sd or 0.0))
         z = (pick_no - float(adp)) / sd
         return round(1.0 - 0.5 * (1.0 + math.erf(z / math.sqrt(2.0))), 4)
 

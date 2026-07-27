@@ -24,8 +24,8 @@ from typing import Any
 import polars as pl
 import requests
 
-from cache import blob, frame
-from config import LEAGUE_IDS, SEASON, SLEEPER_USERNAME
+from src.cache import blob, frame
+from src.config import LEAGUE_IDS, SEASON, SLEEPER_USERNAME
 
 BASE = "https://api.sleeper.app/v1"
 
