@@ -27,6 +27,7 @@ from src import features as ft
 from src import landscape as ls
 from src import rookies as rk
 from src import scoring as sc
+from src import simulate as sim
 from src import theme
 from src.config import (
     DEFAULT_ROSTER_POSITIONS,
@@ -34,6 +35,7 @@ from src.config import (
     DEFAULT_TEAMS,
     FEATURE_SEASONS,
     LEAGUE_ID,
+    OUTPUT_DIR,
     SEASON,
 )
 
@@ -760,6 +762,245 @@ def _rookie_section(dark: bool) -> None:
         st.dataframe(rk.coefficients().to_pandas(), use_container_width=True, hide_index=True)
 
 
+@st.cache_data(show_spinner=False)
+def _sim_baseline() -> pl.DataFrame:
+    path = OUTPUT_DIR / "simulation_baseline.parquet"
+    return pl.read_parquet(path) if path.exists() else pl.DataFrame()
+
+
+@st.cache_data(show_spinner=False)
+def _sim_summary(runs_key: int) -> pl.DataFrame:
+    return sim.summarize(_sim_baseline())
+
+
+@st.cache_data(show_spinner=False)
+def _sim_edges(runs_key: int) -> pl.DataFrame:
+    return sim.compare_to_control(_sim_baseline())
+
+
+@st.cache_data(ttl=3600, show_spinner="Simulating…")
+def _sim_rerun(
+    scoring_key: tuple[tuple[str, float], ...],
+    roster: tuple[str, ...],
+    teams: int,
+    n_sims: int,
+    seed: int,
+) -> pl.DataFrame:
+    return sim.run_all(
+        n_sims=n_sims,
+        scoring=dict(scoring_key),
+        roster_positions=list(roster),
+        teams=teams,
+        seed=seed,
+    )
+
+
+def _strategy_chart(summary: pl.DataFrame, dark: bool) -> alt.LayerChart:
+    """Title rate with season-clustered intervals, control highlighted."""
+    pd_ = summary.with_columns(
+        pl.when(pl.col("strategy") == "bpa")
+        .then(pl.lit("Control — follow ADP"))
+        .otherwise(pl.lit("Strategy"))
+        .alias("kind")
+    ).to_pandas()
+
+    colors = theme.position_colors(dark)
+    scale = alt.Scale(
+        domain=["Strategy", "Control — follow ADP"],
+        range=[colors["QB"], colors["TE"]],
+    )
+    base = alt.Chart(pd_)
+    dots = base.mark_circle(size=140).encode(
+        y=alt.Y("strategy:N", sort="-x", title=None),
+        x=alt.X("title_rate:Q", title="Title rate", axis=alt.Axis(format="%")),
+        color=alt.Color("kind:N", scale=scale, title=None),
+        tooltip=[
+            alt.Tooltip("strategy:N", title="Strategy"),
+            alt.Tooltip("title_rate:Q", title="Title rate", format=".1%"),
+            alt.Tooltip("title_rate_lo:Q", title="CI low", format=".1%"),
+            alt.Tooltip("title_rate_hi:Q", title="CI high", format=".1%"),
+            alt.Tooltip("playoff_rate:Q", title="Playoff rate", format=".1%"),
+            alt.Tooltip("mean_wins:Q", title="Mean wins", format=".2f"),
+            alt.Tooltip("n_sims:Q", title="Simulations"),
+        ],
+    )
+    bars = base.mark_rule(strokeWidth=2).encode(
+        y=alt.Y("strategy:N", sort="-x"),
+        x=alt.X("title_rate_lo:Q"),
+        x2=alt.X2("title_rate_hi:Q"),
+        color=alt.Color("kind:N", scale=scale, title=None),
+    )
+    return (bars + dots).properties(height=300)
+
+
+def _tab_strategy(p: dict[str, Any]) -> None:
+    dark = p["dark"]
+    st.subheader("What is a draft strategy actually worth?")
+
+    runs = _sim_baseline()
+    if not runs.height:
+        st.warning(
+            "No simulation artifact. Run `uv run python -m src.simulate --sims 4000` "
+            "(about 3 seconds)."
+        )
+        return
+
+    summary = _sim_summary(runs.height)
+    seasons = sorted(runs.get_column("season").unique().to_list())
+    per_strategy = runs.height // summary.height
+
+    st.caption(
+        f"{per_strategy:,} simulated seasons per strategy, replaying {seasons[0]}–"
+        f"{seasons[-1]} with those years' real ADP and real weekly scores. Nine "
+        "opponents draft from ADP with noise scaled by each player's observed "
+        "dispersion; your draft slot varies every run."
+    )
+
+    st.warning(
+        "**This simulates drafting, not managing.** No waivers, no trades, no "
+        "streaming, no bye-week maneuvering — just the draft, then optimal "
+        "lineups all year. Those omissions are a large share of real outcomes, "
+        "so the claim here is narrow: what a draft strategy is worth *holding "
+        "in-season management constant*. That is not the same as what wins leagues.",
+        icon="⚠️",
+    )
+
+    st.altair_chart(theme.base_chart(_strategy_chart(summary, dark), dark), use_container_width=True)
+    st.caption(
+        "Intervals resample whole seasons, not individual simulations — "
+        "simulations within a season share one realized set of player outcomes, "
+        "so treating them as independent would report bars roughly ten times "
+        "too narrow."
+    )
+
+    st.markdown("#### Edge over simply following ADP")
+    st.caption(
+        "Each strategy minus the control, bootstrapped over shared seasons so "
+        "both sides move together — season variation is the biggest term here, "
+        "and comparing unpaired estimates spends all the power on it. Intervals "
+        "are Bonferroni-corrected for comparing seven strategies: pick the best "
+        "of seven and quote its uncorrected interval and you will find something "
+        "every time."
+    )
+    edges = _sim_edges(runs.height)
+    winners = edges.filter(pl.col("beats_control"))
+    losers = edges.filter(pl.col("bonferroni_hi") < 0)
+
+    if winners.height:
+        names = ", ".join(
+            f"**{r['strategy']}** ({r['edge']:+.1%}, CI [{r['bonferroni_lo']:+.1%}, "
+            f"{r['bonferroni_hi']:+.1%}])"
+            for r in winners.iter_rows(named=True)
+        )
+        st.success(
+            f"{names} beat ADP-following on title rate, with corrected intervals "
+            "that exclude zero. Both are quarterback-timing strategies, which is "
+            "coherent: they are the templates that most change how many picks go "
+            "to a position this league starts only one of. Four seasons is still "
+            "four seasons — treat this as a real but lightly-evidenced edge.",
+            icon="✅",
+        )
+    else:
+        st.error(
+            "**No strategy separates from simply following ADP** once intervals "
+            "are corrected for comparing seven of them. With four seasons, the "
+            "differences between templates are not distinguishable from the "
+            "difference between one NFL season and another.",
+            icon="🚫",
+        )
+
+    if losers.height:
+        st.warning(
+            "Significantly **worse** than the control: "
+            + ", ".join(
+                f"**{r['strategy']}** ({r['edge']:+.1%})" for r in losers.iter_rows(named=True)
+            )
+            + ". A negative finding is still a finding — these are templates to avoid in this format.",
+            icon="⚠️",
+        )
+
+    st.dataframe(
+        edges.select(
+            "strategy", "rate", "control_rate", "edge",
+            "bonferroni_lo", "bonferroni_hi", "beats_control",
+        ).to_pandas(),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.markdown("#### Why the intervals are wide")
+    st.caption(
+        "Mean wins by strategy and season. Read across a row: the same strategy "
+        "swings by more between seasons than the strategies differ from each "
+        "other within one. Zero-RB is the clearest case — best in the league one "
+        "year, worst the next — which lines up with the Landscape tab showing "
+        "running back value climbing after 2023."
+    )
+    per_season = (
+        runs.group_by(["strategy", "season"])
+        .agg(pl.col("wins").mean().round(2).alias("mean_wins"))
+        .sort(["strategy", "season"])
+    )
+    heat = (
+        alt.Chart(per_season.to_pandas())
+        .mark_rect(stroke=theme.surface(dark), strokeWidth=2)
+        .encode(
+            x=alt.X("season:O", title=None),
+            y=alt.Y("strategy:N", title=None),
+            color=alt.Color(
+                "mean_wins:Q",
+                scale=alt.Scale(range=theme.SEQUENTIAL_BLUE),
+                title="Mean wins",
+            ),
+            tooltip=[
+                alt.Tooltip("strategy:N", title="Strategy"),
+                alt.Tooltip("season:O", title="Season"),
+                alt.Tooltip("mean_wins:Q", title="Mean wins", format=".2f"),
+            ],
+        )
+        .properties(height=280)
+    )
+    labels = (
+        alt.Chart(per_season.to_pandas())
+        .mark_text(fontSize=11, color=theme.ink(dark)["primary"])
+        .encode(x=alt.X("season:O"), y=alt.Y("strategy:N"), text=alt.Text("mean_wins:Q", format=".1f"))
+    )
+    st.altair_chart(theme.base_chart(heat + labels, dark), use_container_width=True)
+
+    with st.expander("Full results"):
+        st.dataframe(summary.to_pandas(), use_container_width=True, hide_index=True)
+        st.caption(
+            "`*_mc_lo`/`*_mc_hi` are the naive Monte Carlo intervals. They are "
+            "included for comparison and should not be quoted."
+        )
+
+    with st.expander("Rerun under my sidebar settings"):
+        st.caption(
+            "The results above use the league's saved settings. This reruns at a "
+            "smaller sample under whatever is in the sidebar now."
+        )
+        n = st.select_slider("Simulations per strategy", [200, 400, 800], value=400)
+        if st.button("Run simulation", type="primary"):
+            custom = _sim_rerun(
+                p["scoring_key"], p["roster_positions"], p["teams"], int(n), 0
+            )
+            if custom.height:
+                st.dataframe(
+                    sim.summarize(custom, n_boot=400)
+                    .select("strategy", "title_rate", "title_rate_lo", "title_rate_hi",
+                            "playoff_rate", "mean_wins")
+                    .to_pandas(),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                st.caption(
+                    f"{n} simulations per strategy — intervals are wider than the "
+                    "baseline above, on top of the season-clustering already applied."
+                )
+            else:
+                st.warning("No simulations produced under these settings.")
+
+
 def _placeholder(name: str, phase: str) -> None:
     st.subheader(name)
     st.info(f"Not built yet — {phase}.", icon="🚧")
@@ -777,7 +1018,7 @@ def main() -> None:
     with players:
         _tab_players(p)
     with strategy:
-        _placeholder("Strategy", "phase 4 (draft simulation)")
+        _tab_strategy(p)
     with board:
         _placeholder("Board", "phase 5 (draft-day view)")
 
