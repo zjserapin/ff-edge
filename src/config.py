@@ -86,10 +86,20 @@ PBP_SEASONS = [2023, 2024, 2025]
 
 # --- League (Shiva Bowl) ----------------------------------------------------
 
+# Read from the shell, like SLEEPER_USERNAME, and for the same reason: a league
+# id is not a credential, but Sleeper's API is public and unauthenticated, so
+# anyone holding it can read the league name, every manager's display name, and
+# the full draft and transaction history. That is nine other people's data in a
+# public repo, so it stays out of the file.
+#
+#   export FF_EDGE_LEAGUE_ID=1234567890123456789
+#
+# Left unset, sleeper.my_leagues() discovers it from FF_EDGE_SLEEPER_USER.
+LEAGUE_ID = os.environ.get("FF_EDGE_LEAGUE_ID", "")
+
 # Defaults, not truth. scoring.league_settings() pulls these live from Sleeper;
 # these exist so the app starts with no network and so the analysis modules have
 # something to be called with directly.
-LEAGUE_ID = "1387497193593655296"
 DEFAULT_TEAMS = 10
 DEFAULT_ROSTER_POSITIONS: list[str] = [
     "QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "FLEX", "K", "DEF",

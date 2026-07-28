@@ -163,15 +163,38 @@ def unmapped_keys(scoring: Mapping[str, float] | None = None) -> list[str]:
 # --- League settings --------------------------------------------------------
 
 
-def league_settings(league_id: str = LEAGUE_ID, force: bool = False) -> dict[str, Any]:
+def resolve_league_id(league_id: str | None = None, force: bool = False) -> str:
+    """The league to read, from the argument, the environment, or discovery.
+
+    `LEAGUE_ID` is empty unless FF_EDGE_LEAGUE_ID is exported, so an unset
+    environment falls through to asking Sleeper which leagues the configured
+    username is in and taking the first. Returns "" when neither is available,
+    which callers treat as "use the saved defaults".
+    """
+    if league_id:
+        return league_id
+    if LEAGUE_ID:
+        return LEAGUE_ID
+    try:
+        mine = sleeper.my_leagues(force=force)
+    except Exception:  # noqa: BLE001 — no network or no username configured
+        return ""
+    if mine.height and "league_id" in mine.columns:
+        return str(mine.get_column("league_id")[0])
+    return ""
+
+
+def league_settings(league_id: str | None = None, force: bool = False) -> dict[str, Any]:
     """Live league parameters, falling back to config defaults when offline.
 
     The fallback matters more than it looks: the app should open and render on a
-    plane. Defaults are the real 2026 values, so the offline path is correct
-    rather than merely functional.
+    plane, and it should open for someone who cloned this repo and has no league
+    configured at all. Defaults are the real 2026 Shiva Bowl values, so the
+    offline path is correct rather than merely functional.
     """
+    resolved = resolve_league_id(league_id, force=force)
     try:
-        meta = sleeper.league(league_id, force=force)
+        meta = sleeper.league(resolved, force=force) if resolved else None
     except Exception:  # noqa: BLE001 — offline is a supported state, not an error
         meta = None
 
@@ -198,7 +221,7 @@ def league_settings(league_id: str = LEAGUE_ID, force: bool = False) -> dict[str
     }
 
 
-def scoring_history(league_id: str = LEAGUE_ID, force: bool = False) -> pl.DataFrame:
+def scoring_history(league_id: str | None = None, force: bool = False) -> pl.DataFrame:
     """How this league's own rules have changed, season by season.
 
     Worth a caption on any chart that plots history under current scoring,
@@ -210,8 +233,12 @@ def scoring_history(league_id: str = LEAGUE_ID, force: bool = False) -> pl.DataF
     Returns: season, teams, rec, pass_int, flex_slots, playoff_teams,
     playoff_week_start.
     """
+    resolved = resolve_league_id(league_id, force=force)
+    if not resolved:
+        return pl.DataFrame()
+
     rows: list[dict[str, Any]] = []
-    for lid, season in sleeper.league_chain(league_id, force=force):
+    for lid, season in sleeper.league_chain(resolved, force=force):
         meta = sleeper.league(lid, force=force)
         if not meta:
             continue

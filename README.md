@@ -22,15 +22,20 @@ derived artifacts in one command. `uv run pytest` runs the suite (95 tests,
 ~6s); it reads the local cache and skips cleanly when cold.
 
 To pull your own league data, export your Sleeper **display name** (not your
-email) and re-run bootstrap. It's read from the shell rather than committed so a
-personal handle doesn't end up in the repo:
+email) and re-run bootstrap. Both of these are read from the shell rather than
+committed, because Sleeper's API is public and unauthenticated — a league id in
+a public repo lets anyone read that league's name, every manager's display name,
+and its full draft and transaction history:
 
 ```bash
 export FF_EDGE_SLEEPER_USER=yourname
+export FF_EDGE_LEAGUE_ID=1234567890123456789   # optional; discovered if unset
 uv run python -m src.bootstrap --light
 ```
 
-Without it the Sleeper section is skipped cleanly.
+Without them the Sleeper section is skipped and the app falls back to saved
+league settings (10-team, half-PPR, two FLEX), so everything still runs — you
+just get the reference league's rules instead of your own.
 
 Drop `--light` to also pull play-by-play (~1GB, several minutes).
 

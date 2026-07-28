@@ -37,7 +37,6 @@ from src.config import (
     DEFAULT_TEAMS,
     CURRENT_SEASON,
     FEATURE_SEASONS,
-    LEAGUE_ID,
     OUTPUT_DIR,
     SEASON,
 )
@@ -187,8 +186,14 @@ def _glossary_section() -> None:
 
 
 @st.cache_data(show_spinner=False)
+def _resolved_league_id() -> str:
+    """Whatever league we are reading, from the env or from discovery."""
+    return sc.resolve_league_id()
+
+
+@st.cache_data(show_spinner=False)
 def _league(league_id: str) -> dict[str, Any]:
-    return sc.league_settings(league_id)
+    return sc.league_settings(league_id or None)
 
 
 @st.cache_data(show_spinner=False)
@@ -283,9 +288,13 @@ def _replacement(
 def _sidebar() -> dict[str, Any]:
     st.sidebar.title("League")
 
-    league = _league(LEAGUE_ID)
+    league_id = _resolved_league_id()
+    league = _league(league_id)
     if league["source"] != "sleeper":
-        st.sidebar.caption("⚠️ Sleeper unreachable — using saved 2026 settings.")
+        st.sidebar.caption(
+            "Using saved 2026 settings — export `FF_EDGE_LEAGUE_ID` (and "
+            "`FF_EDGE_SLEEPER_USER`) to read your own league live."
+        )
     else:
         st.sidebar.caption(f"Live from Sleeper · {league['season']} season")
 
@@ -335,7 +344,7 @@ def _sidebar() -> dict[str, Any]:
             st.code("\n".join(unmapped), language=None)
 
     return {
-        "league_id": LEAGUE_ID,
+        "league_id": league_id,
         "teams": int(teams),
         "scoring": scoring,
         "scoring_key": _key(scoring),
