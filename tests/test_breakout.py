@@ -222,3 +222,92 @@ def test_cluster_bootstrap_is_wider_than_naive(preds: pl.DataFrame) -> None:
     n_lo, n_hi = unc.bootstrap_ci(values, np.mean, n_boot=500)
     c_lo, c_hi = unc.cluster_bootstrap_ci(values, groups, np.mean, n_boot=500)
     assert (c_hi - c_lo) > (n_hi - n_lo) * 3
+
+
+# --- stratification ---------------------------------------------------------
+
+
+def test_each_position_gets_its_own_model(train: pl.DataFrame) -> None:
+    """Stratified fitting must produce a model tagged per position."""
+    preds = bo.fit_predict(train, by_position=True)
+    assert preds.height > 200
+    models = set(preds.get_column("model").unique().to_list())
+    assert models == {"QB", "RB", "WR", "TE"}
+    # A player is only ever scored by his own position's model.
+    assert (preds.get_column("model") == preds.get_column("position")).all()
+
+
+def test_position_feature_sets_are_position_appropriate() -> None:
+    """The features must differ by position, or stratifying buys nothing."""
+    qb = set(bo.model_features("QB"))
+    wr = set(bo.model_features("WR"))
+    assert qb != wr
+    # Rushing share is a quarterback feature; air-yards volume is a receiver one.
+    assert "rush_share" in qb and "rush_share" not in wr
+    assert "wopr" in wr and "wopr" not in qb
+    # Price and age anchor every model.
+    for position in ("QB", "RB", "WR", "TE"):
+        cols = bo.model_features(position)
+        assert "adp_pos_rank" in cols and "age" in cols
+        assert len(cols) == 4, f"{position} should stay compact on this sample"
+
+
+def test_stratifying_beats_pooling_on_this_data(train: pl.DataFrame) -> None:
+    """The reason the default changed, pinned so a regression is visible.
+
+    Pooled, the model was anti-predictive (AUC ~0.40). Fitting per position
+    moves it to roughly chance. This is not a claim that the model works — it
+    does not beat draft price either way — only that pooling four different
+    relationships into one fit was actively harmful.
+    """
+    strat = bo.fit_predict(train, by_position=True)
+    pooled = bo.fit_predict(train, by_position=False)
+
+    def auc_of(p: pl.DataFrame) -> float:
+        return unc.auc(
+            p.get_column("beat_adp").to_numpy().astype(int),
+            p.get_column("p_breakout").to_numpy(),
+        )
+
+    assert auc_of(pooled) < 0.45, "pooled model is no longer anti-predictive"
+    assert auc_of(strat) > auc_of(pooled) + 0.05
+
+
+def test_sample_adequacy_reports_the_denominator(train: pl.DataFrame) -> None:
+    """Every position's result must ship with the sample that produced it.
+
+    Nothing here clears the conventional ten-events-per-variable floor, and the
+    table has to say so rather than letting four positions look equally solid.
+    """
+    adequacy = bo.sample_adequacy(train)
+    assert set(adequacy.get_column("position").to_list()) == {"QB", "RB", "WR", "TE"}
+    assert (adequacy.get_column("events_per_variable") < 10).all()
+
+    # Ordering must reflect reality: WR has the most data, TE the least.
+    ranked = adequacy.sort("events_per_variable", descending=True)
+    assert ranked.get_column("position")[0] == "WR"
+    assert ranked.get_column("position")[-1] == "TE"
+    assert ranked.get_column("verdict")[-1] == "insufficient"
+
+
+def test_current_scores_are_ranked_within_position() -> None:
+    """Four models mean four probability scales, so quartiles must be per position."""
+    scored = bo.score_current(features=ft.build())
+    if not scored.height:
+        pytest.skip("cold cache")
+    for position in scored.get_column("position").unique().to_list():
+        sub = scored.filter(pl.col("position") == position)
+        if sub.height < 8:
+            continue
+        assert set(sub.get_column("quartile").unique().to_list()) <= {1, 2, 3, 4}
+        assert sub.get_column("quartile").n_unique() >= 2
+
+
+def test_coefficients_are_reported_per_model(train: pl.DataFrame) -> None:
+    coefs = bo.coefficients(train, by_position=True)
+    assert set(coefs.get_column("model").unique().to_list()) == {"QB", "RB", "WR", "TE"}
+    # Each model reports exactly its own feature set, with its own sample size.
+    for position in ("QB", "RB", "WR", "TE"):
+        sub = coefs.filter(pl.col("model") == position)
+        assert set(sub.get_column("feature").to_list()) == set(bo.model_features(position))
+        assert sub.get_column("n_train").n_unique() == 1

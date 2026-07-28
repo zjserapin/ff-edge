@@ -20,6 +20,27 @@ What is actually available before a rookie plays a down:
 
 n is small — roughly 40-50 drafted skill rookies a season — so this is a ridge
 regression with leave-one-season-out validation and nothing fancier.
+
+**Stratified by position**, which matters more here than for veterans because
+the outcome scale itself differs by position: a quarterback who plays scores
+15-20 points a game and a tight end scores 5, so a pooled model spends much of
+its capacity learning "is this a quarterback" before it can say anything about
+the player.
+
+The gain is real but not uniform, and it is reported that way:
+
+    scope     pooled corr / MAE      stratified corr / MAE
+    overall     0.568 / 2.83           0.592 / 2.76
+    TE          0.630 / 1.99           0.647 / 1.73
+    WR          0.602 / 2.51           0.601 / 2.39
+    QB          0.588 / 4.41           0.565 / 4.35
+    RB          0.560 / 3.04           0.533 / 3.16
+
+Tight ends and receivers improve clearly; quarterbacks are a wash; running backs
+get slightly worse, which is what a smaller training set buys when the pooled
+signal was already mostly right for that position. Overall correlation rises
+because the per-position models stop conflating between-position scale
+differences with within-position skill.
 """
 
 from __future__ import annotations
@@ -52,6 +73,24 @@ ROOKIE_FEATURES = [
     "vacated_carry_share",
     "vacated_exp_points",
 ]
+
+# Per-position feature sets. The landing-spot column that matters differs by
+# position — vacated carries are the signal for a back and noise for a receiver
+# — and `draft_round` is dropped everywhere because it is `draft_ovr` binned,
+# so including both makes two collinear columns fight over one effect.
+ROOKIE_POSITION_FEATURES: dict[str, list[str]] = {
+    "QB": ["draft_ovr", "age_at_draft", "vacated_exp_points"],
+    "RB": ["draft_ovr", "age_at_draft", "wt", "vacated_carry_share", "vacated_target_share"],
+    "WR": ["draft_ovr", "age_at_draft", "forty", "vacated_target_share"],
+    "TE": ["draft_ovr", "age_at_draft", "wt", "vacated_target_share"],
+}
+
+
+def rookie_features_for(position: str | None = None) -> list[str]:
+    """Features for one position's rookie model, or the pooled set."""
+    if position is None:
+        return list(ROOKIE_FEATURES)
+    return list(ROOKIE_POSITION_FEATURES.get(position, ROOKIE_FEATURES))
 
 
 def rookie_class(season: int, force: bool = False) -> pl.DataFrame:
@@ -250,45 +289,66 @@ def fit(
     target: str = "ppg",
     alpha: float = 10.0,
     seed: int = 0,
+    by_position: bool = True,
+    min_train_rows: int = 30,
 ) -> pl.DataFrame:
     """Leave-one-season-out predictions. Each rookie scored by a model blind to his class.
 
-    Leave-one-season-out rather than season-forward here because the sample is
-    small enough that a two-fold expanding window would train on ~90 players. It
+    Stratified by position by default. It matters more here than for veterans:
+    a rookie's outcome scale differs by an order of magnitude across positions —
+    quarterbacks who play score 15-20 points a game and tight ends score 5 — so
+    a pooled fit spends most of its capacity learning "is this a quarterback"
+    before it can say anything about the player.
+
+    Leave-one-season-out rather than season-forward because the sample is small
+    enough that an expanding window would train a position on twenty players. It
     is a weaker guarantee — the model sees later seasons when predicting earlier
     ones — and it is stated rather than glossed. The purpose is to measure
-    whether draft capital plus landing spot explains anything at all, not to
-    simulate a live draft.
+    whether draft capital plus landing spot explains anything, not to simulate a
+    live draft.
 
-    Returns: season, gsis_id, name, position, team, draft_ovr, actual, predicted.
+    Returns: season, gsis_id, name, position, team, draft_ovr, actual,
+    predicted, model, n_train.
     """
     df = _train_frame(seasons, scoring)
     if not df.height:
         return pl.DataFrame()
 
+    groups = (
+        sorted(df.get_column("position").unique().to_list()) if by_position else [None]
+    )
     out = []
+
     for season in sorted(df.get_column("season").unique().to_list()):
-        train = df.filter(pl.col("season") != season)
-        test = df.filter(pl.col("season") == season)
-        if train.height < 30 or not test.height:
-            continue
+        for position in groups:
+            scope = df if position is None else df.filter(pl.col("position") == position)
+            train = scope.filter(pl.col("season") != season)
+            test = scope.filter(pl.col("season") == season)
+            if train.height < min_train_rows or not test.height:
+                continue
 
-        x_tr, used = _design(train, ROOKIE_FEATURES)
-        if not used:
-            continue
-        x_te, _ = _design(test.select(used), used)
-        y = train.get_column(target).to_numpy().astype(float)
+            cols = rookie_features_for(position)
+            x_tr, used = _design(train, cols)
+            if not used:
+                continue
+            x_te, _ = _design(test.select(used), used)
+            if x_te.shape[1] != len(used):
+                continue
 
-        scaler = StandardScaler().fit(x_tr)
-        model = Ridge(alpha=alpha, random_state=seed).fit(scaler.transform(x_tr), y)
-        pred = model.predict(scaler.transform(x_te))
+            y = train.get_column(target).to_numpy().astype(float)
+            scaler = StandardScaler().fit(x_tr)
+            model = Ridge(alpha=alpha, random_state=seed).fit(scaler.transform(x_tr), y)
 
-        out.append(
-            test.select("season", "gsis_id", "name", "position", "team", "draft_ovr").with_columns(
-                pl.Series("actual", test.get_column(target).to_numpy()).round(3),
-                pl.Series("predicted", pred).round(3),
+            out.append(
+                test.select(
+                    "season", "gsis_id", "name", "position", "team", "draft_ovr"
+                ).with_columns(
+                    pl.Series("actual", test.get_column(target).to_numpy()).round(3),
+                    pl.Series("predicted", model.predict(scaler.transform(x_te))).round(3),
+                    pl.lit(position or "pooled").alias("model"),
+                    pl.lit(train.height, dtype=pl.Int32).alias("n_train"),
+                )
             )
-        )
 
     return pl.concat(out, how="diagonal_relaxed") if out else pl.DataFrame()
 
@@ -333,58 +393,77 @@ def coefficients(
     target: str = "ppg",
     alpha: float = 10.0,
     seed: int = 0,
+    by_position: bool = True,
 ) -> pl.DataFrame:
-    """Standardized coefficients on a fit over every season.
+    """Standardized coefficients per position model.
 
-    Exists so the app can show that draft capital is doing the work, rather than
-    implying that eight features each contribute.
+    Exists so the app can show what each model keys on — and in particular that
+    draft capital does nearly all the work — rather than implying every feature
+    contributes.
+
+    Returns: model, feature, coef, n_train.
     """
     df = _train_frame(seasons, scoring)
     if not df.height:
         return pl.DataFrame()
 
-    x, used = _design(df, ROOKIE_FEATURES)
+    groups = (
+        sorted(df.get_column("position").unique().to_list()) if by_position else [None]
+    )
+    parts = []
+    for position in groups:
+        sub = df if position is None else df.filter(pl.col("position") == position)
+        if sub.height < 30:
+            continue
+        cols = rookie_features_for(position)
+        x, used = _design(sub, cols)
+        if not used:
+            continue
+        y = sub.get_column(target).to_numpy().astype(float)
+        scaler = StandardScaler().fit(x)
+        model = Ridge(alpha=alpha, random_state=seed).fit(scaler.transform(x), y)
+        parts.append(
+            pl.DataFrame(
+                {
+                    "model": [position or "pooled"] * len(used),
+                    "feature": used,
+                    "coef": [round(float(c), 4) for c in model.coef_],
+                    "n_train": [sub.height] * len(used),
+                }
+            )
+        )
+
+    if not parts:
+        return pl.DataFrame()
+    return pl.concat(parts, how="diagonal_relaxed").sort(
+        ["model", pl.col("coef").abs()], descending=[False, True]
+    )
+
+
+def _score_class(
+    history: pl.DataFrame,
+    incoming: pl.DataFrame,
+    cols: list[str],
+    label: str,
+    target: str,
+    alpha: float,
+    seed: int,
+) -> pl.DataFrame | None:
+    """Fit on `history`, predict `incoming`. Shared by the pooled and per-position paths."""
+    x_tr, used = _design(history, cols)
     if not used:
-        return pl.DataFrame()
-    y = df.get_column(target).to_numpy().astype(float)
-    scaler = StandardScaler().fit(x)
-    model = Ridge(alpha=alpha, random_state=seed).fit(scaler.transform(x), y)
+        return None
 
-    return pl.DataFrame(
-        {"feature": used, "coef": [round(float(c), 4) for c in model.coef_]}
-    ).sort(pl.col("coef").abs(), descending=True)
-
-
-def board(
-    season: int = SEASON,
-    scoring: Mapping[str, float] | None = None,
-    target: str = "ppg",
-    alpha: float = 10.0,
-    seed: int = 0,
-) -> pl.DataFrame:
-    """This year's rookie class, scored by a model fit on prior classes.
-
-    Returns: gsis_id, name, position, team, draft_round, draft_ovr,
-    vacated_target_share, vacated_carry_share, predicted.
-    """
-    history = _train_frame(None, scoring)
-    incoming = rookie_features([season], scoring)
-    if not history.height or not incoming.height:
-        return pl.DataFrame()
-
-    x_tr, used = _design(history, ROOKIE_FEATURES)
-    if not used:
-        return pl.DataFrame()
-
-    # Add any column the incoming class lacks entirely as nulls, so _design
-    # imputes it from the historical median rather than the whole board coming
-    # back empty because one drill wasn't run this year.
+    # Add any column the incoming class lacks entirely as nulls, so it gets
+    # imputed from the historical median rather than the whole board coming back
+    # empty because one drill wasn't run this year.
     incoming = incoming.with_columns(
         [pl.lit(None, dtype=pl.Float64).alias(c) for c in used if c not in incoming.columns]
     )
     x_new, _ = _design(incoming.select(used), used)
     if x_new.shape[1] != len(used):
-        return pl.DataFrame()
+        return None
+
     # Impute from the training distribution, not the incoming one — a class with
     # only five recorded forty times should not have its own median define
     # "average speed".
@@ -404,8 +483,57 @@ def board(
         )
         if c in incoming.columns
     ]
-    return (
-        incoming.select(keep)
-        .with_columns(pl.Series("predicted", model.predict(scaler.transform(x_new))).round(3))
-        .sort("predicted", descending=True)
+    return incoming.select(keep).with_columns(
+        pl.Series("predicted", model.predict(scaler.transform(x_new))).round(3),
+        pl.lit(label).alias("model"),
+        pl.lit(history.height, dtype=pl.Int32).alias("n_train"),
     )
+
+
+def board(
+    season: int = SEASON,
+    scoring: Mapping[str, float] | None = None,
+    target: str = "ppg",
+    alpha: float = 10.0,
+    seed: int = 0,
+    by_position: bool = True,
+    min_train_rows: int = 30,
+) -> pl.DataFrame:
+    """This year's rookie class, scored by a model fit on prior classes.
+
+    Stratified by default, so each rookie is predicted by a model fit only on
+    players at his position. Predictions stay on the same points-per-game scale,
+    so unlike the veteran breakout probability these *are* comparable across the
+    board — though a quarterback's 8 ppg and a tight end's 8 ppg mean very
+    different things relative to their replacement levels, which is what the
+    Landscape tab is for.
+
+    Returns: gsis_id, name, position, team, draft_round, draft_ovr,
+    vacated_target_share, vacated_carry_share, predicted, model, n_train.
+    """
+    history = _train_frame(None, scoring)
+    incoming = rookie_features([season], scoring)
+    if not history.height or not incoming.height:
+        return pl.DataFrame()
+
+    if not by_position:
+        scored = _score_class(
+            history, incoming, ROOKIE_FEATURES, "pooled", target, alpha, seed
+        )
+        return scored.sort("predicted", descending=True) if scored is not None else pl.DataFrame()
+
+    parts = []
+    for position in sorted(incoming.get_column("position").unique().to_list()):
+        hist_pos = history.filter(pl.col("position") == position)
+        new_pos = incoming.filter(pl.col("position") == position)
+        if hist_pos.height < min_train_rows or not new_pos.height:
+            continue
+        scored = _score_class(
+            hist_pos, new_pos, rookie_features_for(position), position, target, alpha, seed
+        )
+        if scored is not None:
+            parts.append(scored)
+
+    if not parts:
+        return pl.DataFrame()
+    return pl.concat(parts, how="diagonal_relaxed").sort("predicted", descending=True)

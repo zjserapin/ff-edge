@@ -25,6 +25,7 @@ from src import adp as adp_mod
 from src import archetypes as ar
 from src import breakout as bo
 from src import features as ft
+from src import glossary
 from src import landscape as ls
 from src import rookies as rk
 from src import scoring as sc
@@ -49,6 +50,55 @@ st.set_page_config(page_title="ff-edge", page_icon="🏈", layout="wide")
 def _key(scoring: Mapping[str, float]) -> tuple[tuple[str, float], ...]:
     """Make a scoring dict hashable for @st.cache_data."""
     return tuple(sorted((k, float(v)) for k, v in scoring.items()))
+
+
+def table(df: pl.DataFrame, **kwargs: Any) -> None:
+    """Render a frame with a hover definition on every column that has one.
+
+    Every table in this app goes through here rather than st.dataframe directly.
+    A column named `wopr` or `market_var` means nothing on its own, and a
+    glossary nobody opens is a glossary nobody reads — the definition has to be
+    on the column itself.
+    """
+    if not df.height:
+        return
+    pdf = df.to_pandas()
+    config = {
+        col: st.column_config.Column(help=help_text)
+        for col, help_text in glossary.column_help(list(pdf.columns)).items()
+    }
+    st.dataframe(
+        pdf, use_container_width=True, hide_index=True, column_config=config, **kwargs
+    )
+
+
+def _glossary_section() -> None:
+    """The full reference, grouped, with the long definitions."""
+    st.subheader("Glossary")
+    st.caption(
+        "Every metric in the app, what it is computed from, and — where it "
+        "matters — what it does not mean. Hovering any column header elsewhere "
+        "shows the short version."
+    )
+    search = st.text_input("Filter", placeholder="e.g. share, replacement, ADP")
+    needle = search.lower().strip()
+
+    for group, terms in glossary.groups().items():
+        hits = [
+            (key, term)
+            for key, term in terms
+            if not needle
+            or needle in key.lower()
+            or needle in term.label.lower()
+            or needle in term.long.lower()
+        ]
+        if not hits:
+            continue
+        st.markdown(f"#### {group}")
+        for key, term in hits:
+            with st.container(border=True):
+                st.markdown(f"**{term.label}**  ·  `{key}`")
+                st.markdown(term.long or term.short)
 
 
 @st.cache_data(show_spinner=False)
@@ -292,7 +342,7 @@ def _tab_landscape(p: dict[str, Any]) -> None:
         repl = _replacement(
             p["scoring_key"], p["roster_positions"], p["teams"], p["flex_split"]
         )
-        st.dataframe(repl.to_pandas(), use_container_width=True, hide_index=True)
+        table(repl)
 
     # --- Scarcity curves ---
     st.markdown("#### The shape of the dropoff")
@@ -429,11 +479,11 @@ def _tab_landscape(p: dict[str, Any]) -> None:
     with st.expander("Table view"):
         st.caption("Every chart above, as numbers.")
         st.markdown("**Value above replacement**")
-        st.dataframe(par.to_pandas(), use_container_width=True, hide_index=True)
+        table(par)
         st.markdown("**Positional mix of the top of the board**")
-        st.dataframe(mix.to_pandas(), use_container_width=True, hide_index=True)
+        table(mix)
         st.markdown("**Concentration**")
-        st.dataframe(conc.to_pandas(), use_container_width=True, hide_index=True)
+        table(conc)
 
 
 @st.cache_data(show_spinner="Building features…")
@@ -512,11 +562,7 @@ def _tab_players(p: dict[str, Any]) -> None:
     )
 
     st.markdown("#### What each group is")
-    st.dataframe(
-        profiles.select("position", "cluster", "n", "mean_ppg", "label").to_pandas(),
-        use_container_width=True,
-        hide_index=True,
-    )
+    table(profiles.select("position", "cluster", "n", "mean_ppg", "label"))
 
     st.markdown("#### Find comparable usage")
     st.caption(
@@ -532,11 +578,7 @@ def _tab_players(p: dict[str, Any]) -> None:
 
     nb = ar.neighbors(pid, clusters, feats, n=8, season=season)
     if nb.height:
-        st.dataframe(
-            nb.select("player_name", "team", "distance", "ppg", "pos_rank", "games").to_pandas(),
-            use_container_width=True,
-            hide_index=True,
-        )
+        table(nb.select("player_name", "team", "distance", "ppg", "pos_rank", "games"))
 
     with st.expander("How many groups the data actually supports"):
         sil = _silhouette(season, pos, min_games)
@@ -563,7 +605,7 @@ def _tab_players(p: dict[str, Any]) -> None:
                 .properties(height=200)
             )
             st.altair_chart(theme.base_chart(curve, dark), use_container_width=True)
-            st.dataframe(sil_pd, use_container_width=True, hide_index=True)
+            table(sil)
 
     with st.expander("Feature coverage"):
         st.caption(
@@ -571,11 +613,7 @@ def _tab_players(p: dict[str, Any]) -> None:
             "expected there. Snap share below ~90% would mean the "
             "pfr_id → gsis_id bridge broke."
         )
-        st.dataframe(
-            ft.coverage_report(feats).filter(pl.col("scope") == "ALL").to_pandas(),
-            use_container_width=True,
-            hide_index=True,
-        )
+        table(ft.coverage_report(feats).filter(pl.col("scope") == "ALL"))
 
     st.divider()
     _breakout_section(dark)
@@ -584,33 +622,49 @@ def _tab_players(p: dict[str, Any]) -> None:
 
 
 @st.cache_data(show_spinner="Backtesting…")
-def _backtest() -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+def _backtest(by_position: bool) -> dict[str, pl.DataFrame]:
     train = bo.training_frame(features=_features())
     if not train.height:
-        return (pl.DataFrame(),) * 4
-    preds = bo.fit_predict(train)
-    return (
-        bo.base_rates(bo.labels()),
-        preds,
-        bo.discrimination(preds),
-        bo.calibration(preds),
-    )
+        return {}
+    preds = bo.fit_predict(train, by_position=by_position)
+    return {
+        "train": train,
+        "base_rates": bo.base_rates(bo.labels()),
+        "preds": preds,
+        "disc": bo.discrimination(preds),
+        "cal": bo.calibration(preds),
+        "cal_pos": bo.calibration_by_position(preds),
+        "adequacy": bo.sample_adequacy(train),
+        "coefs": bo.coefficients(train, by_position=by_position),
+    }
 
 
 def _breakout_section(dark: bool) -> None:
     st.subheader("Did last season's usage predict beating ADP?")
-    base_rates, preds, disc, cal = _backtest()
-    if not preds.height:
+
+    stratified = st.toggle(
+        "Separate model per position",
+        value=True,
+        help=(
+            "On: a QB is scored by a QB model, an RB by an RB model, each with "
+            "its own feature set. Off: one model across all positions, for "
+            "comparison."
+        ),
+    )
+    res = _backtest(stratified)
+    if not res or not res["preds"].height:
         st.info("Not enough labeled seasons to backtest.")
         return
 
-    overall = base_rates.filter(pl.col("scope") == "overall")
+    disc, cal = res["disc"], res["cal"]
+    overall = res["base_rates"].filter(pl.col("scope") == "overall")
     base = float(overall.get_column("rate")[0])
     n_labeled = int(overall.get_column("n")[0])
-    pooled = disc.filter(pl.col("scope") == "pooled")
-    auc = float(pooled.get_column("auc")[0])
-    auc_adp = float(pooled.get_column("auc_adp_only")[0])
-    d_lo, d_hi = float(pooled.get_column("delta_lo")[0]), float(pooled.get_column("delta_hi")[0])
+
+    allrow = disc.filter(pl.col("scope") == "all")
+    auc = float(allrow.get_column("auc")[0])
+    auc_adp = float(allrow.get_column("auc_adp_only")[0])
+    d_lo, d_hi = float(allrow.get_column("delta_lo")[0]), float(allrow.get_column("delta_hi")[0])
 
     st.caption(
         f"Label: finish at or inside 60% of your ADP positional rank. "
@@ -619,37 +673,70 @@ def _breakout_section(dark: bool) -> None:
     )
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("Base rate", f"{base:.1%}", help="How often anyone beats their ADP.")
-    c2.metric("Model AUC", f"{auc:.3f}", help="0.5 is a coin flip.")
+    c1.metric("Base rate", f"{base:.1%}", help=glossary.describe("base_rate"))
+    c2.metric("Model AUC", f"{auc:.3f}", help=glossary.describe("auc"))
     c3.metric(
         "ADP alone",
         f"{auc_adp:.3f}",
         delta=f"{auc - auc_adp:+.3f}",
         delta_color="normal",
-        help="Predicting from draft price only — the bar the model has to clear.",
+        help=glossary.describe("auc_adp_only"),
     )
 
-    st.error(
-        f"**The model does not beat the draft market, and this is the result — "
-        f"not a work in progress.** Out-of-sample AUC is {auc:.3f} against "
-        f"{auc_adp:.3f} for price alone; the difference interval "
-        f"[{d_lo:+.3f}, {d_hi:+.3f}] covers zero. Three checks say the machinery "
-        "is sound rather than sign-flipped: shuffling the labels gives AUC 0.497 "
-        "across twelve seeds, in-sample AUC is 0.63 so the fit does find "
-        "structure, and tightening regularization makes out-of-sample results "
-        "*worse* rather than better — which is not what overfitting noise does. "
-        "The relationship genuinely reverses between training and test seasons. "
-        "The plausible story is that ADP already prices last season's usage; two "
-        "test folds cannot separate that from regime noise, so nothing here "
-        "inverts the model and calls it a signal.",
-        icon="🚫",
+    if stratified:
+        st.warning(
+            f"**Stratifying fixed a pathology but did not find an edge.** Pooled, "
+            f"this model was *anti*-predictive — AUC 0.401, below a coin flip, "
+            f"with inverted calibration. Fitting per position moves it to "
+            f"{auc:.3f}, roughly chance. Isolating why: shrinkage alone changed "
+            "nothing (0.401 → 0.398), cutting to four features recovered part "
+            "(0.447), and separating positions recovered the rest. Pooling was "
+            "averaging four different relationships and fitting none of them. It "
+            f"still does not beat draft price — the gap interval "
+            f"[{d_lo:+.3f}, {d_hi:+.3f}] covers zero — but 'no signal' is a "
+            "different and more honest result than 'reliably wrong'.",
+            icon="⚠️",
+        )
+    else:
+        st.error(
+            f"**Pooled, the model is worse than a coin flip.** AUC {auc:.3f} "
+            f"against {auc_adp:.3f} for price alone. Calibration is inverted: "
+            "the lowest-probability group beats ADP more often than the highest. "
+            "Turn on per-position models above to see this largely disappear — "
+            "one model across four positions is averaging relationships that "
+            "point in different directions.",
+            icon="🚫",
+        )
+
+    st.markdown("#### Can each position support a model?")
+    st.caption(
+        "Events per variable is the standard adequacy check for a fit like this, "
+        "and the conventional floor is ten. Nothing here reaches it. That is the "
+        "cost of stratifying a 629-row sample four ways, and it is the first "
+        "thing to read before any number below."
     )
+    table(res["adequacy"])
+
+    if stratified:
+        st.markdown("#### Per-position results")
+        st.caption(
+            "`delta_auc` is the gain over predicting from draft price alone. Every "
+            "interval covers zero, so no position shows a defensible edge — but "
+            "note the direction flipped positive for QB, RB and WR once the "
+            "models were separated."
+        )
+        table(
+            disc.filter(pl.col("scope").is_in(["QB", "RB", "WR", "TE"])).select(
+                "scope", "n", "positives", "auc", "auc_adp_only",
+                "delta_auc", "delta_lo", "delta_hi",
+            )
+        )
 
     st.markdown("#### Calibration")
     st.caption(
         "Players sorted into four groups by predicted probability, against what "
-        "actually happened. If the model worked, actual rate would rise left to "
-        "right. Four groups rather than ten because ~280 out-of-sample rows "
+        "actually happened. If the model worked, the actual rate would rise left "
+        "to right. Four groups rather than ten because ~280 out-of-sample rows "
         "makes a decile ±7 points — too wide to read."
     )
     cal_pd = cal.to_pandas()
@@ -685,29 +772,49 @@ def _breakout_section(dark: bool) -> None:
     st.caption("Dashed line is the base rate. Whiskers are 95% Wilson intervals.")
 
     with st.expander("Full backtest numbers"):
-        st.markdown("**Discrimination by fold**")
-        st.dataframe(disc.to_pandas(), use_container_width=True, hide_index=True)
-        st.markdown("**Calibration**")
-        st.dataframe(cal.to_pandas(), use_container_width=True, hide_index=True)
+        st.markdown("**Discrimination — overall, by position, by test season**")
+        table(disc)
+        st.markdown("**Calibration (pooled across positions)**")
+        table(cal)
+        if res["cal_pos"].height:
+            st.markdown("**Calibration within each position**")
+            st.caption("Two bins only — a position contributes 20-60 out-of-sample rows.")
+            table(res["cal_pos"])
         st.markdown("**Base rates**")
-        st.dataframe(base_rates.to_pandas(), use_container_width=True, hide_index=True)
-        st.markdown("**What the model keyed on**")
-        st.dataframe(
-            bo.coefficients(bo.training_frame(features=_features())).to_pandas(),
-            use_container_width=True,
-            hide_index=True,
+        table(res["base_rates"])
+        st.markdown("**What each model keyed on**")
+        st.caption(
+            "Standardized coefficients. On samples this small these are "
+            "themselves unstable — read them as a description of this fit, not "
+            "as estimates of an effect."
         )
+        table(res["coefs"])
 
 
 @st.cache_data(show_spinner="Fitting rookies…")
-def _rookies() -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
-    preds = rk.fit()
-    return preds, rk.performance(preds), rk.board(SEASON)
+def _rookies(by_position: bool) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+    preds = rk.fit(by_position=by_position)
+    return (
+        preds,
+        rk.performance(preds),
+        rk.board(SEASON, by_position=by_position),
+        rk.coefficients(by_position=by_position),
+    )
 
 
 def _rookie_section(dark: bool) -> None:
     st.subheader("Rookies")
-    preds, perf, board = _rookies()
+    strat = st.toggle(
+        "Separate model per position",
+        value=True,
+        key="rookie_strat",
+        help=(
+            "Matters more here than for veterans: a rookie QB who plays scores "
+            "15-20 points a game and a TE scores 5, so a pooled model spends its "
+            "capacity learning position before it can say anything about the player."
+        ),
+    )
+    preds, perf, board, coefs = _rookies(strat)
     if not perf.height:
         st.info("No rookie classes available.")
         return
@@ -744,23 +851,30 @@ def _rookie_section(dark: bool) -> None:
         icon="✅",
     )
 
+    if strat:
+        st.caption(
+            "Stratifying helps here, though not uniformly: tight ends and "
+            "receivers improve clearly (TE error 1.99 → 1.73), quarterbacks are "
+            "a wash, and running backs get slightly worse — what a smaller "
+            "training set costs when the pooled signal was already about right. "
+            "The per-position coefficients below are the clearest evidence it "
+            "was worth doing: the RB model keys on vacated *carries* and the WR "
+            "model on vacated *targets*, which a pooled fit had to average."
+        )
+
     st.markdown(f"#### {SEASON} rookie board")
     st.caption("Ranked by predicted points per game. Landing spot is the prior season's vacated volume.")
-    st.dataframe(
-        board.head(40)
+    table(board.head(40)
         .select("name", "position", "team", "draft_round", "draft_ovr",
                 "vacated_target_share", "vacated_carry_share", "predicted")
-        .to_pandas(),
-        use_container_width=True,
-        hide_index=True,
-    )
+        )
 
     with st.expander("Model detail"):
         st.markdown("**Accuracy by position**")
-        st.dataframe(perf.to_pandas(), use_container_width=True, hide_index=True)
+        table(perf)
         st.markdown("**Standardized coefficients**")
         st.caption("Negative on draft_ovr means an earlier pick predicts more production.")
-        st.dataframe(rk.coefficients().to_pandas(), use_container_width=True, hide_index=True)
+        table(coefs)
 
 
 @st.cache_data(show_spinner=False)
@@ -920,14 +1034,10 @@ def _tab_strategy(p: dict[str, Any]) -> None:
             icon="⚠️",
         )
 
-    st.dataframe(
-        edges.select(
+    table(edges.select(
             "strategy", "rate", "control_rate", "edge",
             "bonferroni_lo", "bonferroni_hi", "beats_control",
-        ).to_pandas(),
-        use_container_width=True,
-        hide_index=True,
-    )
+        ))
 
     st.markdown("#### Why the intervals are wide")
     st.caption(
@@ -969,7 +1079,7 @@ def _tab_strategy(p: dict[str, Any]) -> None:
     st.altair_chart(theme.base_chart(heat + labels, dark), use_container_width=True)
 
     with st.expander("Full results"):
-        st.dataframe(summary.to_pandas(), use_container_width=True, hide_index=True)
+        table(summary)
         st.caption(
             "`*_mc_lo`/`*_mc_hi` are the naive Monte Carlo intervals. They are "
             "included for comparison and should not be quoted."
@@ -986,14 +1096,10 @@ def _tab_strategy(p: dict[str, Any]) -> None:
                 p["scoring_key"], p["roster_positions"], p["teams"], int(n), 0
             )
             if custom.height:
-                st.dataframe(
-                    sim.summarize(custom, n_boot=400)
+                table(sim.summarize(custom, n_boot=400)
                     .select("strategy", "title_rate", "title_rate_lo", "title_rate_hi",
                             "playoff_rate", "mean_wins")
-                    .to_pandas(),
-                    use_container_width=True,
-                    hide_index=True,
-                )
+                    )
                 st.caption(
                     f"{n} simulations per strategy — intervals are wider than the "
                     "baseline above, on top of the season-clustering already applied."
@@ -1134,7 +1240,7 @@ def _tab_board(p: dict[str, Any]) -> None:
     if not view.height:
         st.info("Nobody clears the threshold — every remaining player is a reach or a lock.")
     else:
-        st.dataframe(view.head(60).to_pandas(), use_container_width=True, hide_index=True)
+        table(view.head(60))
         st.caption(
             f"{view.height} of {available.height} available players shown. "
             "Sort any column by clicking its header."
@@ -1166,13 +1272,9 @@ def _tab_board(p: dict[str, Any]) -> None:
         st.markdown("#### Your queue")
         queued = available.filter(pl.col("gsis_id").is_in(st.session_state["queue"]))
         if queued.height:
-            st.dataframe(
-                queued.select("name", "position", "adp", "market_var", p_col)
+            table(queued.select("name", "position", "adp", "market_var", p_col)
                 .sort(p_col)
-                .to_pandas(),
-                use_container_width=True,
-                hide_index=True,
-            )
+                )
             st.caption("Sorted by least likely to survive — take the top one first.")
         stale = set(st.session_state["queue"]) & gone
         if stale:
@@ -1181,11 +1283,7 @@ def _tab_board(p: dict[str, Any]) -> None:
     with st.expander(f"Cut list ({len(st.session_state['excluded'])}) and drafted ({taken})"):
         if st.session_state["excluded"]:
             cuts = base.filter(pl.col("gsis_id").is_in(list(st.session_state["excluded"])))
-            st.dataframe(
-                cuts.select("name", "position", "adp").to_pandas(),
-                use_container_width=True,
-                hide_index=True,
-            )
+            table(cuts.select("name", "position", "adp"))
         c1, c2 = st.columns(2)
         if c1.button("Clear cut list"):
             st.session_state["excluded"] = set()
@@ -1205,8 +1303,8 @@ def main() -> None:
     st.title("ff-edge")
     p = _sidebar()
 
-    landscape, players, strategy, board = st.tabs(
-        ["Landscape", "Players", "Strategy", "Board"]
+    landscape, players, strategy, board, reference = st.tabs(
+        ["Landscape", "Players", "Strategy", "Board", "Glossary"]
     )
     with landscape:
         _tab_landscape(p)
@@ -1216,6 +1314,8 @@ def main() -> None:
         _tab_strategy(p)
     with board:
         _tab_board(p)
+    with reference:
+        _glossary_section()
 
 
 if __name__ == "__main__":

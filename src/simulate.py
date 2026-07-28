@@ -84,6 +84,11 @@ OPPONENT_CAPS: dict[str, int] = {"QB": 2, "RB": 6, "WR": 7, "TE": 2}
 # without a quarterback.
 MIN_ROSTER: dict[str, int] = {"QB": 1, "RB": 2, "WR": 2, "TE": 1}
 
+# Smallest edge over the control worth calling nonzero. Guards against reporting
+# floating-point residue as a win. A tenth of a percentage point on title rate
+# is far below what four seasons could resolve anyway.
+_EDGE_TOL = 1e-6
+
 
 def score_matrix(
     season: int,
@@ -598,7 +603,11 @@ def compare_to_control(
                 "edge_hi": round(hi, 4),
                 "bonferroni_lo": round(b_lo, 4),
                 "bonferroni_hi": round(b_hi, 4),
-                "beats_control": bool(b_lo > 0),
+                # Tolerance, not a bare sign test. A strategy identical to the
+                # control produces paired differences that are zero up to
+                # floating point, and `b_lo > 0` on a quantile of values like
+                # 1e-18 would report it as a winner.
+                "beats_control": bool(b_lo > _EDGE_TOL),
             }
         )
 

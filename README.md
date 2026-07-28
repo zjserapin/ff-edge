@@ -14,11 +14,11 @@ data onto your disk so you can ask your own questions.
 uv sync
 uv run python -m src.bootstrap --light   # ~2 min cold, hydrates everything but pbp
 uv run python -m src.simulate --sims 4000  # ~3s, writes the strategy artifact
-uv run streamlit run app.py              # the app: Landscape / Players / Strategy / Board
+uv run streamlit run app.py              # the app: Landscape / Players / Strategy / Board / Glossary
 ```
 
 `uv run python -m src.bootstrap --light --analysis` does the cache and the
-derived artifacts in one command. `uv run pytest` runs the suite (82 tests,
+derived artifacts in one command. `uv run pytest` runs the suite (95 tests,
 ~6s); it reads the local cache and skips cleanly when cold.
 
 To pull your own league data, export your Sleeper **display name** (not your
@@ -64,7 +64,8 @@ directly.
 | `src/rookies.py` | Separate rookie model — draft capital, combine, vacated opportunity. |
 | `src/simulate.py` | Monte Carlo draft + season sim comparing draft strategies. |
 | `src/uncertainty.py` | Wilson, bootstrap, and season-clustered intervals. |
-| `app.py` | Streamlit app: Landscape / Players / Strategy / Board. |
+| `src/glossary.py` | What every metric means. Feeds column tooltips and the Glossary tab. |
+| `app.py` | Streamlit app: Landscape / Players / Strategy / Board / Glossary. |
 
 ## MCP
 
@@ -96,17 +97,34 @@ Run bootstrap once before first use so the tools answer from cache.
 Four findings, two of them negative. The negative ones are the point — a
 research tool that only ever confirms things isn't measuring anything.
 
-**Prior-season usage does not predict beating ADP.** Out-of-sample AUC 0.401
-against 0.472 for draft price alone, difference interval [-0.173, +0.028]. A
-sub-0.5 AUC is usually a sign error, so: shuffling labels gives 0.497 across
-twelve seeds (pipeline is correct), in-sample AUC is 0.630 (the fit finds
-structure), and *tightening* regularization makes out-of-sample worse, which
-overfitting noise does not do. The relationship reverses between training and
-test seasons. Nothing inverts the model and calls it a signal.
+**Prior-season usage does not predict beating ADP — but pooling positions was
+making it worse than useless.** Fitting one model across all four positions gave
+an out-of-sample AUC of 0.401, *below* a coin flip, with inverted calibration.
+Separate models per position move it to 0.514. The attribution is clean:
 
-**The rookie model works.** Out-of-sample correlation 0.568, 22% less error than
-predicting the mean, consistent across all four positions. Draft capital does
-nearly all of it; combine numbers are close to noise.
+| configuration | AUC |
+|---|---:|
+| pooled, 10 features | 0.401 |
+| pooled, stronger shrinkage | 0.398 |
+| pooled, 4 features | 0.447 |
+| **stratified, 4 per position** | **0.514** |
+
+Pooling was averaging four different relationships and fitting none of them. It
+still does not beat draft price (gap interval [-0.036, +0.094] covers zero), but
+"no signal" is a different and more defensible result than "reliably wrong". A
+sub-0.5 AUC is usually a sign error, so: shuffled labels give 0.497 across twelve
+seeds, in-sample AUC is 0.630, and tightening regularization made the pooled
+model worse rather than better — which overfitting noise does not do.
+
+No position clears the conventional ten-events-per-variable floor (WR 5.5, RB
+4.3, QB 2.5, TE 1.5), and the app reports that table above the results.
+
+**The rookie model works, and stratifying helps it too.** Out-of-sample
+correlation 0.592 and 24% less error than predicting the mean. The per-position
+coefficients are the clearest evidence stratification was worth doing: the RB
+model keys on vacated *carries*, the WR model on vacated *targets* — signals a
+pooled fit had to average together. Draft capital dominates everywhere; combine
+numbers are close to noise.
 
 **Two quarterback-timing strategies beat drafting by ADP** — late-QB +3.6pp and
 elite-QB +2.8pp on title rate, with Bonferroni-corrected intervals excluding

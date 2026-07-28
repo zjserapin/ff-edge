@@ -27,39 +27,51 @@ design choice below follows from that: a linear model rather than a boosted one,
 four calibration bins rather than ten, and an ADP-only baseline reported beside
 every score.
 
-**What it found: nothing usable, and that is the result.**
+**Stratified by position**, because positions are not interchangeable: rushing
+share means something at quarterback and nothing at receiver, and a pooled fit
+must either drop such columns or feed every position a mostly-irrelevant vector.
+That choice is not free — it splits 629 labeled player-seasons into QB 77, RB
+184, TE 67, WR 212 — so `sample_adequacy` reports events per variable per
+position and should be read before any number below.
 
-    pooled out-of-sample AUC   0.401   95% CI [0.327, 0.476]
-    ADP-only baseline AUC      0.472
-    difference                -0.071   95% CI [-0.173, 0.028]
-    base rate                  0.224   (629 labeled player-seasons)
+**What it found: no usable edge, but stratifying removed a real pathology.**
 
-The model does not beat price alone — the difference interval covers zero — and
-its own AUC lands below 0.5. Calibration is inverted: the lowest-probability
-quartile hit 28% and the highest hit 14%.
+    configuration                          out-of-sample AUC
+    pooled, 10 features, C=1.0                    0.401
+    pooled, 10 features, C=0.25                   0.398
+    pooled,  4 features, C=0.25                   0.447
+    stratified, 4 per position                    0.514
 
-Three things were checked before accepting that, because a sub-0.5 AUC usually
-means a sign error:
+    stratified vs ADP-only            +0.027   95% CI [-0.035, +0.094]
+    base rate                          0.224   (629 labeled player-seasons)
 
-  Shuffling the labels within season gives AUC 0.497 across twelve seeds
-  (range 0.412-0.582), so the pipeline is wired correctly.
+The pooled model was *anti*-predictive — below 0.5, with inverted calibration
+(lowest-probability quartile hit 28%, highest hit 14%). Stratifying moves it to
+roughly chance. The attribution above isolates why: shrinkage alone changed
+nothing (0.401 -> 0.398), cutting to four features recovered part of it
+(0.447), and fitting separately per position recovered the rest (0.514).
+Pooling was mixing four different relationships and learning their average,
+which fit none of them.
 
-  In-sample AUC is 0.630 against 0.438 out of sample, so the fit is finding
-  structure in the training seasons.
+It still does not beat price. The difference interval covers zero at every
+position. But "no signal" is a different and more honest result than "reliably
+wrong", and it is the one supported here.
 
-  Sweeping regularization from C=1.0 down to C=0.001 makes out-of-sample AUC
-  *worse* (0.438 -> 0.395), not better. Overfitting noise would improve under
-  shrinkage. This does not, which means the relationship genuinely reverses
-  between the training seasons and the test seasons.
+Three checks before trusting any of that, since a sub-0.5 AUC usually means a
+sign error: shuffled labels give 0.497 across twelve seeds, so the pipeline is
+correct; in-sample AUC is 0.630, so the fit does find structure; and sweeping
+regularization from C=1.0 to C=0.001 on the pooled model made out-of-sample
+*worse*, which overfitting noise does not do.
 
-The plausible reading is mean reversion against an efficient market: ADP already
-prices last season's usage, so the players whose usage most impressed the market
-are priced past what they repeat. That is a coherent story and it is *not*
-established here — two test folds cannot separate it from regime noise.
+Per position, with the caveat that only WR has even a marginal sample:
 
-Which is why nothing in this module inverts the model and calls it a signal. An
-anti-predictive model on 284 out-of-sample rows is a reason to distrust the
-features, not a reason to bet the other way.
+    WR   AUC 0.556   delta +0.059   5.5 events per variable   thin
+    RB   AUC 0.536   delta +0.026   4.3                       very thin
+    QB   AUC 0.504   delta +0.025   2.5                       very thin
+    TE   AUC 0.465   delta -0.076   1.5                       insufficient
+
+Nothing here inverts a model and calls it a signal, and nothing reports a
+position's result without its denominator.
 """
 
 from __future__ import annotations
@@ -303,29 +315,156 @@ def _design(
     return (filled.select(keep).to_numpy() if keep else np.empty((df.height, 0))), keep
 
 
-def model_features() -> list[str]:
-    """Features the backtest is allowed to see, price included.
+# Four features per position, fixed in advance. See `model_features`.
+POSITION_FEATURES: dict[str, list[str]] = {
+    # Rushing is what separates a fantasy quarterback from a good one.
+    "QB": ["adp_pos_rank", "age", "rush_share", "exp_pts_share"],
+    # Snap share is the job; target share is whether he catches passes, which is
+    # the difference between a two-down back and a every-down one.
+    "RB": ["adp_pos_rank", "age", "snap_pct", "target_share"],
+    # WOPR blends target share and air-yards share, which keeps two correlated
+    # columns from splitting into a large +/- pair on a small sample.
+    "WR": ["adp_pos_rank", "age", "wopr", "snap_pct"],
+    "TE": ["adp_pos_rank", "age", "target_share", "snap_pct"],
+}
 
-    Kept small on purpose. With ~400 training rows, every additional column buys
-    variance more readily than signal.
+# The pooled set, retained so stratified and pooled fits can be compared.
+POOLED_FEATURES: list[str] = [
+    "adp_pos_rank",
+    "snap_pct",
+    "target_share",
+    "rush_share",
+    "exp_pts_share",
+    "tgt_per_game",
+    "carry_per_game",
+    "pts_over_exp_per_game",
+    "age",
+    "draft_round",
+]
 
-    `seasons_exp` is excluded despite being available: it correlates 0.964 with
-    `age`, and with both in the fit the model split them into a large positive
-    and a large negative coefficient (+0.55 / -0.64) and keyed on the noisy
-    difference between two measurements of the same thing.
+
+def model_features(position: str | None = None) -> list[str]:
+    """Features the backtest may see, price included. Position-specific by default.
+
+    Four per position, not ten, and the arithmetic forces it. Stratifying splits
+    629 labeled player-seasons into QB 77, RB 184, TE 67, WR 212 — and
+    season-forward folds cut that again, so the first QB fold trains on 36 rows
+    with 8 positives. The usual floor is ten events per variable; ten features
+    there would be under one. Four is still thin (two events per variable) and
+    is the most this sample can carry without the coefficients being noise.
+
+    The columns are chosen in advance from what is known to separate players at
+    each position, never by searching for what scores well — with samples this
+    small, searching *will* find something.
+
+    `seasons_exp` is excluded everywhere despite being available: it correlates
+    0.964 with `age`, and with both in the fit the pooled model split them into
+    a large positive and a large negative coefficient (+0.55 / -0.64) and keyed
+    on the noisy difference between two measurements of the same thing.
     """
-    return [
-        "adp_pos_rank",
-        "snap_pct",
-        "target_share",
-        "rush_share",
-        "exp_pts_share",
-        "tgt_per_game",
-        "carry_per_game",
-        "pts_over_exp_per_game",
-        "age",
-        "draft_round",
-    ]
+    if position is None:
+        return list(POOLED_FEATURES)
+    return list(POSITION_FEATURES.get(position, POOLED_FEATURES))
+
+
+def sample_adequacy(
+    df: pl.DataFrame, min_train_seasons: int = 2
+) -> pl.DataFrame:
+    """Whether each position has enough data to support a model at all.
+
+    Events per variable — positives in the smallest training fold divided by
+    feature count — is the standard diagnostic for a logistic fit, and the
+    conventional floor is ten. Nothing here reaches it. Reporting it beside every
+    result is the difference between a model that is honestly thin and one that
+    looks authoritative because nobody printed the denominator.
+
+    Returns: position, n_total, positives, n_train_min, positives_train_min,
+    n_test_min, n_features, events_per_variable, verdict.
+    """
+    if not df.height:
+        return pl.DataFrame()
+
+    splits = season_forward_splits(df, min_train_seasons)
+    rows = []
+    for position in sorted(df.get_column("position").unique().to_list()):
+        sub = df.filter(pl.col("position") == position)
+        cols = model_features(position)
+
+        train_sizes, train_pos, test_sizes = [], [], []
+        for train_seasons, test_season in splits:
+            tr = sub.filter(pl.col("label_season").is_in(train_seasons))
+            te = sub.filter(pl.col("label_season") == test_season)
+            train_sizes.append(tr.height)
+            train_pos.append(int(tr.get_column("beat_adp").sum()))
+            test_sizes.append(te.height)
+
+        min_pos = min(train_pos) if train_pos else 0
+        epv = round(min_pos / len(cols), 2) if cols else 0.0
+        rows.append(
+            {
+                "position": position,
+                "n_total": sub.height,
+                "positives": int(sub.get_column("beat_adp").sum()),
+                "n_train_min": min(train_sizes) if train_sizes else 0,
+                "positives_train_min": min_pos,
+                "n_test_min": min(test_sizes) if test_sizes else 0,
+                "n_features": len(cols),
+                "events_per_variable": epv,
+                "verdict": (
+                    "adequate" if epv >= 10
+                    else "thin" if epv >= 5
+                    else "very thin" if epv >= 2
+                    else "insufficient"
+                ),
+            }
+        )
+
+    return pl.DataFrame(rows).sort("events_per_variable", descending=True)
+
+
+def _fit_fold(
+    train: pl.DataFrame,
+    test: pl.DataFrame,
+    cols: list[str],
+    seed: int,
+    C: float,
+) -> pl.DataFrame | None:
+    """One train/test fold: the model, plus the price-only null fit the same way."""
+    if not test.height or train.get_column("beat_adp").n_unique() < 2:
+        return None
+
+    x_tr, used = _design(train, cols)
+    if not used:
+        return None
+    x_te, _ = _design(test.select(used), used)
+    if x_te.shape[1] != len(used):
+        return None
+
+    y_tr = train.get_column("beat_adp").to_numpy().astype(int)
+    scaler = StandardScaler().fit(x_tr)
+    model = LogisticRegression(max_iter=5000, C=C, random_state=seed)
+    model.fit(scaler.transform(x_tr), y_tr)
+    p_full = model.predict_proba(scaler.transform(x_te))[:, 1]
+
+    # The null: price alone, same family, same fold, same regularization.
+    j = used.index("adp_pos_rank") if "adp_pos_rank" in used else None
+    if j is None:
+        p_adp = np.full(test.height, float(y_tr.mean()))
+    else:
+        s2 = StandardScaler().fit(x_tr[:, [j]])
+        m2 = LogisticRegression(max_iter=5000, C=C, random_state=seed).fit(
+            s2.transform(x_tr[:, [j]]), y_tr
+        )
+        p_adp = m2.predict_proba(s2.transform(x_te[:, [j]]))[:, 1]
+
+    return test.select(
+        "label_season", "gsis_id", "name", "position", "adp", "adp_pos_rank", "beat_adp"
+    ).with_columns(
+        pl.Series("p_breakout", p_full).round(4),
+        pl.Series("p_adp_only", p_adp).round(4),
+        pl.lit(train.height, dtype=pl.Int32).alias("n_train"),
+        pl.lit(len(used), dtype=pl.Int32).alias("n_features"),
+    )
 
 
 def fit_predict(
@@ -333,61 +472,65 @@ def fit_predict(
     feature_cols: list[str] | None = None,
     seed: int = 0,
     min_train_seasons: int = 2,
+    by_position: bool = True,
+    C: float | None = None,
+    min_train_rows: int = 25,
 ) -> pl.DataFrame:
     """Out-of-sample predictions from season-forward folds.
 
-    Every row returned was predicted by a model that never saw its season. The
-    `p_adp_only` column is the null hypothesis fit the same way on price alone —
-    without it, an AUC of 0.62 is uninterpretable, because ADP by itself is
-    already a decent predictor of beating ADP.
+    Every row returned was predicted by a model that never saw its season.
+
+    `by_position` fits a separate model per position, which is the default
+    because positions are not interchangeable: rushing share means something at
+    quarterback and nothing at receiver, and a pooled fit has to either drop such
+    columns or feed every position a mostly-irrelevant vector. The cost is
+    sample size — see `sample_adequacy`, which reports events per variable for
+    each position and is worth reading before any of these numbers.
+
+    `C` defaults to 0.25 when stratified and 1.0 when pooled. Stronger shrinkage
+    on the smaller samples is not tuning: it is the standard response to fitting
+    four parameters on thirty-odd rows, and it was set from the sample size
+    rather than by checking which value scored best on the test seasons.
 
     Returns: label_season, gsis_id, name, position, adp, adp_pos_rank,
-    p_breakout, p_adp_only, beat_adp.
+    p_breakout, p_adp_only, beat_adp, n_train, n_features, model.
     """
     if not df.height:
         return pl.DataFrame()
 
-    cols = feature_cols or model_features()
+    if C is None:
+        C = 0.25 if by_position else 1.0
+
+    splits = season_forward_splits(df, min_train_seasons)
     out: list[pl.DataFrame] = []
 
-    for train_seasons, test_season in season_forward_splits(df, min_train_seasons):
-        train = df.filter(pl.col("label_season").is_in(train_seasons))
-        test = df.filter(pl.col("label_season") == test_season)
-        if train.height < 50 or not test.height:
-            continue
-        if train.get_column("beat_adp").n_unique() < 2:
-            continue
+    for train_seasons, test_season in splits:
+        train_all = df.filter(pl.col("label_season").is_in(train_seasons))
+        test_all = df.filter(pl.col("label_season") == test_season)
 
-        x_tr, used = _design(train, cols)
-        if not used:
-            continue
-        x_te, _ = _design(test.select(used), used)
-        y_tr = train.get_column("beat_adp").to_numpy().astype(int)
-
-        scaler = StandardScaler().fit(x_tr)
-        model = LogisticRegression(max_iter=2000, C=1.0, random_state=seed)
-        model.fit(scaler.transform(x_tr), y_tr)
-        p_full = model.predict_proba(scaler.transform(x_te))[:, 1]
-
-        # The baseline: price alone, same family, same fold.
-        j = used.index("adp_pos_rank") if "adp_pos_rank" in used else None
-        if j is None:
-            p_adp = np.full(test.height, float(y_tr.mean()))
-        else:
-            s2 = StandardScaler().fit(x_tr[:, [j]])
-            m2 = LogisticRegression(max_iter=2000, random_state=seed).fit(
-                s2.transform(x_tr[:, [j]]), y_tr
-            )
-            p_adp = m2.predict_proba(s2.transform(x_te[:, [j]]))[:, 1]
-
-        out.append(
-            test.select(
-                "label_season", "gsis_id", "name", "position", "adp", "adp_pos_rank", "beat_adp"
-            ).with_columns(
-                pl.Series("p_breakout", p_full).round(4),
-                pl.Series("p_adp_only", p_adp).round(4),
-            )
+        groups = (
+            sorted(df.get_column("position").unique().to_list())
+            if by_position
+            else [None]
         )
+        for position in groups:
+            if position is None:
+                train, test, cols, tag = train_all, test_all, (feature_cols or model_features()), "pooled"
+            else:
+                train = train_all.filter(pl.col("position") == position)
+                test = test_all.filter(pl.col("position") == position)
+                cols = feature_cols or model_features(position)
+                tag = position
+
+            # Too few rows to fit anything meaningful. Skipped rather than
+            # fitted-and-reported, so a position that cannot support a model
+            # produces no predictions instead of confident nonsense.
+            if train.height < min_train_rows:
+                continue
+
+            fold = _fit_fold(train, test, cols, seed, C)
+            if fold is not None:
+                out.append(fold.with_columns(pl.lit(tag).alias("model")))
 
     return pl.concat(out, how="diagonal_relaxed") if out else pl.DataFrame()
 
@@ -441,11 +584,38 @@ def discrimination(
             }
         )
 
-    add("pooled", preds)
+    add("all", preds)
+    for position in preds.get_column("position").unique().sort().to_list():
+        add(position, preds.filter(pl.col("position") == position))
     for season in preds.get_column("label_season").unique().sort().to_list():
         add(f"test {season}", preds.filter(pl.col("label_season") == season))
 
     return pl.DataFrame(rows) if rows else pl.DataFrame()
+
+
+def calibration_by_position(preds: pl.DataFrame, bins: int = 2) -> pl.DataFrame:
+    """Calibration within each position, at whatever bin count the sample allows.
+
+    Two bins, not four, and even that is generous: a position contributes 20-60
+    out-of-sample rows, so four bins would be cells of a dozen players where the
+    interval spans most of the unit interval. The `n` column is the one to read
+    first.
+
+    Returns the same columns as `calibration`, plus `position`.
+    """
+    if not preds.height:
+        return pl.DataFrame()
+
+    parts = []
+    for position in preds.get_column("position").unique().sort().to_list():
+        sub = preds.filter(pl.col("position") == position)
+        if sub.height < bins * 8:
+            continue
+        cal = calibration(sub, bins=bins)
+        if cal.height:
+            parts.append(cal.with_columns(pl.lit(position).alias("position")))
+
+    return pl.concat(parts, how="diagonal_relaxed") if parts else pl.DataFrame()
 
 
 def calibration(preds: pl.DataFrame, bins: int = 4) -> pl.DataFrame:
@@ -501,8 +671,14 @@ def score_current(
     beat_ratio: float = 0.6,
     seed: int = 0,
     features: pl.DataFrame | None = None,
+    by_position: bool = True,
 ) -> pl.DataFrame:
     """Refit on every label season, then score the upcoming draft.
+
+    Stratified by default, so a quarterback is scored by a quarterback model.
+    That also means `p_breakout` is only comparable *within* a position — four
+    separate models produce four separate probability scales, and `quartile` is
+    therefore computed within position rather than across the board.
 
     The output is a probability with a known and modest discrimination — read it
     next to the calibration table, not on its own.
@@ -529,56 +705,110 @@ def score_current(
     if not current.height:
         return pl.DataFrame()
 
-    cols = model_features()
-    x_tr, used = _design(train, cols)
-    if not used:
-        return pl.DataFrame()
-    x_cu, _ = _design(current.select([c for c in used if c in current.columns]), used)
-    if x_cu.shape[1] != len(used):
-        return pl.DataFrame()
+    parts: list[pl.DataFrame] = []
+    groups = (
+        sorted(current.get_column("position").unique().to_list()) if by_position else [None]
+    )
 
-    y = train.get_column("beat_adp").to_numpy().astype(int)
-    scaler = StandardScaler().fit(x_tr)
-    model = LogisticRegression(max_iter=2000, random_state=seed).fit(scaler.transform(x_tr), y)
-    p = model.predict_proba(scaler.transform(x_cu))[:, 1]
+    for position in groups:
+        if position is None:
+            tr, cu, cols = train, current, model_features()
+        else:
+            tr = train.filter(pl.col("position") == position)
+            cu = current.filter(pl.col("position") == position)
+            cols = model_features(position)
+        if tr.height < 25 or not cu.height or tr.get_column("beat_adp").n_unique() < 2:
+            continue
+
+        x_tr, used = _design(tr, cols)
+        if not used:
+            continue
+        x_cu, _ = _design(cu.select([c for c in used if c in cu.columns]), used)
+        if x_cu.shape[1] != len(used):
+            continue
+
+        y = tr.get_column("beat_adp").to_numpy().astype(int)
+        scaler = StandardScaler().fit(x_tr)
+        model = LogisticRegression(
+            max_iter=5000, C=0.25 if by_position else 1.0, random_state=seed
+        ).fit(scaler.transform(x_tr), y)
+
+        parts.append(
+            cu.select("gsis_id", "name", "position", "team", "adp", "adp_pos_rank").with_columns(
+                pl.Series("p_breakout", model.predict_proba(scaler.transform(x_cu))[:, 1]).round(4)
+            )
+        )
+
+    if not parts:
+        return pl.DataFrame()
 
     return (
-        current.select("gsis_id", "name", "position", "team", "adp", "adp_pos_rank")
-        .with_columns(pl.Series("p_breakout", p).round(4))
+        pl.concat(parts, how="diagonal_relaxed")
+        # Ranked within position: a stratified model's probabilities are only
+        # comparable inside the position they were fit on. A cross-position
+        # ranking of them would compare four different models' outputs.
         .with_columns(
-            (pl.col("p_breakout").rank("ordinal") * 4 // (pl.len() + 1) + 1)
+            (
+                pl.col("p_breakout").rank("ordinal").over("position") * 4
+                // (pl.len().over("position") + 1)
+                + 1
+            )
             .cast(pl.Int32)
             .alias("quartile")
         )
-        .sort("p_breakout", descending=True)
+        .sort(["position", "p_breakout"], descending=[False, True])
     )
 
 
 def coefficients(
-    df: pl.DataFrame | None = None, seed: int = 0
+    df: pl.DataFrame | None = None, seed: int = 0, by_position: bool = True
 ) -> pl.DataFrame:
     """Standardized coefficients from a fit on all label seasons.
 
-    Shown so the app can say what the model is actually keying on rather than
-    implying that ten features are each doing work.
+    Shown so the app can say what each model is actually keying on rather than
+    implying that every feature is doing work. On samples this small the
+    coefficients are themselves unstable — read them as a description of this
+    fit, not as estimates of an effect.
 
-    Returns: feature, coef, odds_ratio.
+    Returns: model, feature, coef, odds_ratio, n_train.
     """
     train = df if df is not None else training_frame()
     if not train.height:
         return pl.DataFrame()
 
-    x, used = _design(train, model_features())
-    if not used:
-        return pl.DataFrame()
-    y = train.get_column("beat_adp").to_numpy().astype(int)
-    scaler = StandardScaler().fit(x)
-    model = LogisticRegression(max_iter=2000, random_state=seed).fit(scaler.transform(x), y)
+    groups = (
+        sorted(train.get_column("position").unique().to_list()) if by_position else [None]
+    )
+    parts = []
+    for position in groups:
+        sub = train if position is None else train.filter(pl.col("position") == position)
+        cols = model_features(position)
+        if sub.height < 25 or sub.get_column("beat_adp").n_unique() < 2:
+            continue
 
-    return pl.DataFrame(
-        {
-            "feature": used,
-            "coef": [round(float(c), 4) for c in model.coef_[0]],
-            "odds_ratio": [round(float(np.exp(c)), 4) for c in model.coef_[0]],
-        }
-    ).sort(pl.col("coef").abs(), descending=True)
+        x, used = _design(sub, cols)
+        if not used:
+            continue
+        y = sub.get_column("beat_adp").to_numpy().astype(int)
+        scaler = StandardScaler().fit(x)
+        model = LogisticRegression(
+            max_iter=5000, C=0.25 if by_position else 1.0, random_state=seed
+        ).fit(scaler.transform(x), y)
+
+        parts.append(
+            pl.DataFrame(
+                {
+                    "model": [position or "pooled"] * len(used),
+                    "feature": used,
+                    "coef": [round(float(c), 4) for c in model.coef_[0]],
+                    "odds_ratio": [round(float(np.exp(c)), 4) for c in model.coef_[0]],
+                    "n_train": [sub.height] * len(used),
+                }
+            )
+        )
+
+    if not parts:
+        return pl.DataFrame()
+    return pl.concat(parts, how="diagonal_relaxed").sort(
+        ["model", pl.col("coef").abs()], descending=[False, True]
+    )
