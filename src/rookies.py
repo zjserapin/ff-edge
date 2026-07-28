@@ -63,6 +63,11 @@ from src.config import (
     SEASON,
 )
 
+# Positions the draft board covers. Quarterbacks are excluded: one starts, the
+# position is shallow enough that the waiver wire covers it, and a rookie QB is
+# a different kind of bet from a rookie skill player.
+BOARD_POSITIONS: tuple[str, ...] = ("RB", "WR", "TE")
+
 ROOKIE_FEATURES = [
     "draft_ovr",
     "draft_round",
@@ -498,6 +503,7 @@ def board(
     seed: int = 0,
     by_position: bool = True,
     min_train_rows: int = 30,
+    positions: tuple[str, ...] = BOARD_POSITIONS,
 ) -> pl.DataFrame:
     """This year's rookie class, scored by a model fit on prior classes.
 
@@ -515,6 +521,11 @@ def board(
     incoming = rookie_features([season], scoring)
     if not history.height or not incoming.height:
         return pl.DataFrame()
+
+    if positions:
+        incoming = incoming.filter(pl.col("position").is_in(list(positions)))
+        if not incoming.height:
+            return pl.DataFrame()
 
     if not by_position:
         scored = _score_class(

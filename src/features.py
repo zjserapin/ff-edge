@@ -102,6 +102,8 @@ def _opportunity(
         # volume
         pl.col("rec_attempt").sum().alias("targets"),
         pl.col("rush_attempt").sum().alias("carries"),
+        pl.col("pass_attempt").sum().alias("pass_attempts"),
+        pl.col("pass_yards_gained").sum().alias("pass_yards"),
         pl.col("receptions").sum().alias("receptions"),
         pl.col("rec_air_yards").sum().alias("air_yards"),
         pl.col("rec_yards_gained").sum().alias("rec_yards"),
@@ -175,6 +177,213 @@ def _snaps(seasons: list[int], force: bool = False) -> pl.DataFrame:
         )
         .rename({"gsis_id": "player_id"})
     )
+
+
+def _routes(seasons: list[int], force: bool = False) -> pl.DataFrame:
+    """Routes run per player-season, from play participation.
+
+    A route is counted when the player was on the field for a *dropback*. That
+    denominator matters more than any single metric added here: snap share tells
+    you a player was on the field, but a tight end who blocks on half his snaps
+    and a receiver split wide have very different route counts from identical
+    snap shares.
+
+    Dropbacks are identified by `number_of_pass_rushers > 0`, which correctly
+    includes sacks and scrambles — routes are still run on those. It yields
+    22,002 plays in 2025 against a true league dropback count of roughly 21,000
+    (19k attempts + 1.2k sacks + 0.8k scrambles). The obvious alternatives are
+    wrong: `was_pressure` is populated on every row from 2023 on and gives
+    45,175, roughly double.
+
+    Yards per route run is the metric this exists to enable. It is the cleanest
+    public separator of "good but blocked by a teammate" from "not good", which
+    is precisely the distinction a target-share-based view cannot make.
+
+    Returns: season, player_id, routes, team_dropbacks, route_share.
+    """
+    part = nv.participation(seasons, force=force)
+    if not part.height:
+        return pl.DataFrame()
+
+    dropbacks = part.with_columns(
+        pl.col("nflverse_game_id").str.slice(0, 4).cast(pl.Int32).alias("season")
+    ).filter(
+        pl.col("season").is_in(seasons)
+        & (pl.col("number_of_pass_rushers") > 0)
+        & (pl.col("offense_players").str.len_chars() > 0)
+    )
+    if not dropbacks.height:
+        return pl.DataFrame()
+
+    per_player = (
+        dropbacks.select(
+            "season",
+            "possession_team",
+            pl.col("offense_players").str.split(";").alias("player_id"),
+        )
+        .explode("player_id")
+        .filter(pl.col("player_id").is_not_null() & (pl.col("player_id") != ""))
+        .group_by(["season", "player_id"])
+        .agg(
+            pl.len().alias("routes"),
+            pl.col("possession_team").mode().first().alias("_team"),
+        )
+    )
+
+    team_totals = (
+        dropbacks.group_by(["season", "possession_team"])
+        .agg(pl.len().alias("team_dropbacks"))
+        .rename({"possession_team": "_team"})
+    )
+
+    return (
+        per_player.join(team_totals, on=["season", "_team"], how="left")
+        .with_columns(
+            _safe_div(pl.col("routes"), pl.col("team_dropbacks")).alias("route_share")
+        )
+        .drop("_team")
+    )
+
+
+def _pfr_quality(seasons: list[int], force: bool = False) -> pl.DataFrame:
+    """Charted per-touch quality from Pro Football Reference.
+
+    These are the columns that describe a player independent of how much work he
+    gets: does he drop passes, does he break tackles, does he gain yards after
+    contact. A back on a bad offensive line has poor yards per carry and can
+    still be excellent after contact — that gap is the whole point.
+
+    Bridged from `pfr_player_id` through the crosswalk, since this feed carries
+    no nflverse id.
+
+    Returns: season, player_id, drop_rate, rec_broken_tackles, receiving_rat,
+    rush_broken_tackles, yards_after_contact_per_att.
+    """
+    bridge = ids.crosswalk().select("pfr_id", "gsis_id").drop_nulls()
+
+    rec = nv.pfr_advstats("rec", seasons, force=force)
+    rush = nv.pfr_advstats("rush", seasons, force=force)
+    if not rec.height and not rush.height:
+        return pl.DataFrame()
+
+    parts = []
+    if rec.height:
+        parts.append(
+            rec.filter(pl.col("game_type") == "REG")
+            .group_by(["season", "pfr_player_id"])
+            .agg(
+                pl.col("receiving_drop").sum().alias("_drops"),
+                pl.col("receiving_drop_pct").mean().alias("drop_rate"),
+                pl.col("receiving_broken_tackles").sum().alias("rec_broken_tackles"),
+                pl.col("receiving_rat").mean().alias("receiving_rat"),
+            )
+        )
+    if rush.height:
+        parts.append(
+            rush.filter(pl.col("game_type") == "REG")
+            .group_by(["season", "pfr_player_id"])
+            .agg(
+                pl.col("rushing_broken_tackles").sum().alias("rush_broken_tackles"),
+                pl.col("rushing_yards_after_contact_avg")
+                .mean()
+                .alias("yards_after_contact_per_att"),
+            )
+        )
+
+    merged = parts[0]
+    for extra in parts[1:]:
+        merged = merged.join(extra, on=["season", "pfr_player_id"], how="full", coalesce=True)
+
+    return (
+        merged.with_columns(pl.col("season").cast(pl.Int32))
+        .join(bridge, left_on="pfr_player_id", right_on="pfr_id", how="inner")
+        .drop("pfr_player_id")
+        .rename({"gsis_id": "player_id"})
+    )
+
+
+def _competition(seasons: list[int], base: pl.DataFrame) -> pl.DataFrame:
+    """How much of his own offense is spoken for by teammates.
+
+    This is what makes a good player cheap, and what makes him a buy when the
+    teammate leaves. A receiver with a 15% target share behind a 30% alpha is a
+    different proposition from one with 15% on a team where nobody clears 18% —
+    the first is capped by someone else, the second is simply not winning.
+
+    Returns: season, player_id, teammate_top_share, teammate_share,
+    team_target_hhi.
+    """
+    if not base.height:
+        return pl.DataFrame()
+
+    receivers = base.filter(pl.col("position").is_in(["WR", "TE", "RB"])).select(
+        "season", "team", "player_id", "target_share"
+    )
+
+    team = receivers.group_by(["season", "team"]).agg(
+        pl.col("target_share").sum().alias("_team_share"),
+        (pl.col("target_share") ** 2).sum().alias("team_target_hhi"),
+        pl.col("target_share").top_k(2).alias("_top2"),
+    ).with_columns(
+        pl.col("_top2").list.get(0, null_on_oob=True).alias("_max_share"),
+        pl.col("_top2").list.get(1, null_on_oob=True).alias("_second_share"),
+    )
+
+    joined = receivers.join(team, on=["season", "team"], how="left")
+
+    return joined.with_columns(
+        # The biggest target share on the roster *other than his own*. For a
+        # team's alpha that is the second-largest share, not null — leaving it
+        # null would mean every alpha gets median-imputed into looking like he
+        # is competing with an average teammate, when the real answer is that he
+        # is the one being competed with. This is the column that separates
+        # "good but capped by someone better" from "the best option here".
+        pl.when(pl.col("target_share") >= pl.col("_max_share"))
+        .then(pl.col("_second_share"))
+        .otherwise(pl.col("_max_share"))
+        .alias("teammate_top_share"),
+        (pl.col("_team_share") - pl.col("target_share")).alias("teammate_share"),
+        (pl.col("target_share") >= pl.col("_max_share")).alias("is_team_alpha"),
+    ).select(
+        "season", "player_id", "teammate_top_share", "teammate_share",
+        "team_target_hhi", "is_team_alpha",
+    )
+
+
+def _vacated(seasons: list[int], base: pl.DataFrame, force: bool = False) -> pl.DataFrame:
+    """Opportunity leaving a player's team, per season.
+
+    The situation half of the question. A player whose team just lost 25% of its
+    targets is in a materially different spot from an identical player whose
+    depth chart is unchanged, and neither his usage nor his efficiency says so.
+
+    Uses the roster of the *following* season to decide who is gone, so for the
+    current season this reflects the roster you are actually drafting into.
+
+    Returns: season, team, vacated_target_share_next, vacated_carry_share_next.
+    """
+    rows = []
+    for season in seasons:
+        roster = nv.rosters(season + 1, force=force)
+        if not roster.height:
+            continue
+        staying = set(roster.get_column("gsis_id").drop_nulls().to_list())
+
+        year = base.filter(pl.col("season") == season)
+        if not year.height:
+            continue
+        gone = year.with_columns(
+            (~pl.col("player_id").is_in(list(staying))).alias("gone")
+        )
+        rows.append(
+            gone.group_by(["season", "team"])
+            .agg(
+                pl.col("target_share").filter(pl.col("gone")).sum().alias("vacated_target_share_next"),
+                pl.col("rush_share").filter(pl.col("gone")).sum().alias("vacated_carry_share_next"),
+            )
+        )
+
+    return pl.concat(rows, how="diagonal_relaxed") if rows else pl.DataFrame()
 
 
 def _nextgen(seasons: list[int], force: bool = False) -> pl.DataFrame:
@@ -253,7 +462,28 @@ def player_seasons(
         opp.join(outcomes, on=["season", "player_id"], how="inner")
         .join(_snaps(seasons, force=force), on=["season", "player_id"], how="left")
         .join(_nextgen(seasons, force=force), on=["season", "player_id"], how="left")
+        .join(_routes(seasons, force=force), on=["season", "player_id"], how="left")
+        .join(_pfr_quality(seasons, force=force), on=["season", "player_id"], how="left")
         .join(_bio(force=force), on="player_id", how="left")
+    )
+
+    df = df.with_columns(
+        # The two metrics routes exist to enable. Yards per route run is the
+        # public standard for receiver efficiency; targets per route run is the
+        # purest measure of whether the offense looks for him when he is out
+        # there, stripped of how often he is out there.
+        _safe_div(pl.col("rec_yards"), pl.col("routes")).alias("yprr"),
+        _safe_div(pl.col("targets"), pl.col("routes")).alias("tprr"),
+        # Per-touch quality, so a back on a bad line is not punished for the
+        # line: yards after contact and broken tackles are his, the blocking
+        # in front of him is not.
+        _safe_div(pl.col("rush_broken_tackles"), pl.col("carries")).alias(
+            "rush_broken_tackles_per_att"
+        ),
+        _safe_div(pl.col("pass_yards"), pl.col("pass_attempts")).alias("ypa"),
+        _safe_div(
+            pl.col("opp_act_pts") - pl.col("exp_pts"), pl.col("pass_attempts")
+        ).alias("pts_over_exp_per_att"),
     )
 
     df = df.with_columns(
@@ -292,9 +522,81 @@ def player_seasons(
         .alias("draft_pick"),
     )
 
-    return df.filter(pl.col("games") >= min_games).sort(
-        ["season", "position", "pos_rank"]
+    df = df.filter(pl.col("games") >= min_games)
+
+    # Context that depends on the assembled frame rather than a raw source.
+    df = (
+        df.join(_competition(seasons, df), on=["season", "player_id"], how="left")
+        .join(_vacated(seasons, df, force=force), on=["season", "team"], how="left")
     )
+
+    return df.sort(["season", "position", "pos_rank"])
+
+
+# --- The three axes ---------------------------------------------------------
+#
+# The split that makes under/overvaluation detectable at all.
+#
+# QUALITY is per-opportunity: how good is he *when* he plays. Nothing here scales
+# with how much work he gets, which is the point — volume is what ADP already
+# knows, so clustering on it rediscovers the market instead of disagreeing with
+# it. (It also explains why the old clustering always chose two groups: volume
+# dominated the variance and k-means split on "featured vs not" every time.)
+#
+# OPPORTUNITY is volume: how much work he got. Read as a separate axis, not
+# mixed into the distance metric.
+#
+# SITUATION is what is about to change: who else is competing for his touches
+# and how much opportunity his team just lost.
+
+QUALITY_FEATURES: dict[str, list[str]] = {
+    "WR": ["yprr", "tprr", "ypt", "yac_per_rec", "catch_rate", "adot",
+           "avg_separation", "avg_yac_above_expectation", "drop_rate", "receiving_rat"],
+    "TE": ["yprr", "tprr", "ypt", "yac_per_rec", "catch_rate", "adot",
+           "avg_separation", "avg_yac_above_expectation", "drop_rate", "receiving_rat"],
+    "RB": ["ypc", "yards_after_contact_per_att", "rush_broken_tackles_per_att",
+           "yprr", "tprr", "ypt", "yac_per_rec", "catch_rate"],
+    # Thin by comparison, and deliberately so: the metrics that make this work
+    # for skill players (yards per route, separation, yards after contact) have
+    # no quarterback analogue in this data. Rushing efficiency is included
+    # because it is the axis that actually separates fantasy quarterbacks.
+    "QB": ["ypa", "pts_over_exp_per_att", "ypc"],
+}
+
+OPPORTUNITY_FEATURES: dict[str, list[str]] = {
+    "WR": ["route_share", "target_share", "air_yards_share", "snap_pct", "tgt_per_game"],
+    "TE": ["route_share", "target_share", "air_yards_share", "snap_pct", "tgt_per_game"],
+    "RB": ["snap_pct", "rush_share", "target_share", "carry_per_game", "route_share"],
+    "QB": ["snap_pct", "rush_share"],
+}
+
+SITUATION_FEATURES = [
+    "teammate_top_share",
+    "teammate_share",
+    "team_target_hhi",
+    "vacated_target_share_next",
+    "vacated_carry_share_next",
+]
+
+
+def quality_features(position: str | None = None) -> list[str]:
+    """Per-opportunity quality columns — the axis ADP is worst at pricing."""
+    if position is None:
+        seen: list[str] = []
+        for cols in QUALITY_FEATURES.values():
+            seen += [c for c in cols if c not in seen]
+        return seen
+    return list(QUALITY_FEATURES.get(position, QUALITY_FEATURES["WR"]))
+
+
+def opportunity_features(position: str | None = None) -> list[str]:
+    """Volume columns — how much work he gets, which the market prices well."""
+    if position is None:
+        seen: list[str] = []
+        for cols in OPPORTUNITY_FEATURES.values():
+            seen += [c for c in cols if c not in seen]
+        return seen
+    return list(OPPORTUNITY_FEATURES.get(position, OPPORTUNITY_FEATURES["WR"]))
 
 
 def cluster_feature_columns(position: str | None = None) -> list[str]:

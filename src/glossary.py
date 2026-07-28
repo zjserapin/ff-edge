@@ -34,6 +34,109 @@ def _t(label: str, short: str, long: str, group: str) -> Term:
 
 
 TERMS: dict[str, Term] = {
+    # --- Quality (per opportunity) -----------------------------------------
+    "routes": _t("Routes run", "Dropbacks he was on the field for.",
+                 """Counted from play participation on plays with pass rushers, which
+                 correctly includes sacks and scrambles — routes are run on those too.
+                 Yields ~21,000 league dropbacks in 2025, matching reality; the obvious
+                 alternative fields are populated on every play and double it.""",
+                 "Quality"),
+    "route_share": _t("Route share", "Share of his team's dropbacks he ran a route on.",
+                      "A better availability measure than snap share for pass catchers.",
+                      "Quality"),
+    "yprr": _t(
+        "Yards per route run", "Receiving yards divided by routes run.",
+        """The single most useful metric added to this project, and the cleanest
+        public separator of "good but blocked by a teammate" from "not good".
+        Target share cannot make that distinction: a receiver behind an alpha and
+        a receiver who loses his matchups both post low shares. Elite is 2.0+,
+        good 1.7-2.0, average around 1.3. Needs ~100 routes to mean anything —
+        on 40 routes one long catch moves it half a yard.""", "Quality"),
+    "tprr": _t("Targets per route run", "Targets divided by routes run.",
+               """How often the offense looks for him when he is out there, stripped of
+               how often he is out there. Closer to a measure of trust than of talent.""",
+               "Quality"),
+    "drop_rate": _t("Drop rate", "Share of catchable targets dropped. Lower is better.",
+                    "Charted by Pro Football Reference.", "Quality"),
+    "rec_broken_tackles": _t("Broken tackles (rec)", "Tackles broken after a catch.",
+                             "PFR charting. Yards created rather than yards schemed.", "Quality"),
+    "receiving_rat": _t("Passer rating when targeted", "Quarterback rating on throws to him.",
+                        """Blends catch rate, yards, and touchdowns against interceptions
+                        on his targets. A blunt but genuinely independent quality read.""",
+                        "Quality"),
+    "rush_broken_tackles_per_att": _t(
+        "Broken tackles per carry", "Tackles broken divided by carries.",
+        "Volume-independent, so a backup is comparable to a workhorse.", "Quality"),
+    "yards_after_contact_per_att": _t(
+        "Yards after contact per carry", "Rushing yards gained after first contact.",
+        """The running back quality metric that is least contaminated by the
+        offensive line. A back on a bad line has poor yards per carry and can
+        still be excellent after contact — that gap is the whole point.""",
+        "Quality"),
+    "ypa": _t("Yards per attempt", "Passing yards per pass attempt.", "", "Quality"),
+    "quality_score": _t(
+        "Quality score", "Mean standardized per-opportunity quality, within position.",
+        """Relative, not absolute: +1 means one standard deviation better per
+        opportunity than other players at his position that season. Built only
+        from rate metrics — nothing in it scales with how much he plays.""",
+        "Quality"),
+    "quality_tier": _t("Quality tier", "Which quality group he falls in. 1 is best.",
+                       "Clusters ordered by mean quality, so tier 1 is always the top group.",
+                       "Quality"),
+    # --- Opportunity and situation -----------------------------------------
+    "opportunity_score": _t(
+        "Opportunity score", "Mean standardized volume, within position.",
+        """The axis ADP prices well. Kept separate from quality on purpose —
+        mixing them is what made the old clustering rediscover the market.""",
+        "Opportunity"),
+    "teammate_top_share": _t(
+        "Best teammate's target share", "The largest target share on his team other than his own.",
+        """What makes a good player cheap, and what makes him a buy when that
+        teammate leaves. A 15% share behind a 30% alpha is a different situation
+        from 15% on a team where nobody clears 18%: the first is capped by
+        someone else, the second is losing his own matchups. For a team's alpha
+        this is the second-largest share, not null.""", "Opportunity"),
+    "teammate_share": _t("Teammate target share", "Combined target share of everyone else on his offense.", "",
+                         "Opportunity"),
+    "team_target_hhi": _t("Target concentration", "How concentrated his team's targets are.",
+                          "Sum of squared target shares. High means one player dominates.",
+                          "Opportunity"),
+    "is_team_alpha": _t("Team alpha", "Whether he led his team in target share.", "", "Opportunity"),
+    "vacated_target_share_next": _t(
+        "Vacated target share", "Share of his team's targets held by players who left.",
+        """Opportunity about to be handed out. A player whose team just lost a
+        quarter of its targets is in a materially different spot from an
+        identical player whose depth chart is unchanged, and neither his usage
+        nor his efficiency says so.""", "Opportunity"),
+    "vacated_carry_share_next": _t("Vacated carry share", "Share of his team's carries held by players who left.",
+                                   "The running back version of vacated targets.", "Opportunity"),
+    # --- Valuation ----------------------------------------------------------
+    "quality_pct": _t("Quality percentile", "Where his per-opportunity quality ranks in his position. 100 is best.",
+                      "Percentile rather than raw score, so it is comparable to a price percentile.",
+                      "Valuation"),
+    "opportunity_pct": _t("Opportunity percentile", "Where his volume ranks in his position. 100 is most.", "",
+                          "Valuation"),
+    "market_pct": _t("Price percentile", "Where his draft price ranks in his position. 100 is most expensive.",
+                     "Derived from ADP positional rank, inverted so high always means expensive.",
+                     "Valuation"),
+    "value_gap": _t(
+        "Value gap", "Quality percentile minus price percentile. Positive means cheap for the quality.",
+        """The disagreement score this whole project builds toward. Positive means
+        the market ranks him below where his per-opportunity quality does. It is
+        not a projection and not a ranking — it says where this project's read
+        differs from the market's, which is a reason to look closer rather than a
+        reason to be right. Twenty points is roughly two tiers.""", "Valuation"),
+    "path_score": _t(
+        "Room to grow", "Whether he has anywhere to gain volume. Higher is more room.",
+        """Quality alone is not a buy signal — a good player permanently stuck
+        behind a better one stays stuck. This blends unused opportunity, volume
+        his team just lost, and how big the teammate in front of him is. It is
+        what separates a genuine buy from a good player who is already maxed out
+        and priced accordingly.""", "Valuation"),
+    "verdict": _t("Verdict", "Undervalued, fairly priced, or overvalued.",
+                  "From the value gap, with a 20-point threshold in each direction.",
+                  "Valuation"),
+    "prior_ppg": _t("Last season's points per game", "What he actually scored last year.", "", "Valuation"),
     # --- Usage and role ----------------------------------------------------
     "snap_pct": _t(
         "Snap share",

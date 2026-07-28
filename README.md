@@ -63,6 +63,7 @@ directly.
 | `src/breakout.py` | The beat-ADP backtest, with calibration against the ADP-only baseline. |
 | `src/rookies.py` | Separate rookie model — draft capital, combine, vacated opportunity. |
 | `src/simulate.py` | Monte Carlo draft + season sim comparing draft strategies. |
+| `src/valuation.py` | Quality against price — where this project disagrees with ADP. |
 | `src/uncertainty.py` | Wilson, bootstrap, and season-clustered intervals. |
 | `src/glossary.py` | What every metric means. Feeds column tooltips and the Glossary tab. |
 | `app.py` | Streamlit app: Landscape / Players / Strategy / Board / Glossary. |
@@ -135,9 +136,21 @@ zero. Early-TE is significantly worse.
 strategies within a season, and it matches the Landscape tab showing running
 back value climbing after 2023.
 
-**Usage has one dominant axis.** Silhouette peaks at two clusters for every
-position and falls from there. The honest grouping is "featured" and "not" — the
-one real exception is quarterback, where the split is rushing versus pocket.
+**Clustering on volume just rediscovers ADP.** The original feature set was
+half volume — target share, snap share, air-yards share — which is exactly what
+draft price already knows, and it dominated the distance metric so every
+position collapsed to "featured vs not". Clustering on *per-opportunity quality*
+instead (yards per route run, separation, yards after contact, drop rate) finds
+real structure: RB supports five groups, TE four.
+
+**That split is what makes under/overvaluation detectable.** Quality and price
+are each converted to a within-position percentile and subtracted. Elite,
+expensive players land near the parity line — Puka Nacua is 98th percentile
+quality at 100th percentile price, correctly priced. The interesting names are
+off it: Dalton Kincaid at 100th-percentile TE quality and a 143 ADP; Luther
+Burden III at 2.06 yards per route on a 3.8th-percentile target share. Quality
+alone is not a buy signal, so a `path_score` requires somewhere to gain volume —
+a 90th-percentile receiver who is already his team's alpha has none.
 
 ## What's verified
 

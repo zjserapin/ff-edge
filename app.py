@@ -21,7 +21,6 @@ import altair as alt
 import polars as pl
 import streamlit as st
 
-from src import adp as adp_mod
 from src import archetypes as ar
 from src import breakout as bo
 from src import features as ft
@@ -31,10 +30,12 @@ from src import rookies as rk
 from src import scoring as sc
 from src import simulate as sim
 from src import theme
+from src import valuation as val
 from src.config import (
     DEFAULT_ROSTER_POSITIONS,
     DEFAULT_SCORING,
     DEFAULT_TEAMS,
+    CURRENT_SEASON,
     FEATURE_SEASONS,
     LEAGUE_ID,
     OUTPUT_DIR,
@@ -1108,190 +1109,166 @@ def _tab_strategy(p: dict[str, Any]) -> None:
                 st.warning("No simulations produced under these settings.")
 
 
-@st.cache_data(show_spinner="Building the board…")
-def _board_base(
-    scoring_key: tuple[tuple[str, float], ...],
-    roster: tuple[str, ...],
-    teams: int,
-    flex_split: tuple[tuple[str, float], ...] | None,
-) -> pl.DataFrame:
-    """The static half of the board: market value and model score per player.
-
-    Cached because it is pure. Everything downstream of session state — who is
-    gone, who is cut, what pick you are on — is computed fresh on every rerun,
-    because a cached board is a stale board and a stale draft board is worse
-    than none.
-    """
-    board = bo.adp_board(SEASON)
-    if not board.height:
-        return pl.DataFrame()
-
-    board = ls.market_implied_value(
-        board,
-        scoring=dict(scoring_key),
-        roster_positions=list(roster),
-        teams=teams,
-        flex_split=dict(flex_split) if flex_split else None,
-        season_points=_season_points(scoring_key),
-    )
-
-    scored = bo.score_current(features=_features())
-    if scored.height:
-        board = board.join(
-            scored.select("gsis_id", "p_breakout"), on="gsis_id", how="left"
-        )
-    return board.sort("adp")
-
-
-def _init_state() -> None:
-    for key, default in (
-        ("drafted", set()),
-        ("excluded", set()),
-        ("queue", []),
-        ("my_slot", 1),
-    ):
-        if key not in st.session_state:
-            st.session_state[key] = default
-
-
-def _next_pick(taken: int, slot: int, teams: int) -> int:
-    """Your next pick number in a snake draft, given how many are already gone."""
-    rnd = taken // teams
-    while True:
-        pick = rnd * teams + (slot if rnd % 2 == 0 else teams - slot + 1)
-        if pick > taken:
-            return pick
-        rnd += 1
+@st.cache_data(show_spinner="Valuing the board…")
+def _valuation() -> pl.DataFrame:
+    return val.board(df=_features())
 
 
 def _tab_board(p: dict[str, Any]) -> None:
-    _init_state()
-    teams = p["teams"]
+    dark = p["dark"]
+    st.subheader("Who the market has wrong")
 
-    st.subheader("Draft board")
-    base = _board_base(p["scoring_key"], p["roster_positions"], teams, p["flex_split"])
-    if not base.height:
-        st.warning(f"No {SEASON} ADP available yet.")
+    board = _valuation()
+    if not board.height:
+        st.warning(f"No {SEASON} ADP available yet, or the feature table is cold.")
         return
 
+    st.caption(
+        f"Every drafted WR, RB and TE with at least 100 routes in "
+        f"{CURRENT_SEASON}, scored on two axes the draft market treats as one."
+    )
     st.info(
-        "**`market_value` is not a projection, and the distinction matters.** "
-        "This project has no points forecast — building one honestly is a bigger "
-        "job than everything else here, and building one dishonestly is worse "
-        "than having none. So the column inverts the question: it is the median "
-        "historical value of *the draft slot* this player is going at. Two backs "
-        "at RB14 get the same number, because it knows nothing about either of "
-        "them. Its use is as a baseline to disagree with.",
+        "**The argument in one line: ADP prices volume well and quality badly.** "
+        "Everyone can see a 28% target share; far fewer are pricing 2.4 yards "
+        "per route run on 300 routes. So `quality_pct` is compared against "
+        "`market_pct` — both percentiles within position — and the difference is "
+        "`value_gap`. This is a disagreement score, not a projection: it says "
+        "where this project's read differs from the market's, which is a reason "
+        "to look closer, not a reason to be right.",
         icon="ℹ️",
     )
 
-    c1, c2, c3 = st.columns([1, 1, 2])
-    with c1:
-        st.session_state["my_slot"] = st.number_input(
-            "Your draft slot", 1, teams, st.session_state["my_slot"]
-        )
-    taken = len(st.session_state["drafted"])
-    pick = _next_pick(taken, int(st.session_state["my_slot"]), teams)
-    with c2:
-        st.metric("Your next pick", f"#{pick}", help=f"{taken} players off the board")
-    with c3:
-        pos_filter = st.multiselect(
-            "Positions", ["QB", "RB", "WR", "TE"], default=["QB", "RB", "WR", "TE"]
-        )
+    counts = val.summary(board)
+    c1, c2, c3 = st.columns(3)
+    for col, verdict, label in (
+        (c1, "undervalued", "Undervalued"),
+        (c2, "fairly priced", "Fairly priced"),
+        (c3, "overvalued", "Overvalued"),
+    ):
+        n = int(counts.filter(pl.col("verdict") == verdict).get_column("n").sum())
+        col.metric(label, n)
 
-    gone = st.session_state["drafted"] | st.session_state["excluded"]
-    available = base.filter(
-        ~pl.col("gsis_id").is_in(list(gone)) if gone else pl.lit(True)
-    ).filter(pl.col("position").is_in(pos_filter or ["QB", "RB", "WR", "TE"]))
-
-    # Survival is computed on the *available* pool, so cuts and picks propagate
-    # into the math rather than just the display.
-    available = adp_mod.survival(available, pick)
-    p_col = f"p_available_at_{pick}"
-
-    st.markdown("#### Available")
+    # --- the two-axis picture ---
+    st.markdown("#### Quality against price")
     st.caption(
-        f"`{p_col}` is the chance a player lasts to your pick, from his ADP and "
-        "its observed dispersion. Two players at the same price can differ "
-        "enormously here — that gap, not raw ranking, is what decides who you "
-        "have to take now."
+        "Up is better per opportunity; right is more expensive. The top-left "
+        "quadrant is the one worth your time — good players the market has not "
+        "paid for. Bottom-right is the reverse. Point size is how much room he "
+        "has to grow into more volume."
     )
-
-    reachable_only = st.checkbox(
-        "Only players with a real chance of reaching me",
-        value=taken > 0,
-        help=(
-            "Sorting by value puts the best players on top, and once the draft "
-            "starts most of them will be gone before your turn. This hides "
-            "anyone under a 10% chance of lasting."
-        ),
+    pos_pick = st.multiselect(
+        "Positions", list(val.SKILL_POSITIONS), default=list(val.SKILL_POSITIONS)
     )
-    view = available
-    if reachable_only:
-        view = view.filter(pl.col(p_col) >= 0.10)
-
-    view = view.select(
-        "name", "position", "team", "adp", "stdev", "adp_pos_rank",
-        "market_ppg", "market_var",
-        *(["p_breakout"] if "p_breakout" in available.columns else []),
-        p_col,
-    ).sort("market_var", descending=True)
-
+    view = board.filter(pl.col("position").is_in(pos_pick or list(val.SKILL_POSITIONS)))
     if not view.height:
-        st.info("Nobody clears the threshold — every remaining player is a reach or a lock.")
-    else:
-        table(view.head(60))
-        st.caption(
-            f"{view.height} of {available.height} available players shown. "
-            "Sort any column by clicking its header."
+        return
+
+    scatter_pd = view.to_pandas()
+    points = (
+        alt.Chart(scatter_pd)
+        .mark_circle(opacity=0.85, stroke=theme.surface(dark), strokeWidth=1)
+        .encode(
+            x=alt.X("market_pct:Q", title="Draft price percentile (100 = most expensive)"),
+            y=alt.Y("quality_pct:Q", title="Quality percentile (100 = best per opportunity)"),
+            size=alt.Size("path_score:Q", title="Room to grow", scale=alt.Scale(range=[40, 400])),
+            color=alt.Color("position:N", scale=theme.position_scale(dark), title="Position"),
+            tooltip=[
+                alt.Tooltip("name:N", title="Player"),
+                alt.Tooltip("team:N", title="Team"),
+                alt.Tooltip("adp:Q", title="ADP", format=".1f"),
+                alt.Tooltip("quality_pct:Q", title="Quality %ile", format=".0f"),
+                alt.Tooltip("market_pct:Q", title="Price %ile", format=".0f"),
+                alt.Tooltip("value_gap:Q", title="Value gap", format="+.0f"),
+                alt.Tooltip("path_score:Q", title="Room to grow", format=".0f"),
+                alt.Tooltip("yprr:Q", title="Yds/route", format=".2f"),
+                alt.Tooltip("verdict:N", title="Verdict"),
+            ],
         )
+        .properties(height=420)
+    )
+    parity = (
+        alt.Chart(pl.DataFrame({"a": [0, 100]}).to_pandas())
+        .mark_line(strokeDash=[5, 5], strokeWidth=1, color=theme.ink(dark)["muted"])
+        .encode(x=alt.X("a:Q"), y=alt.Y("a:Q"))
+    )
+    labels = (
+        alt.Chart(scatter_pd[scatter_pd["value_gap"].abs() >= 42])
+        .mark_text(align="left", dx=9, fontSize=10, color=theme.ink(dark)["primary"])
+        .encode(x=alt.X("market_pct:Q"), y=alt.Y("quality_pct:Q"), text="name:N")
+    )
+    st.altair_chart(theme.base_chart(parity + points + labels, dark), use_container_width=True)
+    st.caption(
+        "Dashed line is where quality and price agree. Distance from it is the "
+        "value gap. Only players more than 42 points off the line are labeled; hover for the rest."
+    )
 
-    st.markdown("#### Track the draft")
-    names = available.get_column("name").to_list()
-    lookup = dict(zip(available.get_column("name").to_list(), available.get_column("gsis_id").to_list()))
+    # --- the lists ---
+    show = ["name", "position", "team", "adp", "quality_pct", "opportunity_pct",
+            "market_pct", "value_gap", "path_score", "yprr", "teammate_top_share", "verdict"]
 
-    b1, b2, b3 = st.columns(3)
-    with b1:
-        pick_name = st.selectbox("Someone was drafted", [""] + names, key="mark_drafted")
-        if st.button("Mark drafted", disabled=not pick_name):
-            st.session_state["drafted"].add(lookup[pick_name])
-            st.rerun()
-    with b2:
-        cut_name = st.selectbox("Cut from my board", [""] + names, key="mark_cut")
-        if st.button("Cut player", disabled=not cut_name):
-            st.session_state["excluded"].add(lookup[cut_name])
-            st.rerun()
-    with b3:
-        q_name = st.selectbox("Add to queue", [""] + names, key="mark_queue")
-        if st.button("Queue player", disabled=not q_name):
-            if lookup[q_name] not in st.session_state["queue"]:
-                st.session_state["queue"].append(lookup[q_name])
-            st.rerun()
+    st.markdown("#### Undervalued — quality above price, with somewhere to go")
+    st.caption(
+        "Filtered on room to grow, which is what separates this from a list of "
+        "good players on crowded depth charts. A 90th-percentile receiver who is "
+        "already his team's alpha has no volume left to gain — his price is high "
+        "because he earned it."
+    )
+    min_path = st.slider(
+        "Minimum room to grow", 0, 100, 50, 5,
+        help="Blends unused opportunity, volume his team just lost, and how big the teammate in front of him is.",
+    )
+    under = val.undervalued(view, min_path=float(min_path), limit=25)
+    if under.height:
+        table(under.select([c for c in show if c in under.columns]))
+    else:
+        st.info("Nobody clears both thresholds at these settings.")
 
-    if st.session_state["queue"]:
-        st.markdown("#### Your queue")
-        queued = available.filter(pl.col("gsis_id").is_in(st.session_state["queue"]))
-        if queued.height:
-            table(queued.select("name", "position", "adp", "market_var", p_col)
-                .sort(p_col)
+    st.markdown("#### Overvalued — price above quality")
+    st.caption(
+        "Read this list more sceptically than the one above. Expensive players "
+        "are expensive partly because they command volume, and volume genuinely "
+        "scores points — a mediocre efficiency profile on 30% of the targets is "
+        "still a good fantasy season. This flags where the price is paying for "
+        "last year's production rather than for the player."
+    )
+    over = val.overvalued(view, limit=25)
+    if over.height:
+        table(over.select([c for c in show if c in over.columns]))
+
+    # --- comparables ---
+    st.markdown("#### Who does this player look like?")
+    st.caption(
+        "Nearest quality profiles at the same position, shown next to what they "
+        "cost. If the neighbours are all going four rounds earlier, that is the "
+        "finding."
+    )
+    names = view.sort("adp").get_column("name").to_list()
+    who = st.selectbox("Player", names, key="comp_player")
+    target = view.filter(pl.col("name") == who)
+    if target.height:
+        row = target.row(0, named=True)
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("ADP", f"{row['adp']:.1f}")
+        m2.metric("Quality %ile", f"{row['quality_pct']:.0f}")
+        m3.metric("Price %ile", f"{row['market_pct']:.0f}")
+        m4.metric("Value gap", f"{row['value_gap']:+.0f}", help=glossary.describe("value_gap"))
+
+        comps = val.comparables(view, row["gsis_id"], n=8, df=_features())
+        if comps.height:
+            table(
+                comps.select(
+                    "name", "team", "distance", "quality_pct", "opportunity_pct",
+                    "adp", "prior_ppg", "verdict",
                 )
-            st.caption("Sorted by least likely to survive — take the top one first.")
-        stale = set(st.session_state["queue"]) & gone
-        if stale:
-            st.caption(f"{len(stale)} queued player(s) are already gone.")
+            )
+            cheaper = comps.filter(pl.col("adp") < row["adp"]).height
+            st.caption(
+                f"{comps.height - cheaper} of {comps.height} comparable profiles "
+                f"cost more than {who} does."
+            )
 
-    with st.expander(f"Cut list ({len(st.session_state['excluded'])}) and drafted ({taken})"):
-        if st.session_state["excluded"]:
-            cuts = base.filter(pl.col("gsis_id").is_in(list(st.session_state["excluded"])))
-            table(cuts.select("name", "position", "adp"))
-        c1, c2 = st.columns(2)
-        if c1.button("Clear cut list"):
-            st.session_state["excluded"] = set()
-            st.rerun()
-        if c2.button("Reset draft"):
-            st.session_state["drafted"] = set()
-            st.session_state["queue"] = []
-            st.rerun()
+    with st.expander("Full board"):
+        table(view.select([c for c in show if c in view.columns]))
 
 
 def _placeholder(name: str, phase: str) -> None:
