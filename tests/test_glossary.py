@@ -45,11 +45,11 @@ def test_unknown_columns_degrade_quietly() -> None:
     """An undocumented column must not raise — it just gets no tooltip."""
     assert glossary.describe("some_new_column") == ""
     assert glossary.lookup("some_new_column") is None
-    assert glossary.column_help(["name", "some_new_column"]) == {}
+    assert glossary.column_help(["totally_made_up", "some_new_column"]) == {}
 
 
 def test_column_help_maps_only_known_columns() -> None:
-    helped = glossary.column_help(["adp", "stdev", "name", "team", "market_var"])
+    helped = glossary.column_help(["adp", "stdev", "totally_made_up", "market_var"])
     assert set(helped) == {"adp", "stdev", "market_var"}
     assert all(v for v in helped.values())
 

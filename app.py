@@ -53,24 +53,108 @@ def _key(scoring: Mapping[str, float]) -> tuple[tuple[str, float], ...]:
     return tuple(sorted((k, float(v)) for k, v in scoring.items()))
 
 
-def table(df: pl.DataFrame, **kwargs: Any) -> None:
-    """Render a frame with a hover definition on every column that has one.
+# Acronyms that a naive capitalize() would mangle into "Ppg" or "Adp".
+_ACRONYMS = {"ppg", "adp", "par", "auc", "yprr", "tprr", "ypt", "ypc", "ypa", "hhi", "ci"}
+
+
+def _header(column: str) -> str:
+    """Readable header for a column: its glossary label, else a tidied name."""
+    term = glossary.lookup(column)
+    if term:
+        return term.label
+    words = [
+        w.upper() if w.lower() in _ACRONYMS else w
+        for w in column.replace("_", " ").split()
+    ]
+    if not words:
+        return column
+    head, *rest = words
+    return " ".join([head if head.isupper() else head.capitalize(), *rest])
+
+
+def table(df: pl.DataFrame, pretty: bool = True, **kwargs: Any) -> None:
+    """Render a frame with readable headers and a hover definition on each.
 
     Every table in this app goes through here rather than st.dataframe directly.
-    A column named `wopr` or `market_var` means nothing on its own, and a
-    glossary nobody opens is a glossary nobody reads — the definition has to be
-    on the column itself.
+    A column named `wopr` or `par_mean_starter` means nothing on its own, and a
+    glossary nobody opens is a glossary nobody reads — so the name is rewritten
+    to the glossary's label and the definition is attached to the header.
+
+    `pretty=False` keeps the raw column names, which is what you want when the
+    frame is going to be copied out and used somewhere else.
     """
     if not df.height:
         return
+
     pdf = df.to_pandas()
-    config = {
-        col: st.column_config.Column(help=help_text)
-        for col, help_text in glossary.column_help(list(pdf.columns)).items()
-    }
+    if pretty:
+        renamed = {c: _header(c) for c in pdf.columns}
+        # Two raw columns can share a label (`vacated_target_share` in the
+        # rookie frame and the veteran one). Keep the raw name on the second so
+        # pandas does not silently collapse them into one column.
+        seen: set[str] = set()
+        for raw, label in list(renamed.items()):
+            if label in seen:
+                renamed[raw] = raw
+            seen.add(label)
+        pdf = pdf.rename(columns=renamed)
+        helps = {
+            renamed[raw]: text
+            for raw, text in glossary.column_help(list(df.columns)).items()
+            if raw in renamed
+        }
+    else:
+        helps = glossary.column_help(list(pdf.columns))
+
+    config = {col: st.column_config.Column(help=text) for col, text in helps.items()}
     st.dataframe(
         pdf, use_container_width=True, hide_index=True, column_config=config, **kwargs
     )
+
+
+def chart_note(columns: list[str], extra: str = "") -> None:
+    """A small definitions footer under a chart.
+
+    Sized to be read without competing with the chart above it: the same muted
+    caption tone as the rest of the dashboard, one line per metric, definitions
+    only for the fields actually plotted. A reader should not have to open the
+    Glossary tab to know what an axis means.
+    """
+    # Bold via <strong>, not markdown asterisks: Streamlit does not run the
+    # markdown parser inside a raw HTML block, so `**x**` renders literally.
+    parts = []
+    for column in columns:
+        term = glossary.lookup(column)
+        if term:
+            parts.append(
+                f"<strong style='color:#c3c2b7'>{term.label}</strong> — {term.short}"
+            )
+    if extra:
+        parts.append(extra)
+    if not parts:
+        return
+
+    st.markdown(
+        "<div style='font-size:0.82rem; line-height:1.6; color:#898781; "
+        "margin-top:-0.5rem; padding:0 0 0.5rem 2px'>"
+        + "<br>".join(parts)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def data_expander(df: pl.DataFrame, label: str = "Show the numbers") -> None:
+    """The exact frame a chart just drew, so the table always matches the chart.
+
+    Tied to each chart rather than collected at the bottom of the tab. A single
+    shared table view drifts out of sync the moment a slider moves — it was
+    showing every cutoff while the chart showed one — and a table that disagrees
+    with the chart above it is worse than no table.
+    """
+    if not df.height:
+        return
+    with st.expander(f"{label}  ({df.height} rows)"):
+        table(df)
 
 
 def _glossary_section() -> None:
@@ -305,7 +389,7 @@ def _tab_landscape(p: dict[str, Any]) -> None:
     par_pd = par.to_pandas()
     line = (
         alt.Chart(par_pd)
-        .mark_line(strokeWidth=2, point=alt.OverlayMarkDef(size=60, filled=True))
+        .mark_line(strokeWidth=2.5, point=alt.OverlayMarkDef(size=110, filled=True))
         .encode(
             x=alt.X("season:O", title=None),
             y=alt.Y("par_mean_starter:Q", title="PAR per game"),
@@ -319,7 +403,7 @@ def _tab_landscape(p: dict[str, Any]) -> None:
                 alt.Tooltip("replacement_ppg:Q", title="Replacement PPG", format=".1f"),
             ],
         )
-        .properties(height=280)
+        .properties(height=380)
     )
     labels = (
         alt.Chart(par_pd[par_pd["season"] == par_pd["season"].max()])
@@ -332,6 +416,13 @@ def _tab_landscape(p: dict[str, Any]) -> None:
         )
     )
     st.altair_chart(theme.base_chart(line + labels, dark), use_container_width=True)
+    chart_note(["par_mean_starter", "demand", "replacement_rank", "replacement_ppg"])
+    data_expander(
+        par.select(
+            "season", "position", "demand", "replacement_rank", "replacement_ppg",
+            "par_mean_starter", "par_total",
+        )
+    )
 
     with st.expander("Replacement level behind these numbers"):
         st.caption(
@@ -390,7 +481,10 @@ def _tab_landscape(p: dict[str, Any]) -> None:
         sc_pd = scarcity.filter(pl.col("season").is_in(sorted(chosen))).to_pandas()
         curves = (
             alt.Chart(sc_pd)
-            .mark_line(strokeWidth=2)
+            .mark_line(
+                strokeWidth=2.5,
+                point=alt.OverlayMarkDef(size=70, filled=True),
+            )
             .encode(
                 x=alt.X("pos_rank:Q", title="Positional rank"),
                 y=alt.Y(f"{y_field}:Q", title=y_title),
@@ -411,10 +505,24 @@ def _tab_landscape(p: dict[str, Any]) -> None:
                     alt.Tooltip("games:Q", title="Games"),
                 ],
             )
-            .properties(height=200, width=200)
+            .properties(height=340, width=260)
             .facet(column=alt.Column("position:N", title=None, sort=list(theme.position_colors())))
         )
         st.altair_chart(theme.base_chart(curves, dark), use_container_width=True)
+        chart_note(
+            ["pos_rank", "ppg", "fantasy_points", "games"],
+            extra=(
+                f"Showing ranks 1–{max_rank} for {', '.join(str(c) for c in sorted(chosen))}. "
+                "Narrow the slider to spread the early ranks out — that is where "
+                "the dropoff actually decides your draft."
+            ),
+        )
+        data_expander(
+            scarcity.filter(pl.col("season").is_in(sorted(chosen))).select(
+                "season", "position", "pos_rank", "player_display_name",
+                "games", "fantasy_points", "ppg", "par_ppg",
+            )
+        )
 
     # --- Cross-positional mix ---
     st.markdown("#### Who actually occupies the top of the board")
@@ -444,9 +552,18 @@ def _tab_landscape(p: dict[str, Any]) -> None:
                 alt.Tooltip("share:Q", title="Share", format=".0%"),
             ],
         )
-        .properties(height=260)
+        .properties(height=320)
     )
     st.altair_chart(theme.base_chart(bars, dark), use_container_width=True)
+    chart_note(
+        ["overall_par_rank", "par_ppg"],
+        extra=(
+            f"Counting how many of each position land in the top {cutoff} by value "
+            "over replacement, per season. Move the slider to change the cutoff — "
+            "the table below follows it."
+        ),
+    )
+    data_expander(mix.filter(pl.col("cutoff") == cutoff))
 
     # --- Concentration ---
     st.markdown("#### Are the top players taking a bigger slice?")
@@ -476,15 +593,15 @@ def _tab_landscape(p: dict[str, Any]) -> None:
         .facet(column=alt.Column("top_n:N", title="Top N players"))
     )
     st.altair_chart(theme.base_chart(conc_chart, dark), use_container_width=True)
-
-    with st.expander("Table view"):
-        st.caption("Every chart above, as numbers.")
-        st.markdown("**Value above replacement**")
-        table(par)
-        st.markdown("**Positional mix of the top of the board**")
-        table(mix)
-        st.markdown("**Concentration**")
-        table(conc)
+    chart_note(
+        ["share", "pool_size"],
+        extra=(
+            "Each panel is a different top-N. The pool is capped at roughly three "
+            "times the number of starters, so this measures how top-heavy the "
+            "draftable players are rather than how many bodies the league used."
+        ),
+    )
+    data_expander(conc)
 
 
 @st.cache_data(show_spinner="Building features…")
@@ -770,7 +887,14 @@ def _breakout_section(dark: bool) -> None:
         .encode(y=alt.Y("base_rate:Q"))
     )
     st.altair_chart(theme.base_chart(bars + errors + baseline, dark), use_container_width=True)
-    st.caption("Dashed line is the base rate. Whiskers are 95% Wilson intervals.")
+    chart_note(
+        ["base_rate", "lift"],
+        extra=(
+            "Dashed line is the base rate; whiskers are 95% Wilson intervals. "
+            "A working model would step upward left to right."
+        ),
+    )
+    data_expander(cal)
 
     with st.expander("Full backtest numbers"):
         st.markdown("**Discrimination — overall, by position, by test season**")
@@ -982,11 +1106,14 @@ def _tab_strategy(p: dict[str, Any]) -> None:
     )
 
     st.altair_chart(theme.base_chart(_strategy_chart(summary, dark), dark), use_container_width=True)
-    st.caption(
-        "Intervals resample whole seasons, not individual simulations — "
-        "simulations within a season share one realized set of player outcomes, "
-        "so treating them as independent would report bars roughly ten times "
-        "too narrow."
+    chart_note(
+        ["title_rate", "playoff_rate", "mean_wins"],
+        extra=(
+            "Intervals resample whole seasons, not individual simulations — "
+            "simulations within a season share one realized set of player "
+            "outcomes, so treating them as independent would report bars roughly "
+            "ten times too narrow."
+        ),
     )
 
     st.markdown("#### Edge over simply following ADP")
@@ -1078,6 +1205,14 @@ def _tab_strategy(p: dict[str, Any]) -> None:
         .encode(x=alt.X("season:O"), y=alt.Y("strategy:N"), text=alt.Text("mean_wins:Q", format=".1f"))
     )
     st.altair_chart(theme.base_chart(heat + labels, dark), use_container_width=True)
+    chart_note(
+        ["mean_wins"],
+        extra=(
+            "Read across a row, not down a column: the swing within one strategy "
+            "across seasons is the point."
+        ),
+    )
+    data_expander(per_season)
 
     with st.expander("Full results"):
         table(summary)
@@ -1197,9 +1332,13 @@ def _tab_board(p: dict[str, Any]) -> None:
         .encode(x=alt.X("market_pct:Q"), y=alt.Y("quality_pct:Q"), text="name:N")
     )
     st.altair_chart(theme.base_chart(parity + points + labels, dark), use_container_width=True)
-    st.caption(
-        "Dashed line is where quality and price agree. Distance from it is the "
-        "value gap. Only players more than 42 points off the line are labeled; hover for the rest."
+    chart_note(
+        ["quality_pct", "market_pct", "value_gap", "path_score"],
+        extra=(
+            "Dashed line is where quality and price agree; distance from it is the "
+            "value gap. Only players more than 42 points off the line are labeled — "
+            "hover for the rest."
+        ),
     )
 
     # --- the lists ---

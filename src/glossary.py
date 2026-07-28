@@ -34,6 +34,27 @@ def _t(label: str, short: str, long: str, group: str) -> Term:
 
 
 TERMS: dict[str, Term] = {
+    "ppg": _t("Points per game", "Fantasy points per game played, in your league's scoring.",
+              """Divides by games he actually appeared in, not by the length of the
+              season — so it measures how good he was when available, not how
+              available he was. `games` carries the second half of that.""", "Value"),
+    "fantasy_points": _t("Fantasy points", "Season total in your league's scoring.",
+                         "Weeks 1-14 only, the fantasy regular season.", "Value"),
+    "games": _t("Games", "Games he appeared in.", "", "Value"),
+    "season": _t("Season", "NFL season.", "", "Context"),
+    "position": _t("Position", "QB, RB, WR or TE.", "", "Context"),
+    "team": _t("Team", "NFL team.", "", "Context"),
+    "player_display_name": _t("Player", "Player name.", "", "Context"),
+    "player_name": _t("Player", "Player name.", "", "Context"),
+    "name": _t("Player", "Player name.", "", "Context"),
+    "n": _t("Players", "How many players are in this group.", "", "Context"),
+    "pool_size": _t("Pool size", "How many players the share is measured against.",
+                    """Capped at roughly three times starter demand. Uncapped, a
+                    concentration metric measures how many replacement bodies the
+                    league cycled through rather than how top-heavy it is.""", "Value"),
+    "top_n": _t("Top N", "How many top players the share covers.", "", "Value"),
+    "cutoff": _t("Cutoff", "How deep into the combined value ranking this row counts.",
+                 "", "Value"),
     # --- Quality (per opportunity) -----------------------------------------
     "routes": _t("Routes run", "Dropbacks he was on the field for.",
                  """Counted from play participation on plays with pass rushers, which
