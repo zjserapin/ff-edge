@@ -26,9 +26,11 @@ from src import breakout as bo
 from src import features as ft
 from src import glossary
 from src import landscape as ls
+from src import projection as pj
 from src import rookies as rk
 from src import scoring as sc
 from src import simulate as sim
+from src import stability as stab
 from src import theme
 from src import valuation as val
 from src.config import (
@@ -618,26 +620,9 @@ def _features() -> pl.DataFrame:
     return ft.build()
 
 
-@st.cache_data(show_spinner="Clustering…")
-def _clusters(season: int, k: int | None, min_games: int) -> pl.DataFrame:
-    return ar.cluster(season, min_games=min_games, k=k, df=_features())
-
-
-@st.cache_data(show_spinner=False)
-def _profiles(season: int, k: int | None, min_games: int) -> pl.DataFrame:
-    return ar.cluster_profiles(_clusters(season, k, min_games), _features(), season=season)
-
-
-@st.cache_data(show_spinner=False)
-def _silhouette(season: int, position: str, min_games: int) -> pl.DataFrame:
-    pool = _features().filter(
-        (pl.col("season") == season) & (pl.col("games") >= min_games)
-        & (pl.col("position") == position)
-    )
-    x, used = ar._matrix(pool, ft.cluster_feature_columns(position))
-    if not used or pool.height < 12:
-        return pl.DataFrame()
-    return ar.choose_k(x, (2, ar.K_CEILING.get(position, 6)))
+@st.cache_data(show_spinner="Scoring quality and opportunity…")
+def _scores(season: int, min_games: int) -> pl.DataFrame:
+    return ar.scores(season, min_games=min_games, df=_features())
 
 
 def _tab_players(p: dict[str, Any]) -> None:
@@ -648,91 +633,49 @@ def _tab_players(p: dict[str, Any]) -> None:
         return
 
     season = int(feats.get_column("season").max())
-    st.subheader("Usage archetypes")
+    st.subheader("Comparable players")
     st.caption(
-        f"Grouping {season} players by *how they were used* — shares, rates, and "
-        "role — not by what they scored. Expected points and draft pedigree are "
-        "deliberately excluded from the distance metric, so these are not "
-        "scoring tiers in disguise."
+        f"The {season} players whose per-opportunity profile sits closest to this "
+        "one, by distance in the standardized quality space. A cheap player next "
+        "to expensive ones is the thing worth a second look."
     )
-    st.warning(
-        "**Clusters describe. They do not predict.** A receiver sitting with "
-        "three alphas means his target share, air-yards share and route role "
-        "rhyme with theirs. It does not mean he will produce like them — what "
-        "separates him from them may be talent, and talent is not in this "
-        "feature set.",
-        icon="⚠️",
+    st.info(
+        "**The k-means archetypes that used to sit here have been removed.** "
+        "Silhouette topped out between 0.19 and 0.29, which is a partition of a "
+        "continuum rather than a set of groups, and cluster membership added "
+        "nothing downstream — fed to the projection model as soft memberships it "
+        "scored 0.022 *below* ADP alone. Nearest neighbours answer the same "
+        "question directly, without throwing the distances away to get a label.",
+        icon="🗑️",
     )
 
-    c1, c2 = st.columns([1, 1])
-    with c1:
-        auto = st.checkbox("Choose the number of groups automatically", value=True)
-    with c2:
-        min_games = st.slider("Minimum games", 4, 14, 8, key="cluster_min_games")
-    k = None if auto else st.slider("Groups per position", 2, 6, 4, key="cluster_k")
-
-    clusters = _clusters(season, k, min_games)
-    if not clusters.height:
-        st.info("Not enough qualified players to cluster.")
+    min_games = st.slider("Minimum games", 4, 14, 8, key="scores_min_games")
+    scored = _scores(season, min_games)
+    if not scored.height:
+        st.info("Not enough qualified players to score.")
         return
 
-    profiles = _profiles(season, k, min_games)
-
-    st.info(
-        "**Silhouette peaks at two groups for every position and falls from "
-        "there** — NFL usage has one dominant axis, how much of his offense a "
-        "player commands. The honest answer is 'featured' and 'not'. The one "
-        "real exception is quarterback, where the split is rushing versus "
-        "pocket rather than good versus bad. Turning off automatic selection "
-        "lets you assert finer archetypes; the curve below shows what that costs.",
-        icon="ℹ️",
-    )
-
-    st.markdown("#### What each group is")
-    table(profiles.select("position", "cluster", "n", "mean_ppg", "label"))
-
-    st.markdown("#### Find comparable usage")
-    st.caption(
-        "The players whose role most resembles this one, ranked by distance in "
-        "the standardized usage space. A cheap player next to expensive ones is "
-        "the thing worth a second look."
-    )
-    pos = st.selectbox("Position", sorted(clusters.get_column("position").unique().to_list()))
-    pool = clusters.filter(pl.col("position") == pos).sort("pos_rank")
-    names = pool.get_column("player_name").to_list()
-    who = st.selectbox("Player", names)
+    pos = st.selectbox("Position", sorted(scored.get_column("position").unique().to_list()))
+    pool = scored.filter(pl.col("position") == pos).sort("pos_rank")
+    who = st.selectbox("Player", pool.get_column("player_name").to_list())
     pid = pool.filter(pl.col("player_name") == who).get_column("player_id")[0]
 
-    nb = ar.neighbors(pid, clusters, feats, n=8, season=season)
+    nb = ar.neighbors(pid, scored, feats, n=8, season=season)
     if nb.height:
         table(nb.select("player_name", "team", "distance", "ppg", "pos_rank", "games"))
 
-    with st.expander("How many groups the data actually supports"):
-        sil = _silhouette(season, pos, min_games)
-        if sil.height:
-            st.caption(
-                "Higher silhouette means tighter, better-separated groups. "
-                "Solutions marked not viable have a group of fewer than four "
-                "players — k-means quarantining an outlier, not an archetype."
-            )
-            sil_pd = sil.to_pandas()
-            curve = (
-                alt.Chart(sil_pd)
-                .mark_line(strokeWidth=2, point=alt.OverlayMarkDef(size=70, filled=True))
-                .encode(
-                    x=alt.X("k:O", title="Groups"),
-                    y=alt.Y("silhouette:Q", title="Silhouette"),
-                    tooltip=[
-                        alt.Tooltip("k:O", title="Groups"),
-                        alt.Tooltip("silhouette:Q", format=".3f"),
-                        alt.Tooltip("smallest:Q", title="Smallest group"),
-                        alt.Tooltip("viable:N", title="Viable"),
-                    ],
-                )
-                .properties(height=200)
-            )
-            st.altair_chart(theme.base_chart(curve, dark), use_container_width=True)
-            table(sil)
+    with st.expander("Quality and opportunity scores for the whole position"):
+        st.caption(
+            "Both are weighted means of standardized metrics, weighted by how "
+            "well each one repeats year to year. Relative to this position and "
+            "season — +1 is one standard deviation, not an absolute."
+        )
+        table(
+            pool.select(
+                "player_name", "team", "games", "quality_score", "quality_pct",
+                "opportunity_score", "opportunity_pct", "ppg", "pos_rank",
+            ).sort("quality_pct", descending=True)
+        )
 
     with st.expander("Feature coverage"):
         st.caption(
@@ -743,7 +686,14 @@ def _tab_players(p: dict[str, Any]) -> None:
         table(ft.coverage_report(feats).filter(pl.col("scope") == "ALL"))
 
     st.divider()
+    # Stability comes before the backtest deliberately. It answers whether any of
+    # these measurements repeat at all, which is the question that has to be
+    # settled before an AUC means anything.
+    _stability_section(dark)
+    st.divider()
     _breakout_section(dark)
+    st.divider()
+    _projection_section(dark)
     st.divider()
     _rookie_section(dark)
 
@@ -764,6 +714,104 @@ def _backtest(by_position: bool) -> dict[str, pl.DataFrame]:
         "adequacy": bo.sample_adequacy(train),
         "coefs": bo.coefficients(train, by_position=by_position),
     }
+
+
+@st.cache_data(show_spinner="Measuring metric stability…")
+def _stability() -> tuple[pl.DataFrame, pl.DataFrame]:
+    table = stab.year_over_year()
+    return table, stab.axis_summary(table)
+
+
+def _stability_section(dark: bool) -> None:
+    st.subheader("Does a metric mean the same thing next year?")
+    st.caption(
+        "Rank every qualified player within his position and season, pair each "
+        "player-season with his own next one, and correlate the two percentiles. "
+        "No model and no outcome — this asks only whether a measurement repeats. "
+        "A metric that does not repeat is describing last season's variance, and "
+        "a board built on it ranks noise."
+    )
+
+    table_df, summary = _stability()
+    if not table_df.height:
+        st.info("Not enough paired seasons to measure stability.")
+        return
+
+    st.success(
+        "**Opportunity persists better than quality at every position** — the "
+        "premise this project is built on, with a number attached. It is also why "
+        "quality and volume are kept on separate axes instead of being mixed into "
+        "one distance metric: they carry forward at very different rates.",
+        icon="✅",
+    )
+
+    pivot = summary.pivot(on="axis", index="position", values="mean_r")
+    order = [c for c in ("position", "opportunity", "outcome", "quality") if c in pivot.columns]
+    table(pivot.select(order).sort("position"))
+    st.caption(
+        "Mean year-over-year percentile correlation across the metrics on each "
+        "axis. 1.0 would mean a metric repeats perfectly; 0.0 means this season "
+        "tells you nothing about next."
+    )
+
+    position = st.selectbox(
+        "Position", ["WR", "RB", "TE", "QB"], key="stability_pos",
+        help="Stability is measured within position — a tight end's separation is not a receiver's.",
+    )
+    sub = table_df.filter(pl.col("position") == position).sort("r_yoy", descending=True)
+
+    chart_df = sub.to_pandas()
+    colors = theme.position_colors(dark)
+    bars = (
+        alt.Chart(chart_df)
+        .mark_bar(cornerRadiusEnd=3, height=14)
+        .encode(
+            y=alt.Y("metric:N", sort="-x", title=None),
+            x=alt.X("r_yoy:Q", title="Year-over-year correlation"),
+            color=alt.Color(
+                "axis:N",
+                title="Axis",
+                scale=alt.Scale(
+                    domain=["opportunity", "quality", "outcome"],
+                    range=[colors["RB"], colors["WR"], colors["TE"]],
+                ),
+            ),
+            tooltip=[
+                alt.Tooltip("metric:N", title="Metric"),
+                alt.Tooltip("axis:N", title="Axis"),
+                alt.Tooltip("r_yoy:Q", title="Correlation", format=".3f"),
+                alt.Tooltip("n_pairs:Q", title="Pairs"),
+                alt.Tooltip("verdict:N", title="Verdict"),
+            ],
+        )
+        .properties(height=max(220, 18 * len(chart_df)))
+    )
+    floor = (
+        alt.Chart(chart_df)
+        .mark_rule(strokeDash=[4, 4], strokeWidth=1, color=theme.ink(dark)["muted"])
+        .encode(x=alt.datum(stab.NOISE_FLOOR))
+    )
+    st.altair_chart(theme.base_chart(bars + floor, dark), use_container_width=True)
+    chart_note(
+        ["r_yoy", "n_pairs"],
+        extra=(
+            f"Dashed line is the noise floor ({stab.NOISE_FLOOR:.2f}). Below it a "
+            "metric is measuring the season rather than the player, and it is "
+            "kept out of every feature set."
+        ),
+    )
+    data_expander(sub)
+
+    dropped = stab.noisy_features(table_df)
+    if dropped.height:
+        with st.expander("What this check removed"):
+            st.markdown(
+                "Six columns were dropped from the quality sets for failing here, "
+                "and they are all things the fantasy literature treats as skill. "
+                "`contested_catch_rate` is the cleanest case: hand-charted, "
+                "plausible-sounding, and a coin flip on a small denominator."
+            )
+            table(dropped)
 
 
 def _breakout_section(dark: bool) -> None:
@@ -813,15 +861,14 @@ def _breakout_section(dark: bool) -> None:
     if stratified:
         st.warning(
             f"**Stratifying fixed a pathology but did not find an edge.** Pooled, "
-            f"this model was *anti*-predictive — AUC 0.401, below a coin flip, "
-            f"with inverted calibration. Fitting per position moves it to "
-            f"{auc:.3f}, roughly chance. Isolating why: shrinkage alone changed "
-            "nothing (0.401 → 0.398), cutting to four features recovered part "
-            "(0.447), and separating positions recovered the rest. Pooling was "
-            "averaging four different relationships and fitting none of them. It "
-            f"still does not beat draft price — the gap interval "
-            f"[{d_lo:+.3f}, {d_hi:+.3f}] covers zero — but 'no signal' is a "
-            "different and more honest result than 'reliably wrong'.",
+            f"this model sits below a coin flip with inverted calibration. "
+            f"Fitting per position moves it to {auc:.3f}, roughly chance — "
+            "pooling was averaging four different relationships and fitting none "
+            f"of them. It still does not beat draft price: the gap interval "
+            f"[{d_lo:+.3f}, {d_hi:+.3f}] covers zero. 'No signal' is a different "
+            "and more honest result than 'reliably wrong', and it is the one "
+            "supported here. The continuous-target version below measures the "
+            "same gap about five times more precisely.",
             icon="⚠️",
         )
     else:
@@ -839,7 +886,7 @@ def _breakout_section(dark: bool) -> None:
     st.caption(
         "Events per variable is the standard adequacy check for a fit like this, "
         "and the conventional floor is ten. Nothing here reaches it. That is the "
-        "cost of stratifying a 629-row sample four ways, and it is the first "
+        "cost of stratifying an 831-row sample four ways, and it is the first "
         "thing to read before any number below."
     )
     table(res["adequacy"])
@@ -863,8 +910,8 @@ def _breakout_section(dark: bool) -> None:
     st.caption(
         "Players sorted into four groups by predicted probability, against what "
         "actually happened. If the model worked, the actual rate would rise left "
-        "to right. Four groups rather than ten because ~280 out-of-sample rows "
-        "makes a decile ±7 points — too wide to read."
+        "to right. Four groups rather than ten because 540 out-of-sample rows "
+        "makes a decile ±6 points — too wide to read."
     )
     cal_pd = cal.to_pandas()
     bars = (
@@ -923,6 +970,83 @@ def _breakout_section(dark: bool) -> None:
             "as estimates of an effect."
         )
         table(res["coefs"])
+
+
+@st.cache_data(show_spinner="Fitting the continuous-target model…")
+def _projection() -> tuple[pl.DataFrame, pl.DataFrame]:
+    train = bo.training_frame()
+    if not train.height:
+        return pl.DataFrame(), pl.DataFrame()
+    preds = pj.fit_predict(train)
+    return preds, pj.skill(preds)
+
+
+def _projection_section(dark: bool) -> None:
+    st.subheader("The same question, asked more precisely")
+    st.caption(
+        "The backtest above collapses the outcome into beat/miss, which throws "
+        "away everything except which side of the line a player landed on — RB4 "
+        "and RB40 are the same 'no' if you paid for RB3. This version keeps the "
+        "outcome continuous: predict where a player finishes among drafted "
+        "players at his position, and score it by rank correlation."
+    )
+
+    preds, skill = _projection()
+    if not skill.height:
+        st.info("Not enough labeled seasons to fit.")
+        return
+
+    row = skill.filter(pl.col("scope") == "all")
+    model = float(row.get_column("spearman")[0])
+    price = float(row.get_column("spearman_adp_only")[0])
+    lo, hi = float(row.get_column("delta_lo")[0]), float(row.get_column("delta_hi")[0])
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Model", f"{model:.3f}", help=glossary.describe("spearman"))
+    c2.metric("ADP alone", f"{price:.3f}", help=glossary.describe("spearman_adp_only"))
+    c3.metric(
+        "Difference",
+        f"{model - price:+.3f}",
+        delta=f"[{lo:+.3f}, {hi:+.3f}]",
+        delta_color="off",
+        help="95% interval from a season-level bootstrap.",
+    )
+
+    st.info(
+        f"**Predicting the finish is easy. Beating the price is not.** Both the "
+        f"model and ADP alone rank next season at about {model:.2f} — usage "
+        "persists, so anything sane gets there. The number that matters is the "
+        f"gap between them, and it is {model - price:+.3f} with an interval of "
+        f"[{lo:+.3f}, {hi:+.3f}]. That interval is roughly five times tighter "
+        "than the beat/miss version above, which is the entire point of the "
+        "continuous target: 'no edge' measured to ±0.01 is a finding, while 'no "
+        "edge' measured to ±0.06 is only an absence of evidence.",
+        icon="📏",
+    )
+
+    st.markdown("#### Per position")
+    st.caption(
+        "Quarterback is the one position where the usage features make things "
+        "actively worse — the interval sits entirely below zero. Rushing share "
+        "and expected-points share are already fully priced there, and adding "
+        "them to a small sample adds variance and nothing else."
+    )
+    table(
+        skill.filter(pl.col("scope").is_in(["QB", "RB", "WR", "TE"])).select(
+            "scope", "n", "spearman", "spearman_adp_only", "delta", "delta_lo", "delta_hi"
+        )
+    )
+
+    with st.expander("Full projection numbers"):
+        st.markdown("**Skill — overall, by position, by test season**")
+        table(skill)
+        st.markdown("**Out-of-sample projections**")
+        table(
+            preds.select(
+                "label_season", "name", "position", "adp_pos_rank",
+                "pred", "pred_adp_only", "finish_pos_rank", "finish_pct",
+            ).sort(["label_season", "pred"], descending=[True, True])
+        )
 
 
 @st.cache_data(show_spinner="Fitting rookies…")

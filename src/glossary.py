@@ -95,21 +95,74 @@ TERMS: dict[str, Term] = {
         still be excellent after contact — that gap is the whole point.""",
         "Quality"),
     "ypa": _t("Yards per attempt", "Passing yards per pass attempt.", "", "Quality"),
+    "pts_over_exp_per_att": _t(
+        "Points over expected per attempt", "Fantasy points above what his opportunities were worth.",
+        """Actual minus expected, divided by pass attempts. Expected points are
+        rebuilt under your league's scoring rather than taken from the source,
+        which hardcodes full PPR. Positive means he converted his chances better
+        than an average passer would have — and it repeats at only 0.22 year to
+        year, so read a big number as a season he had, not a skill he has.""",
+        "Quality"),
+    "ryoe_per_att": _t(
+        "Rush yards over expected per carry", "Yards gained above what the blocking and box predicted.",
+        """Tracking data models what an average back gains given the blocking,
+        the box count and where every defender was, then charges the runner only
+        with the difference — which is what yards per carry fails to do. Added
+        here expecting it to be the running back's yards per route run. It
+        persists year to year at 0.20, barely above the noise floor and well
+        under the receiving metrics at the same position, so read it as the best
+        available rushing measure rather than a strong one.""", "Quality"),
+    "rush_efficiency": _t(
+        "Rushing directness", "How straight a line he runs. Higher is more direct.",
+        """Next Gen Stats measures distance travelled per yard gained; the sign
+        is flipped here so that, like every other quality column in this project,
+        higher is better.""", "Quality"),
+    "catch_rate_on_catchable": _t(
+        "Catch rate on catchable balls", "Catches divided by throws that were actually catchable.",
+        """Catch rate charges a receiver for every ball thrown nowhere near him,
+        so it is partly a measurement of his quarterback. Splitting on whether
+        the throw was catchable puts the passer's contribution in
+        `catchable_rate` and leaves the receiver's hands here. Hand-charted by
+        FTN, 2022 onward, and it only survives the persistence check at wide
+        receiver.""", "Quality"),
     "quality_score": _t(
-        "Quality score", "Mean standardized per-opportunity quality, within position.",
+        "Quality score", "Weighted standardized per-opportunity quality, within position.",
         """Relative, not absolute: +1 means one standard deviation better per
         opportunity than other players at his position that season. Built only
-        from rate metrics — nothing in it scales with how much he plays.""",
-        "Quality"),
-    "quality_tier": _t("Quality tier", "Which quality group he falls in. 1 is best.",
-                       "Clusters ordered by mean quality, so tier 1 is always the top group.",
-                       "Quality"),
+        from rate metrics — nothing in it scales with how much he plays. Each
+        metric is weighted by how well it repeats year to year rather than
+        counted equally, because a flat average gives a column that is half noise
+        the same vote as one that is not.""", "Quality"),
+    "r_yoy": _t(
+        "Year-over-year correlation", "How well a metric repeats for the same player next season.",
+        """Percentile rank within position and season, correlated against that
+        player's own next season. Below about 0.20 a metric is describing the
+        season rather than the player. No outcome data enters, so selecting
+        features on this is not the same as selecting them on what predicts
+        fantasy points.""", "Backtest"),
+    "n_pairs": _t("Player-season pairs", "How many consecutive-season pairs the correlation used.", "",
+                  "Backtest"),
+    "spearman": _t("Rank correlation", "How well predicted order matched actual order. 1.0 is perfect.",
+                   """Uses every pair of players rather than only those spanning a
+                   threshold, which is why it can measure on 540 rows what AUC
+                   cannot.""", "Backtest"),
+    "spearman_adp_only": _t("Rank correlation, price alone", "The same, for a model that sees only ADP.",
+                            "The number the model has to beat to be worth anything.", "Backtest"),
+    "finish_pct": _t("Finish percentile", "Where he finished among drafted players at his position. 1.0 is best.",
+                     """Continuous rather than a beat/miss flag, which is what
+                     makes the difference against ADP measurable to within
+                     ±0.01. A season missed entirely ranks last, because missing
+                     it is the outcome.""", "Backtest"),
+    "pred": _t("Projected finish percentile", "The model's out-of-sample projection.",
+               "From a model that never saw this player's season.", "Backtest"),
+    "pred_adp_only": _t("Projected finish, price alone", "The same projection from ADP alone.", "", "Backtest"),
     # --- Opportunity and situation -----------------------------------------
     "opportunity_score": _t(
-        "Opportunity score", "Mean standardized volume, within position.",
-        """The axis ADP prices well. Kept separate from quality on purpose —
-        mixing them is what made the old clustering rediscover the market.""",
-        "Opportunity"),
+        "Opportunity score", "Weighted standardized volume, within position.",
+        """The axis ADP prices well, and the one that carries forward: volume
+        repeats year to year at 0.47-0.55 against 0.28-0.44 for quality. Kept on
+        a separate axis from quality on purpose — mixing them is what made the
+        old clustering rediscover the market.""", "Opportunity"),
     "teammate_top_share": _t(
         "Best teammate's target share", "The largest target share on his team other than his own.",
         """What makes a good player cheap, and what makes him a buy when that
@@ -131,6 +184,69 @@ TERMS: dict[str, Term] = {
         nor his efficiency says so.""", "Opportunity"),
     "vacated_carry_share_next": _t("Vacated carry share", "Share of his team's carries held by players who left.",
                                    "The running back version of vacated targets.", "Opportunity"),
+    # --- Where the work happened -------------------------------------------
+    "exp_td_share": _t(
+        "Touchdown equity share", "Share of his offense's expected touchdowns, running and passing.",
+        """Every play carries a modelled probability of ending in a touchdown,
+        given where it was snapped and how far the ball travelled. Sum his,
+        divide by his team's, and you get the fraction of the offence's scoring
+        chances that run through him. This is the largest thing target share
+        cannot see: two receivers on 25% of targets are not the same asset when
+        one of them is the goal-line look. Measured over the weeks he played, so
+        it is not a reward for staying healthy.""", "Opportunity"),
+    "exp_td_per_touch": _t(
+        "Touchdown equity per touch", "Expected touchdowns per target or carry.",
+        """Where his touches happen rather than how many he gets. High means he
+        is used near the goal line; it describes the role, not the player.""",
+        "Opportunity"),
+    "rz_target_share": _t(
+        "Red-zone target share", "His share of team targets from inside the 20.",
+        "Measured over the weeks he played, against his own team's total.", "Opportunity"),
+    "ez_target_share": _t(
+        "End-zone target share", "His share of team targets thrown to or past the goal line.",
+        """A throw counts when its air yards reach the end zone, which does not
+        require the offence to already be inside the twenty — so this catches the
+        forty-yard post that is also a scoring chance, not just the fade.""",
+        "Opportunity"),
+    "neutral_target_share": _t(
+        "Neutral-script target share", "His target share with the game still live.",
+        """Restricted to plays where Vegas win probability sat between 0.2 and
+        0.8. Targets accumulated down three scores count the same in the raw
+        share and are worth far less going forward, because next season's team
+        may not trail by three scores. Win probability rather than score, because
+        it already accounts for time: down seven in the first quarter is a normal
+        game, down seven with two minutes left is not.""", "Opportunity"),
+    "rz_carry_share": _t("Red-zone carry share", "His share of team carries from inside the 20.", "",
+                         "Opportunity"),
+    "gz_carry_share": _t(
+        "Goal-line carry share", "His share of team carries from inside the 5.",
+        """The single largest swing in a running back's scoring. A back with 18%
+        of the carries and 60% of the goal-line work is a different asset from
+        one with the same 18% and none of it, and `rush_share` reports them
+        identically.""", "Opportunity"),
+    "neutral_rush_share": _t("Neutral-script carry share", "His carry share with the game still live.",
+                             "The rushing version of neutral target share.", "Opportunity"),
+    "catchable_rate": _t(
+        "Catchable target rate", "Share of throws at him that were catchable.",
+        """A property of his quarterback, not of him. Catch rate charges a
+        receiver for every ball thrown nowhere near him; this is the half of that
+        which belongs to the passer. Hand-charted by FTN, 2022 onward.""",
+        "Opportunity"),
+    "screen_target_rate": _t(
+        "Screen target rate", "Share of his targets that were screens.",
+        """A discount, not a virtue. Screen yards are manufactured by the
+        play-caller rather than earned against coverage, so efficiency resting on
+        a heavy screen diet is a worse bet to repeat under a new coordinator.""",
+        "Opportunity"),
+    "contested_rate": _t("Contested target rate", "Share of his targets that were contested.",
+                         "How often he is asked to win a ball in traffic. FTN charting, 2022 onward.",
+                         "Opportunity"),
+    "stacked_box_rate": _t("Stacked box rate", "Share of his carries against eight or more defenders.",
+                           "Context for rushing efficiency: a back facing loaded boxes has a harder job.",
+                           "Opportunity"),
+    "time_to_los": _t("Time to line of scrimmage", "Average seconds from handoff to crossing the line.",
+                      "Lower means a one-cut runner; higher means he dances behind the line.",
+                      "Opportunity"),
     # --- Valuation ----------------------------------------------------------
     "quality_pct": _t("Quality percentile", "Where his per-opportunity quality ranks in his position. 100 is best.",
                       "Percentile rather than raw score, so it is comparable to a price percentile.",
@@ -299,7 +415,7 @@ TERMS: dict[str, Term] = {
     "draft_pick": _t("Draft pick", "Overall pick number. 262 means undrafted.", "See draft round.",
                      "Context"),
     "undrafted": _t("Undrafted", "Whether he entered the league as an undrafted free agent.",
-                    "Excluded from clustering — a standardized boolean spikes the distance metric.",
+                    "Excluded from the quality score — a standardized boolean spikes the mean.",
                     "Context"),
     # --- Value and replacement ---------------------------------------------
     "pos_rank": _t("Positional finish", "Where he finished among his position that season.",
@@ -427,20 +543,13 @@ TERMS: dict[str, Term] = {
         Computed on the pool remaining after your cuts and the players already
         gone, so it reflects the board you actually face. This reframes the draft
         from "who is best available" to "who do I lose by waiting".""", "Board"),
-    # --- Clustering --------------------------------------------------------
-    "cluster": _t("Usage group", "Which usage archetype he falls into, within his position.",
-                  """From k-means on role features only — production and draft pedigree are
-                  excluded so the groups are not scoring tiers in disguise. Clusters
-                  describe; they do not predict.""", "Archetypes"),
-    "silhouette": _t("Silhouette", "How well-separated the groups are. Higher is better.",
-                     """Peaks at two groups for every position here and falls after, which
-                     means NFL usage has one dominant axis rather than many archetypes.""",
-                     "Archetypes"),
-    "dist_to_center": _t("Distance to group center", "How typical he is of his group.",
-                         "Large values are players who fit no archetype well.", "Archetypes"),
-    "distance": _t("Usage distance", "How different two players' usage profiles are.",
-                   """Euclidean distance in standardized role space. Zero would be
-                   identical usage. This is the comparable-player number.""", "Archetypes"),
+    # --- Comparables -------------------------------------------------------
+    "distance": _t("Profile distance", "How different two players' per-opportunity profiles are.",
+                   """Euclidean distance in the standardized quality space. Zero
+                   would be identical. This replaced the k-means archetypes, which
+                   topped out at a silhouette of 0.29 — a partition of a continuum
+                   rather than real groups — and added nothing downstream.""",
+                   "Comparables"),
     # --- Rookies -----------------------------------------------------------
     "draft_ovr": _t("Overall draft pick", "Where the NFL drafted him.",
                     """The league's own aggregated scouting opinion, and by a wide margin

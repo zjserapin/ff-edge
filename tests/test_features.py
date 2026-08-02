@@ -1,4 +1,4 @@
-"""Feature table and clustering.
+"""Feature table, quality/opportunity scores, and comparables.
 
 Weighted toward the four silent-failure joins. Each of them returns a
 plausible-looking frame when it goes wrong — a dtype mismatch that matches
@@ -156,79 +156,77 @@ def test_undrafted_is_encoded_not_null(df: pl.DataFrame) -> None:
 def test_outcome_columns_are_not_features() -> None:
     """fantasy_points and pos_rank are the target. Feeding them back in is a leak."""
     for scope in (None, "QB", "RB", "WR", "TE"):
-        cols = set(ft.feature_columns(scope)) | set(ft.cluster_feature_columns(scope))
+        cols = set(ft.feature_columns(scope)) | set(ft.quality_features(scope))
         assert not (cols & set(ft.OUTCOME_COLUMNS))
 
 
-def test_cluster_features_exclude_production_and_booleans() -> None:
-    """Clustering on points produces scoring tiers, not usage archetypes.
+def test_quality_features_exclude_production_and_booleans() -> None:
+    """Scoring on points makes the quality axis a scoring tier in disguise.
 
-    And a standardized boolean spikes the distance metric: with `undrafted` in
-    the set, QB's first split was Taysom Hill alone against the other 31.
+    The whole reason quality is computed separately is that ADP already prices
+    production; if points leak into it, the board rediscovers the market. And a
+    standardized boolean spikes the mean: `undrafted` is a large value on a
+    handful of rows and nothing on the rest.
     """
     for scope in (None, "QB", "RB", "WR", "TE"):
-        cols = set(ft.cluster_feature_columns(scope))
+        cols = set(ft.quality_features(scope))
         assert "exp_ppg" not in cols
         assert "pts_over_exp_per_game" not in cols
         assert "undrafted" not in cols
         assert "ppg" not in cols
 
 
-# --- clustering -------------------------------------------------------------
+# --- quality and opportunity scores -----------------------------------------
 
 
 @pytest.fixture(scope="module")
-def clusters(df: pl.DataFrame) -> pl.DataFrame:
-    return ar.cluster(2025, df=df)
+def scores(df: pl.DataFrame) -> pl.DataFrame:
+    return ar.scores(2025, df=df)
 
 
-def test_clustering_is_reproducible(df: pl.DataFrame, clusters: pl.DataFrame) -> None:
-    """Same seed, same labels. Otherwise the app shows a different board on reload."""
-    again = ar.cluster(2025, df=df)
-    assert clusters.equals(again)
+def test_scores_are_reproducible(df: pl.DataFrame, scores: pl.DataFrame) -> None:
+    """Same input, same output. Otherwise the app shows a different board on reload."""
+    assert scores.equals(ar.scores(2025, df=df))
 
 
-def test_no_singleton_clusters(clusters: pl.DataFrame) -> None:
-    """A cluster of one is k-means quarantining an outlier, not an archetype.
+def test_scores_are_relative_to_position(scores: pl.DataFrame) -> None:
+    """Both scores are means of within-position standardized features.
 
-    Guards the viability rule in choose_k. Without it, QB selects k=3 on a
-    higher silhouette whose smallest cluster has a single member.
+    So every position's mean sits near zero, and a score is only comparable to
+    other players at the same position. Pooling them would rank a tight end's
+    separation against a receiver's and invent a gap that is not there.
     """
-    sizes = clusters.group_by(["position", "cluster"]).agg(pl.len().alias("n"))
-    assert sizes.get_column("n").min() >= 4
+    for position in scores.get_column("position").unique().to_list():
+        sub = scores.filter(pl.col("position") == position)
+        if sub.height < 12:
+            continue
+        assert abs(float(sub.get_column("quality_score").mean())) < 0.35
+        assert float(sub.get_column("quality_pct").max()) <= 100.0
+        assert float(sub.get_column("quality_pct").min()) > 0.0
 
 
-def test_choose_k_flags_unviable_solutions(df: pl.DataFrame) -> None:
-    """The viability flag must actually fire on this data, or it is untested."""
-    pool = df.filter((pl.col("season") == 2025) & (pl.col("games") >= 8))
-    qb = pool.filter(pl.col("position") == "QB")
-    x, used = ar._matrix(qb, ft.cluster_feature_columns("QB"))
-    assert used
-    scores = ar.choose_k(x, (2, 6))
-    assert not scores.get_column("viable").all(), "expected some k to be unviable at QB"
-    # And the winner among viable ones must be viable.
-    chosen_k = int(clusters_k(df))
-    assert scores.filter(pl.col("k") == chosen_k).get_column("viable").all()
+def test_scores_separate_quality_from_opportunity(scores: pl.DataFrame) -> None:
+    """The two axes must not be the same measurement twice.
 
-
-def clusters_k(df: pl.DataFrame) -> int:
-    out = ar.cluster(2025, positions=("QB",), df=df)
-    return int(out.get_column("k")[0])
-
-
-def test_k_override_is_respected(df: pl.DataFrame) -> None:
-    out = ar.cluster(2025, df=df, k=4)
-    assert set(out.get_column("k").unique().to_list()) == {4}
-    per_pos = out.group_by("position").agg(pl.col("cluster").n_unique().alias("n"))
-    assert (per_pos.get_column("n") == 4).all()
+    If they correlated tightly, clustering or ranking on quality would just be
+    rediscovering volume — which is the failure mode this split exists to avoid.
+    """
+    for position in ("WR", "RB"):
+        sub = scores.filter(pl.col("position") == position)
+        if sub.height < 20:
+            continue
+        r = sub.select(pl.corr("quality_pct", "opportunity_pct")).item()
+        assert r is not None and abs(float(r)) < 0.85, (
+            f"{position}: quality and opportunity are nearly the same column (r={r:.2f})"
+        )
 
 
 def test_neighbors_are_same_position_and_exclude_self(
-    df: pl.DataFrame, clusters: pl.DataFrame
+    df: pl.DataFrame, scores: pl.DataFrame
 ) -> None:
-    target = clusters.filter(pl.col("position") == "WR").sort("pos_rank")
+    target = scores.filter(pl.col("position") == "WR").sort("pos_rank")
     pid = target.get_column("player_id")[0]
-    nb = ar.neighbors(pid, clusters, df, n=6, season=2025)
+    nb = ar.neighbors(pid, scores, df, n=6, season=2025)
 
     assert nb.height == 6
     assert set(nb.get_column("position").unique().to_list()) == {"WR"}
@@ -238,11 +236,3 @@ def test_neighbors_are_same_position_and_exclude_self(
     assert dists == sorted(dists)
 
 
-def test_cluster_profiles_label_every_cluster(
-    df: pl.DataFrame, clusters: pl.DataFrame
-) -> None:
-    prof = ar.cluster_profiles(clusters, df, season=2025)
-    expected = clusters.select("position", "cluster").unique().height
-    assert prof.height == expected
-    assert prof.get_column("label").is_not_null().all()
-    assert (prof.get_column("n") > 0).all()

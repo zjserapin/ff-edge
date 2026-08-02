@@ -102,7 +102,7 @@ def board(
     fits = (
         clusters
         if clusters is not None
-        else ar.cluster(feature_season, positions=positions, min_games=min_games, df=base)
+        else ar.scores(feature_season, positions=positions, min_games=min_games, df=base)
     )
     if not fits.height:
         return pl.DataFrame()
@@ -112,12 +112,20 @@ def board(
         return pl.DataFrame()
 
     season_features = base.filter(pl.col("season") == feature_season)
+    # Carried for reading the row, not for scoring it — the verdict comes from
+    # the percentiles below. `drop_rate` used to sit here and was removed for the
+    # same reason it left the quality set: it repeats year to year at 0.10, so
+    # putting it in front of a drafter invites a decision on noise. The
+    # touchdown-equity and goal-line columns replace it because they persist
+    # (0.36-0.56) and because they explain the gap the board is pointing at.
     keep = [
         c
         for c in (
             "player_id", "routes", "yprr", "tprr", "target_share", "route_share",
-            "snap_pct", "adot", "avg_separation", "drop_rate", "ypc",
-            "yards_after_contact_per_att", "teammate_top_share", "is_team_alpha",
+            "snap_pct", "adot", "avg_separation", "ypc",
+            "yards_after_contact_per_att", "ryoe_per_att",
+            "exp_td_share", "ez_target_share", "gz_carry_share",
+            "neutral_target_share", "teammate_top_share", "is_team_alpha",
             "vacated_target_share_next", "vacated_carry_share_next", "age",
         )
         if c in season_features.columns
@@ -128,7 +136,7 @@ def board(
         .join(
             fits.select(
                 pl.col("player_id").alias("gsis_id"),
-                "quality_score", "opportunity_score", "quality_tier", "cluster",
+                "quality_score", "opportunity_score",
                 pl.col("ppg").alias("prior_ppg"),
                 pl.col("pos_rank").alias("prior_pos_rank"),
             ),

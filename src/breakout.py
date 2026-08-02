@@ -21,57 +21,74 @@ across tiers at roughly 0.22 and defined everywhere. It is the default here;
 `adp_tier` and `tier_delta` are still carried for display, and `beat_ratio` is a
 parameter, so the tier framing is one argument away.
 
-**The honest size.** 629 labeled player-seasons across four label years, ~140
-positives, and season-forward validation leaves exactly two test folds. Every
-design choice below follows from that: a linear model rather than a boosted one,
-four calibration bins rather than ten, and an ADP-only baseline reported beside
-every score.
+**The honest size.** 831 labeled player-seasons across six label years, ~190
+positives, and season-forward validation spends the first two years on the
+initial training window, leaving four test folds and 540 out-of-sample rows.
+Every design choice below follows from that: a linear model rather than a boosted
+one, four calibration bins rather than ten, and an ADP-only baseline reported
+beside every score.
+
+That window used to start at 2020, which bought two folds and 284 rows, and
+widening it to 2018 was the single largest improvement available — not because
+any score moved much, but because the interval around the score halved. See
+`projection.py` for the same question asked with a continuous target, which
+halves it again.
 
 **Stratified by position**, because positions are not interchangeable: rushing
 share means something at quarterback and nothing at receiver, and a pooled fit
 must either drop such columns or feed every position a mostly-irrelevant vector.
-That choice is not free — it splits 629 labeled player-seasons into QB 77, RB
-184, TE 67, WR 212 — so `sample_adequacy` reports events per variable per
-position and should be read before any number below.
+That choice is not free — it splits the out-of-sample rows into QB 77, RB 184,
+TE 67, WR 212 — so `sample_adequacy` reports events per variable per position and
+should be read before any number below.
 
 **What it found: no usable edge, but stratifying removed a real pathology.**
 
     configuration                          out-of-sample AUC
-    pooled, 10 features, C=1.0                    0.401
-    pooled, 10 features, C=0.25                   0.398
-    pooled,  4 features, C=0.25                   0.447
-    stratified, 4 per position                    0.514
+    pooled, 10 features, C=1.0                    0.468
+    stratified, 4 per position                    0.513
 
-    stratified vs ADP-only            +0.027   95% CI [-0.035, +0.094]
-    base rate                          0.224   (629 labeled player-seasons)
+    stratified vs ADP-only            +0.037   95% CI [-0.011, +0.087]
+    base rate                          0.226   (831 labeled player-seasons)
 
-The pooled model was *anti*-predictive — below 0.5, with inverted calibration
-(lowest-probability quartile hit 28%, highest hit 14%). Stratifying moves it to
-roughly chance. The attribution above isolates why: shrinkage alone changed
-nothing (0.401 -> 0.398), cutting to four features recovered part of it
-(0.447), and fitting separately per position recovered the rest (0.514).
-Pooling was mixing four different relationships and learning their average,
-which fit none of them.
+The pooled model is below chance, with inverted calibration. Stratifying moves it
+to roughly even. Pooling mixes four different relationships and learns their
+average, which fits none of them. On the original 2020-2025 window the pooled fit
+was far worse (0.401) — more data pulled it toward chance, which is what happens
+to a fit that was mostly variance, and is itself evidence that the pooled
+"signal" never existed.
 
 It still does not beat price. The difference interval covers zero at every
 position. But "no signal" is a different and more honest result than "reliably
 wrong", and it is the one supported here.
 
-Three checks before trusting any of that, since a sub-0.5 AUC usually means a
-sign error: shuffled labels give 0.497 across twelve seeds, so the pipeline is
-correct; in-sample AUC is 0.630, so the fit does find structure; and sweeping
-regularization from C=1.0 to C=0.001 on the pooled model made out-of-sample
-*worse*, which overfitting noise does not do.
+Two checks before trusting any of that, since a sub-0.5 AUC usually means a sign
+error: shuffled labels give 0.497 across eight permutations, so the pipeline is
+correct; and sweeping regularization from C=1.0 to C=0.001 on the pooled model
+made out-of-sample *worse*, which overfitting noise does not do.
 
-Per position, with the caveat that only WR has even a marginal sample:
+Per position:
 
-    WR   AUC 0.556   delta +0.059   5.5 events per variable   thin
-    RB   AUC 0.536   delta +0.026   4.3                       very thin
-    QB   AUC 0.504   delta +0.025   2.5                       very thin
-    TE   AUC 0.465   delta -0.076   1.5                       insufficient
+    QB   AUC 0.623   delta +0.065   3.25 events per variable  very thin
+    WR   AUC 0.544   delta +0.030   6.5                       thin
+    RB   AUC 0.475   delta +0.044   5.25                      thin
+    TE   AUC 0.471   delta +0.018   2.5                       very thin
 
 Nothing here inverts a model and calls it a signal, and nothing reports a
 position's result without its denominator.
+
+**Things that were tried and did not help.** Recorded because a negative result
+that is not written down gets re-run every year:
+
+    play-context features added to these sets      0.513 -> 0.500
+    quality/opportunity composite scores           delta -0.013
+    Gaussian-mixture soft cluster membership       delta -0.022
+    partial pooling across positions               delta -0.030
+
+The first is the instructive one. Red-zone share, touchdown equity and rush
+yards over expected are real measurements that do persist year to year (see
+`stability`), and adding them still cost accuracy — at two to three events per
+variable, another column buys less signal than it costs in variance. The binding
+constraint here is the number of label seasons, not the number of columns.
 """
 
 from __future__ import annotations
@@ -347,15 +364,21 @@ def model_features(position: str | None = None) -> list[str]:
     """Features the backtest may see, price included. Position-specific by default.
 
     Four per position, not ten, and the arithmetic forces it. Stratifying splits
-    629 labeled player-seasons into QB 77, RB 184, TE 67, WR 212 — and
-    season-forward folds cut that again, so the first QB fold trains on 36 rows
-    with 8 positives. The usual floor is ten events per variable; ten features
-    there would be under one. Four is still thin (two events per variable) and
-    is the most this sample can carry without the coefficients being noise.
+    831 labeled player-seasons four ways, and season-forward folds cut that
+    again, so the first quarterback fold trains on 42 rows with 13 positives. The
+    usual floor is ten events per variable; ten features there would be barely
+    one. Four gives 2.5 to 6.5 depending on position — still thin, and the most
+    this sample carries without the coefficients being noise.
 
     The columns are chosen in advance from what is known to separate players at
     each position, never by searching for what scores well — with samples this
     small, searching *will* find something.
+
+    Adding the play-context columns from `context.py` was tried and measured:
+    AUC fell from 0.513 to 0.500. Those columns persist year to year and are
+    genuinely informative about a player, and at this events-per-variable ratio
+    a sixth feature still costs more variance than it buys. That is a statement
+    about the sample, not about the metrics.
 
     `seasons_exp` is excluded everywhere despite being available: it correlates
     0.964 with `age`, and with both in the fit the pooled model split them into

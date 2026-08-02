@@ -255,10 +255,12 @@ def test_position_feature_sets_are_position_appropriate() -> None:
 def test_stratifying_beats_pooling_on_this_data(train: pl.DataFrame) -> None:
     """The reason the default changed, pinned so a regression is visible.
 
-    Pooled, the model was anti-predictive (AUC ~0.40). Fitting per position
-    moves it to roughly chance. This is not a claim that the model works — it
-    does not beat draft price either way — only that pooling four different
-    relationships into one fit was actively harmful.
+    On the original 2020-2025 window the pooled model was *anti*-predictive
+    (AUC ~0.40) and stratifying moved it to roughly chance. Widening to 2018
+    softened that — pooled now lands near 0.47 rather than 0.40, which is what
+    more data does to a fit that was mostly variance — so the assertion here is
+    the durable half of the finding: stratifying is better than pooling, and
+    pooling is not above chance.
     """
     strat = bo.fit_predict(train, by_position=True)
     pooled = bo.fit_predict(train, by_position=False)
@@ -269,8 +271,8 @@ def test_stratifying_beats_pooling_on_this_data(train: pl.DataFrame) -> None:
             p.get_column("p_breakout").to_numpy(),
         )
 
-    assert auc_of(pooled) < 0.45, "pooled model is no longer anti-predictive"
-    assert auc_of(strat) > auc_of(pooled) + 0.05
+    assert auc_of(pooled) < 0.50, "pooled model is no longer below chance"
+    assert auc_of(strat) > auc_of(pooled) + 0.02
 
 
 def test_sample_adequacy_reports_the_denominator(train: pl.DataFrame) -> None:
@@ -287,7 +289,11 @@ def test_sample_adequacy_reports_the_denominator(train: pl.DataFrame) -> None:
     ranked = adequacy.sort("events_per_variable", descending=True)
     assert ranked.get_column("position")[0] == "WR"
     assert ranked.get_column("position")[-1] == "TE"
-    assert ranked.get_column("verdict")[-1] == "insufficient"
+    # Widening the window to 2018 moved TE from "insufficient" to "very thin".
+    # The assertion is that it is still nowhere near adequate, not that it sits
+    # in one particular bucket — pinning the bucket would fail on good news.
+    assert ranked.get_column("verdict")[-1] in ("insufficient", "very thin")
+    assert ranked.get_column("events_per_variable")[-1] < 5
 
 
 def test_current_scores_are_ranked_within_position() -> None:

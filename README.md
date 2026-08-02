@@ -18,8 +18,8 @@ uv run streamlit run app.py              # the app: Landscape / Players / Strate
 ```
 
 `uv run python -m src.bootstrap --light --analysis` does the cache and the
-derived artifacts in one command. `uv run pytest` runs the suite (95 tests,
-~6s); it reads the local cache and skips cleanly when cold.
+derived artifacts in one command. `uv run pytest` runs the suite (128 tests,
+~10s); it reads the local cache and skips cleanly when cold.
 
 To pull your own league data, export your Sleeper **display name** (not your
 email) and re-run bootstrap. Both of these are read from the shell rather than
@@ -64,8 +64,11 @@ directly.
 | `src/scoring.py` | Sleeper scoring settings → points, replacement level, PAR. |
 | `src/landscape.py` | How positional value has moved over time, in *your* scoring. |
 | `src/features.py` | One row per player-season: usage shares and rates, never totals. |
-| `src/archetypes.py` | Per-position clustering. Describes usage profiles; does not predict. |
+| `src/context.py` | Where the touches came from — red zone, goal line, TD equity, neutral script. |
+| `src/stability.py` | Does a metric repeat next year? The gate every feature has to clear. |
+| `src/archetypes.py` | Quality/opportunity scores and nearest-neighbour comparables. |
 | `src/breakout.py` | The beat-ADP backtest, with calibration against the ADP-only baseline. |
+| `src/projection.py` | The same question with a continuous target, which measures it ~5× tighter. |
 | `src/rookies.py` | Separate rookie model — draft capital, combine, vacated opportunity. |
 | `src/simulate.py` | Monte Carlo draft + season sim comparing draft strategies. |
 | `src/valuation.py` | Quality against price — where this project disagrees with ADP. |
@@ -91,39 +94,86 @@ directly.
 }
 ```
 
-14 read-only tools: `my_leagues`, `league_rosters`, `draft_history`,
+16 read-only tools: `my_leagues`, `league_rosters`, `draft_history`,
 `transactions`, `adp`, `survival`, `adp_movement`, `points_over_expected`,
-`usage_leaders`, `snap_trend`, `market_disagreement`, `player_lookup`,
-`data_inventory`, `refresh`. Nothing can modify a league.
+`usage_leaders`, `snap_trend`, `market_disagreement`, `metric_stability`,
+`touchdown_equity`, `player_lookup`, `data_inventory`, `refresh`. Nothing can
+modify a league.
 
 Run bootstrap once before first use so the tools answer from cache.
 
 ## What the analysis found
 
-Four findings, two of them negative. The negative ones are the point — a
+Several findings, most of them negative. The negative ones are the point — a
 research tool that only ever confirms things isn't measuring anything.
 
-**Prior-season usage does not predict beating ADP — but pooling positions was
-making it worse than useless.** Fitting one model across all four positions gave
-an out-of-sample AUC of 0.401, *below* a coin flip, with inverted calibration.
-Separate models per position move it to 0.514. The attribution is clean:
+**Opportunity persists year to year. Quality mostly doesn't.** The check that
+should have come first: rank every qualified player within his position and
+season, pair each player-season with his own next one, correlate the two
+percentiles. No model, no outcome, just "does this measurement repeat".
 
-| configuration | AUC |
+| position | opportunity | quality |
+|---|---:|---:|
+| WR | 0.549 | 0.442 |
+| RB | 0.526 | 0.278 |
+| TE | 0.510 | 0.400 |
+| QB | 0.472 | 0.394 |
+
+This reorganized the feature sets. Six columns turned out to be noise dressed as
+skill and were removed: `contested_catch_rate` (0.061 at WR, *negative* at TE),
+`drop_rate` (0.096), `catch_rate` at running back and tight end, `ypt` at
+running back. All four are things the fantasy literature treats as ability.
+`ryoe_per_att` — rush yards over expected, added expecting it to be the running
+back's yards per route run — persists at 0.202, barely above the floor. What
+actually persists about a running back is whether his offense throws to him.
+
+Selecting features this way uses no outcome data, so it is not the same as
+searching for what scores well. It is now a module (`src/stability.py`) and a
+test, so a noisy column cannot drift back in.
+
+**Prior-season usage does not predict beating ADP, and this is now measured to
+±0.01.** The original binary label — did he finish inside 60% of his price —
+gave stratified AUC 0.513 against 0.476 for price alone, a gap of +0.037 with an
+interval of [-0.011, +0.087]. That interval is too wide to conclude anything.
+
+Keeping the outcome continuous instead (where did he finish among drafted
+players at his position, scored by rank correlation) uses every pair rather than
+only those spanning a threshold:
+
+| | rank correlation |
 |---|---:|
-| pooled, 10 features | 0.401 |
-| pooled, stronger shrinkage | 0.398 |
-| pooled, 4 features | 0.447 |
-| **stratified, 4 per position** | **0.514** |
+| model | 0.495 |
+| ADP alone | 0.495 |
+| **difference** | **−0.000, 95% CI [−0.010, +0.011]** |
 
-Pooling was averaging four different relationships and fitting none of them. It
-still does not beat draft price (gap interval [-0.036, +0.094] covers zero), but
-"no signal" is a different and more defensible result than "reliably wrong". A
-sub-0.5 AUC is usually a sign error, so: shuffled labels give 0.497 across twelve
-seeds, in-sample AUC is 0.630, and tightening regularization made the pooled
-model worse rather than better — which overfitting noise does not do.
+Predicting next season's finish is easy — usage persists, so anything sane gets
+to ~0.5. Beating the *price* is the question, and the answer is no, now with an
+interval five times tighter. "No edge" measured to ±0.01 is a finding; "no edge"
+measured to ±0.06 is an absence of evidence.
 
-No position clears the conventional ten-events-per-variable floor (WR 5.5, RB
-4.3, QB 2.5, TE 1.5), and the app reports that table above the results.
+Things tried that did not help, recorded so they don't get re-run every August:
+
+| approach | gap vs ADP |
+|---|---:|
+| play-context features (red zone, TD equity, RYOE) | −0.013 |
+| quality/opportunity composite scores | −0.013 |
+| Gaussian-mixture soft cluster membership | −0.022 |
+| partial pooling across positions | −0.030 |
+| PCA on the quality block | worse at every position |
+
+The first is instructive. Those are real measurements that do persist — and
+adding them still cost accuracy, because at two to three events per variable
+another column buys less signal than it costs in variance. The binding
+constraint is label seasons, not columns. Widening the window from 2020 to 2018
+doubled the test folds and was worth more than every modelling change combined.
+
+No position clears the conventional ten-events-per-variable floor (WR 6.5, RB
+5.3, QB 3.3, TE 2.5), and the app reports that table above the results.
+
+**Quarterback is the one place the model is actively harmful.** Its gap against
+ADP is −0.099 with an interval of [−0.173, −0.033] — entirely below zero.
+Rushing share and expected-points share are already fully priced at quarterback,
+so adding them to a 77-row sample adds variance and nothing else.
 
 **The rookie model works, and stratifying helps it too.** Out-of-sample
 correlation 0.592 and 24% less error than predicting the mean. The per-position
@@ -145,8 +195,18 @@ back value climbing after 2023.
 half volume — target share, snap share, air-yards share — which is exactly what
 draft price already knows, and it dominated the distance metric so every
 position collapsed to "featured vs not". Clustering on *per-opportunity quality*
-instead (yards per route run, separation, yards after contact, drop rate) finds
-real structure: RB supports five groups, TE four.
+instead (yards per route run, separation, yards after contact) finds real
+structure — but not enough to be worth keeping. **The clustering was removed.**
+Silhouette topped out at 0.19-0.29, which is a partition of a continuum rather
+than a set of groups, and cluster membership added nothing downstream: fed to the
+projection model as Gaussian-mixture soft memberships it scored 0.022 *below* ADP
+alone. What survived is the quality/opportunity split it was built on top of,
+plus nearest-neighbour comparables — which is what the clustering was a lossy
+summary of.
+
+The quality score weights each metric by how well it repeats rather than
+averaging them flat, which moved its rank correlation with *next* season's
+points from 0.464 to 0.502 at WR and 0.455 to 0.492 at TE.
 
 **That split is what makes under/overvaluation detectable.** Quality and price
 are each converted to a within-position percentile and subtracted. Elite,
@@ -173,6 +233,18 @@ Checks that run in the test suite:
 - **The simulation hits its structural baselines**: ADP-following gets a 0.611
   playoff rate and 7.01 wins where the format guarantees 0.60 and 7.0.
 - **Greedy lineup selection matches brute force** on the real slot structure.
+- **Playoff weeks and two-point tries stay out of season usage.** Both
+  play-level opportunity tables carry weeks 19-22 with no `season_type` column,
+  and 776 pass plays are two-point conversions snapped from the two — left in,
+  they inflate red-zone share for whoever was targeted.
+- **Opportunity out-persists quality at every position**, asserted rather than
+  assumed. If it ever flips, the three-axis split is wrong and the valuation
+  board is ranking noise.
+- **No feature below the noise floor ships.** The six that failed are pinned in
+  a test that fails loudly if one becomes usable.
+- **Permuted labels score like a coin flip** in both backtests — 0.497 AUC and
+  rank correlation under 0.2 — which is what separates "no signal" from
+  "signal, inverted".
 
 | table | rows |
 |---|---:|

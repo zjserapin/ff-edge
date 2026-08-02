@@ -32,6 +32,7 @@ from typing import Mapping
 
 import polars as pl
 
+from src import context as cx
 from src import ids
 from src import nflverse as nv
 from src import scoring as sc
@@ -464,6 +465,7 @@ def player_seasons(
         .join(_nextgen(seasons, force=force), on=["season", "player_id"], how="left")
         .join(_routes(seasons, force=force), on=["season", "player_id"], how="left")
         .join(_pfr_quality(seasons, force=force), on=["season", "player_id"], how="left")
+        .join(cx.play_context(seasons, force=force), on=["season", "player_id"], how="left")
         .join(_bio(force=force), on="player_id", how="left")
     )
 
@@ -549,13 +551,47 @@ def player_seasons(
 # SITUATION is what is about to change: who else is competing for his touches
 # and how much opportunity his team just lost.
 
+# Every column here cleared `stability.NOISE_FLOOR` at its own position — a
+# year-over-year percentile correlation of at least 0.20. That gate removed six
+# columns that had been in these sets on reputation, and the casualties are
+# worth naming because they are all things the fantasy literature treats as
+# skill:
+#
+#   contested_catch_rate  WR 0.061, TE -0.118   charted by hand, and still a
+#                                               coin flip on a small denominator
+#   drop_rate             WR 0.096, TE  0.183   drops are rare enough that a
+#                                               season is mostly sampling error
+#   catch_rate            RB 0.046, TE  0.142   at these positions it measures
+#                                               how far the throws travel, and
+#                                               `adot` already says that
+#   ypt                   RB 0.174              same, one step removed
+#
+# `catch_rate` and `catch_rate_on_catchable` survive at receiver (0.468, 0.354)
+# and only there. The FTN split does what it was added to do at the position
+# with enough targets to measure it, and nothing at the position without.
 QUALITY_FEATURES: dict[str, list[str]] = {
+    # `catch_rate_on_catchable` is here rather than beside `catch_rate` for a
+    # reason: catch rate charges a receiver for every ball thrown nowhere near
+    # him, so it is partly a measurement of his quarterback. Splitting on whether
+    # the ball was catchable moves the passer's contribution out to
+    # `catchable_rate` in SITUATION and leaves the receiver's hands here. It
+    # begins in 2022 — see `CHARTED_FEATURES`.
     "WR": ["yprr", "tprr", "ypt", "yac_per_rec", "catch_rate", "adot",
-           "avg_separation", "avg_yac_above_expectation", "drop_rate", "receiving_rat"],
-    "TE": ["yprr", "tprr", "ypt", "yac_per_rec", "catch_rate", "adot",
-           "avg_separation", "avg_yac_above_expectation", "drop_rate", "receiving_rat"],
+           "avg_separation", "avg_yac_above_expectation", "receiving_rat",
+           "catch_rate_on_catchable"],
+    "TE": ["yprr", "tprr", "ypt", "yac_per_rec", "adot",
+           "avg_separation", "avg_yac_above_expectation", "receiving_rat"],
+    # `ryoe_per_att` was added expecting it to be the running back's yards per
+    # route run — it models the blocking and the box and charges the back only
+    # with the difference, which is exactly what yards per carry fails to do. It
+    # persists at 0.202, barely above the floor and well under the receiving
+    # columns at the same position. Kept, because it is still the best available
+    # measure of a back carrying the ball; demoted from the claim that it would
+    # carry this position. What actually persists about a running back is
+    # whether his offense throws to him.
     "RB": ["ypc", "yards_after_contact_per_att", "rush_broken_tackles_per_att",
-           "yprr", "tprr", "ypt", "yac_per_rec", "catch_rate"],
+           "yprr", "tprr", "yac_per_rec",
+           "ryoe_per_att", "rush_efficiency"],
     # Thin by comparison, and deliberately so: the metrics that make this work
     # for skill players (yards per route, separation, yards after contact) have
     # no quarterback analogue in this data. Rushing efficiency is included
@@ -563,11 +599,21 @@ QUALITY_FEATURES: dict[str, list[str]] = {
     "QB": ["ypa", "pts_over_exp_per_att", "ypc"],
 }
 
+# Volume, plus *where* the volume happened. Red-zone and end-zone shares sit on
+# this axis rather than the quality one because they describe the work a player
+# is handed, not what he does with it — but they are the half of the work that
+# raw target share is blindest to. Two receivers on 25% of targets are not the
+# same asset when one of them is the goal-line look and the other is not, and
+# `exp_td_share` is the single column that says so: the share of his offense's
+# modeled touchdown chances, pass and rush combined, that run through him.
 OPPORTUNITY_FEATURES: dict[str, list[str]] = {
-    "WR": ["route_share", "target_share", "air_yards_share", "snap_pct", "tgt_per_game"],
-    "TE": ["route_share", "target_share", "air_yards_share", "snap_pct", "tgt_per_game"],
-    "RB": ["snap_pct", "rush_share", "target_share", "carry_per_game", "route_share"],
-    "QB": ["snap_pct", "rush_share"],
+    "WR": ["route_share", "target_share", "air_yards_share", "snap_pct", "tgt_per_game",
+           "rz_target_share", "ez_target_share", "neutral_target_share", "exp_td_share"],
+    "TE": ["route_share", "target_share", "air_yards_share", "snap_pct", "tgt_per_game",
+           "rz_target_share", "ez_target_share", "neutral_target_share", "exp_td_share"],
+    "RB": ["snap_pct", "rush_share", "target_share", "carry_per_game", "route_share",
+           "rz_carry_share", "gz_carry_share", "neutral_rush_share", "exp_td_share"],
+    "QB": ["snap_pct", "rush_share", "gz_carry_share", "exp_td_share"],
 }
 
 SITUATION_FEATURES = [
@@ -576,6 +622,30 @@ SITUATION_FEATURES = [
     "team_target_hhi",
     "vacated_target_share_next",
     "vacated_carry_share_next",
+    # What his usage was made of rather than how much of it there was. A high
+    # screen rate is a discount, not a virtue: those yards were manufactured by
+    # the play-caller and are the first thing a new coordinator takes away. A
+    # low `catchable_rate` is the opposite — it means his catch rate is being
+    # dragged down by the man throwing to him.
+    "screen_target_rate",
+    "catchable_rate",
+    "contested_rate",
+    "stacked_box_rate",
+    "time_to_los",
+    "exp_td_per_touch",
+]
+
+# The context columns that begin in 2022 rather than 2018, because FTN charting
+# does. They are legitimate for the current-season board and for clustering,
+# where every row is 2025 and fully covered. They are excluded from the backtest,
+# where four of eight feature seasons would be null and median imputation would
+# hand half the training set an invented value — see `breakout.model_features`.
+CHARTED_FEATURES = [
+    "catchable_rate",
+    "catch_rate_on_catchable",
+    "contested_rate",
+    "contested_catch_rate",
+    "screen_target_rate",
 ]
 
 
@@ -599,33 +669,18 @@ def opportunity_features(position: str | None = None) -> list[str]:
     return list(OPPORTUNITY_FEATURES.get(position, OPPORTUNITY_FEATURES["WR"]))
 
 
-def cluster_feature_columns(position: str | None = None) -> list[str]:
-    """The subset describing *role*, for clustering. Two exclusions, both load-bearing.
+def play_context_features(position: str | None = None, charted: bool = False) -> list[str]:
+    """Context columns from `context.py`, split by whether they cover the window.
 
-    **No production.** `exp_ppg` and `pts_over_exp_per_game` are points. Cluster
-    on points and the clusters are scoring tiers wearing a usage costume — you
-    get "good players" and "bad players" and then discover, remarkably, that the
-    good cluster outscores the bad one. The question this module exists to answer
-    is which cheap players are used *like* expensive ones, which is only
-    answerable if price and production stay out of the distance metric.
-
-    **No booleans.** `undrafted` standardizes to a large spike on a handful of
-    rows, and k-means minimizes squared distance, so it spends its first split
-    isolating them. That is exactly what happened: QB's k=2 solution was Taysom
-    Hill in one cluster and the other 31 quarterbacks in the other.
-
-    `exp_pts_share` stays. It is a share of one's own offense — a role, not a
-    scoring rate.
+    `charted=False` — the default — returns only what exists back to 2018, which
+    is the set a season-forward backtest may use. Passing `charted=True` adds the
+    FTN columns, which start in 2022 and belong to the current-season board.
     """
-    role = ROLE_FEATURES + EFFICIENCY_FEATURES + ["exp_pts_share"]
-    if position == "QB":
-        return [c for c in role if c not in
-                ("target_share", "air_yards_share", "adot", "wopr", "catch_rate", "ypt", "yac_per_rec")]
-    if position == "RB":
-        return [c for c in role if c not in ("air_yards_share", "adot")]
-    if position in ("WR", "TE"):
-        return [c for c in role if c not in ("rush_share", "ypc")] + NGS_FEATURES
-    return role
+    pool = quality_features(position) + opportunity_features(position) + SITUATION_FEATURES
+    cols = [c for c in cx.CONTEXT_COLUMNS if c in pool]
+    if charted:
+        return cols
+    return [c for c in cols if c not in CHARTED_FEATURES]
 
 
 def feature_columns(position: str | None = None) -> list[str]:
@@ -634,19 +689,23 @@ def feature_columns(position: str | None = None) -> list[str]:
     Receiving air-yards features are meaningless for a running back's usage
     profile and rushing share is meaningless for a receiver; including both
     everywhere would mean imputing half of every row.
+
+    Play-context columns are appended from `play_context_features`, which drops
+    the FTN-charted ones by default so this stays usable back to 2018.
     """
     base = ROLE_FEATURES + EFFICIENCY_FEATURES + EXPECTED_FEATURES + CONTEXT_FEATURES
+    extra = play_context_features(position)
     if position is None:
-        return base + NGS_FEATURES
+        return base + NGS_FEATURES + extra
     if position == "QB":
         return [
             c
             for c in base
             if c not in ("target_share", "air_yards_share", "adot", "wopr", "catch_rate", "ypt", "yac_per_rec")
-        ]
+        ] + extra
     if position == "RB":
-        return [c for c in base if c not in ("air_yards_share", "adot")]
-    return [c for c in base if c not in ("rush_share", "ypc")] + NGS_FEATURES
+        return [c for c in base if c not in ("air_yards_share", "adot")] + extra
+    return [c for c in base if c not in ("rush_share", "ypc")] + NGS_FEATURES + extra
 
 
 def coverage_report(df: pl.DataFrame) -> pl.DataFrame:

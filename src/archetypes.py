@@ -1,45 +1,50 @@
-"""Quality archetypes — grouping players by how good they are per opportunity.
+"""Per-position quality and opportunity scores, and nearest-neighbour comparables.
 
-The question this answers: which cheap players have the *per-snap profile* of
-expensive ones? A receiver with elite yards per route run and a 12% target share
-is a different bet from one with average efficiency and the same share, and no
-volume-based view can tell them apart.
+**The k-means clustering that used to live here has been removed.** It was
+measured and it did not earn its place:
 
-**Clustering runs on quality only — volume is deliberately excluded**, and that
-is the change that makes this module useful. Target share, snap share and
-air-yards share are what ADP already prices; clustering on them rediscovers the
-market rather than disagreeing with it. It also swamped the distance metric:
-volume carried most of the variance, so k-means split on "featured vs not" every
-single time and reported two groups for every position. With volume removed, the
-groups describe how a player performs rather than how often he is used.
+  - Silhouette peaked at 0.19 to 0.29 depending on position. That is a partition
+    of a continuum, not a set of groups. Presenting it as archetypes implied
+    structure the data does not contain.
+  - Cluster membership added nothing downstream. Fed to the projection model as
+    Gaussian-mixture soft memberships — the generous version, since it carries
+    the uncertainty rather than a hard label — it scored 0.022 *below* ADP alone.
+  - PCA-whitening the block first, the standard fix for the correlated features
+    the quality set has, made the resulting score worse at ranking next season
+    (0.464 to 0.340 at receiver). Un-whitened PCA is an orthogonal rotation and
+    cannot change a Euclidean distance at all, so there was no version of that
+    idea left to try.
 
-Opportunity is still computed and returned — as a *separate axis*, not folded
-into the distance. `valuation.py` crosses the two, because the interesting
-player is the one who is high on quality and low on opportunity and price.
+What survived the same testing, and is what remains here:
 
-Clusters describe. They do not predict. A receiver landing with three alphas
-means his efficiency profile rhymes with theirs; whether he ever gets their
-volume depends on his depth chart, which is what the situation columns are for.
+**The quality/opportunity split.** Two axes, computed separately and never mixed
+into one distance. Volume is what ADP already prices; per-opportunity quality is
+the axis it prices worst. Opportunity persists year to year at 0.47-0.55 and
+quality at 0.28-0.44 (see `stability`), so they are genuinely different
+measurements rather than two views of one thing.
 
-Fit per position, because the metrics barely overlap: a back's yards after
-contact and a receiver's separation are not the same axis.
+**Stability weighting.** Each standardized metric is weighted by how well it
+repeats rather than counted equally, which moved the quality score's correlation
+with next season's points from 0.464 to 0.502 at receiver.
+
+**Comparables.** `neighbors` — nearest players in the same standardized space —
+is what the clustering was a lossy summary of. "Who does this player look like
+and what do they cost" is answerable directly; going through a hard group label
+first only threw information away.
+
+Everything is per position, because the metrics barely overlap: a back's yards
+after contact and a receiver's separation are not the same axis.
 """
 
 from __future__ import annotations
 
 import numpy as np
 import polars as pl
-from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_samples, silhouette_score
 from sklearn.preprocessing import StandardScaler
 
 from src import features as ft
+from src import stability as st
 from src.config import CURRENT_SEASON, FANTASY_POSITIONS
-
-# Positions with a small pool cannot support many clusters. QB and TE are
-# ~45 and ~95 players a season; asking for eight groups from 45 players yields
-# groups of five, which is a partition, not a pattern.
-K_CEILING: dict[str, int] = {"QB": 5, "RB": 6, "TE": 5, "WR": 7}
 
 
 def _matrix(
@@ -88,75 +93,81 @@ def _matrix(
     return StandardScaler().fit_transform(x), keep
 
 
-def choose_k(
-    x: np.ndarray,
-    k_range: tuple[int, int] = (2, 7),
-    seed: int = 0,
-    min_cluster: int = 4,
-) -> pl.DataFrame:
-    """Silhouette and inertia at each k. Returned so the app can show the curve.
+def stability_weights(df: pl.DataFrame | None = None) -> dict[tuple[str, str], float]:
+    """Year-over-year persistence per (position, metric), for weighting the scores.
 
-    k is picked by max silhouette *among viable solutions*. A solution is viable
-    only if its smallest cluster has `min_cluster` members: k-means minimizes
-    squared distance, so given an outlier it will happily spend a split
-    quarantining one player and collect a high silhouette for doing it. A cluster
-    of one is not an archetype, and "Taysom Hill" is not a usage pattern.
-
-    The curve is worth exposing whole. If it is monotone with no interior peak,
-    the position genuinely does not cluster, and saying so is more useful than
-    drawing whatever k won by 0.003.
-
-    Returns: k, silhouette, inertia, smallest, viable.
+    Computed rather than hardcoded so a wider window re-derives it instead of
+    inheriting a constant nobody remembers setting.
     """
-    lo, hi = k_range
-    hi = min(hi, max(lo, x.shape[0] - 1))
-    rows = []
-    for k in range(lo, hi + 1):
-        km = KMeans(n_clusters=k, n_init=25, random_state=seed).fit(x)
-        smallest = int(np.bincount(km.labels_, minlength=k).min())
-        rows.append(
-            {
-                "k": k,
-                "silhouette": round(float(silhouette_score(x, km.labels_)), 4),
-                "inertia": round(float(km.inertia_), 2),
-                "smallest": smallest,
-                "viable": smallest >= min_cluster,
-            }
-        )
-    return pl.DataFrame(rows) if rows else pl.DataFrame()
+    table = st.year_over_year(df)
+    if not table.height:
+        return {}
+    return {
+        (row["position"], row["metric"]): max(float(row["r_yoy"]), 0.0)
+        for row in table.iter_rows(named=True)
+    }
 
 
-def cluster(
+def _weighted(
+    x: np.ndarray,
+    used: list[str],
+    position: str,
+    weights: dict[tuple[str, str], float] | None,
+) -> np.ndarray:
+    """Mean of standardized features, weighted by how much each one persists.
+
+    An unweighted mean asserts that every column deserves an equal vote, and the
+    stability table says plainly that they do not: at receiver, `adot` repeats at
+    0.638 and `receiving_rat` at 0.279, so averaging them flat gives half the
+    weight to a column that is half signal. Weighting by year-over-year
+    correlation moved the score's rank correlation with *next* season's points
+    from 0.464 to 0.502 at WR and 0.455 to 0.492 at TE, with QB up and RB flat.
+
+    Uses no outcome data — the weights come from whether a metric repeats, not
+    from whether it predicts fantasy points — so this is not the search-until-
+    something-scores trap. Falls back to the flat mean if no weight is known.
+    """
+    if not weights:
+        return x.mean(axis=1)
+    w = np.array([weights.get((position, c), 0.0) for c in used])
+    if w.sum() <= 0:
+        return x.mean(axis=1)
+    return (x * w).sum(axis=1) / w.sum()
+
+
+def scores(
     season: int = CURRENT_SEASON,
     positions: tuple[str, ...] = FANTASY_POSITIONS,
     min_games: int = 8,
-    k_range: tuple[int, int] = (2, 7),
-    seed: int = 0,
-    k: int | None = None,
     df: pl.DataFrame | None = None,
+    weights: dict[tuple[str, str], float] | None = None,
 ) -> pl.DataFrame:
-    """Assign every qualified player a usage cluster within his position.
+    """Every qualified player's quality and opportunity score, within his position.
 
-    `min_games` is 8 rather than the feature table's 4 — a usage *profile* from
-    four games is mostly a description of which four games.
+    Replaces the old `cluster()`. Same two scores, same construction, without the
+    k-means step that produced a label nothing downstream could use.
 
-    **What this actually found, and it is worth stating plainly:** silhouette
-    peaks at k=2 for all four positions and declines monotonically after. NFL
-    usage has one dominant axis — how much of his offense a player commands —
-    and the honest two-group answer is "featured" and "not". The one genuinely
-    interesting split is at quarterback, where the two groups are rushing and
-    pocket, not good and bad.
+    Both are weighted means of standardized features, so they are relative to
+    this position and season: a quality score of +1 means one standard deviation
+    better per opportunity than other players at his position that year, not an
+    absolute. `quality_pct` and `opportunity_pct` are the same thing as 0-100
+    percentiles, which is what `valuation.py` crosses against price.
 
-    `k` overrides the silhouette choice. Finer archetypes are legitimate to
-    explore, but they are the analyst asserting structure rather than the data
-    offering it, so the app shows the silhouette cost when you turn the dial.
+    `min_games` is 8 rather than the feature table's 4 — a per-opportunity
+    profile from four games is mostly a description of which four games.
 
-    Returns: season, player_id, player_name, position, team, cluster, k,
-    silhouette, dist_to_center, ppg, pos_rank, games.
+    Returns: season, player_id, player_name, position, team, games, ppg,
+    pos_rank, quality_score, opportunity_score, quality_pct, opportunity_pct.
     """
     base = df if df is not None else ft.build()
     if not base.height:
         return pl.DataFrame()
+
+    # Derived from the full history, not the season being scored: how much a
+    # metric repeats is a property of the metric, and estimating it from one
+    # season of one position would be noisier than the thing it is correcting.
+    if weights is None:
+        weights = stability_weights(base)
 
     pool = base.filter((pl.col("season") == season) & (pl.col("games") >= min_games))
     out: list[pl.DataFrame] = []
@@ -166,127 +177,37 @@ def cluster(
         if grp.height < 12:
             continue
 
-        x, used = _matrix(grp, ft.quality_features(position))
-        if not used:
+        qx, qused = _matrix(grp, ft.quality_features(position))
+        if not qused:
             continue
+        ox, oused = _matrix(grp, ft.opportunity_features(position))
 
-        scores = choose_k(x, (k_range[0], min(k_range[1], K_CEILING.get(position, 6))), seed)
-        if not scores.height:
-            continue
-        if k is not None:
-            chosen = min(k, grp.height - 1)
-        else:
-            viable = scores.filter(pl.col("viable"))
-            if viable.height:
-                chosen = int(viable.sort("silhouette", descending=True).get_column("k")[0])
-            else:
-                # Nothing clears the minimum group size — the position resists
-                # clustering at every k. Fall back to the *smallest* k rather
-                # than the best silhouette: fewer groups is the safer failure,
-                # and taking the highest score here is how a one-player cluster
-                # gets shipped as an archetype. Happens at quarterback, whose
-                # quality set is thin enough that one outlier dominates.
-                chosen = int(scores.sort(["smallest", "silhouette"], descending=[True, True]).get_column("k")[0])
-
-        km = KMeans(n_clusters=chosen, n_init=25, random_state=seed).fit(x)
-        centers = km.cluster_centers_[km.labels_]
-        dist = np.linalg.norm(x - centers, axis=1)
-
-        # A single interpretable number per axis, so the two can be crossed
-        # without re-deriving them everywhere. Both are mean standardized
-        # scores, which means they are relative to this position and season —
-        # a quality score of +1 is "one standard deviation better per
-        # opportunity than other players at this position", not an absolute.
-        quality = x.mean(axis=1)
-        opp_x, opp_used = _matrix(grp, ft.opportunity_features(position))
-        opportunity = opp_x.mean(axis=1) if opp_used else np.zeros(grp.height)
-
-        frame_ = grp.select(
-            "season", "player_id", "player_name", "position", "team",
-            "games", "ppg", "pos_rank",
-        ).with_columns(
-            pl.Series("cluster", km.labels_.astype(np.int32)),
-            pl.lit(chosen, dtype=pl.Int32).alias("k"),
-            pl.Series("silhouette", silhouette_samples(x, km.labels_)).round(4),
-            pl.Series("dist_to_center", dist).round(4),
-            pl.Series("quality_score", quality).round(4),
-            pl.Series("opportunity_score", opportunity).round(4),
+        out.append(
+            grp.select(
+                "season", "player_id", "player_name", "position", "team",
+                "games", "ppg", "pos_rank",
+            ).with_columns(
+                pl.Series("quality_score", _weighted(qx, qused, position, weights)).round(4),
+                pl.Series(
+                    "opportunity_score",
+                    _weighted(ox, oused, position, weights) if oused else np.zeros(grp.height),
+                ).round(4),
+            )
         )
 
-        # Rank clusters by mean quality so tier 1 is always the best group,
-        # rather than whatever integer k-means happened to assign.
-        order = (
-            frame_.group_by("cluster")
-            .agg(pl.col("quality_score").mean().alias("_m"))
-            .sort("_m", descending=True)
-            .with_row_index("quality_tier", offset=1)
-            .select("cluster", pl.col("quality_tier").cast(pl.Int32))
-        )
-        out.append(frame_.join(order, on="cluster", how="left"))
-
-    return pl.concat(out, how="diagonal_relaxed") if out else pl.DataFrame()
-
-
-def cluster_profiles(
-    clusters: pl.DataFrame,
-    df: pl.DataFrame | None = None,
-    season: int | None = None,
-) -> pl.DataFrame:
-    """What each cluster actually is, in feature terms, with a generated label.
-
-    The label comes from the two features furthest from the positional mean in
-    standard deviations ("high target_share / low adot"). Generated rather than
-    hand-written because hand-written labels drift the moment the data updates
-    and nobody notices.
-
-    Returns: position, cluster, n, mean_ppg, label, plus z_<feature> columns.
-    """
-    if not clusters.height:
+    if not out:
         return pl.DataFrame()
 
-    base = df if df is not None else ft.build()
-    season = season or int(clusters.get_column("season")[0])
-    joined = clusters.join(
-        base.filter(pl.col("season") == season).drop(
-            [c for c in ("player_name", "position", "team", "games", "ppg", "pos_rank") if c in base.columns]
-        ),
-        on=["season", "player_id"],
-        how="left",
+    return pl.concat(out, how="diagonal_relaxed").with_columns(
+        (
+            pl.col("quality_score").rank("average").over("position")
+            / pl.len().over("position") * 100
+        ).round(1).alias("quality_pct"),
+        (
+            pl.col("opportunity_score").rank("average").over("position")
+            / pl.len().over("position") * 100
+        ).round(1).alias("opportunity_pct"),
     )
-
-    rows: list[dict[str, object]] = []
-    for position in joined.get_column("position").unique().sort().to_list():
-        grp = joined.filter(pl.col("position") == position)
-        cols = [c for c in ft.quality_features(position) if c in grp.columns]
-        stats = {
-            c: (grp.get_column(c).mean(), grp.get_column(c).std() or 1.0) for c in cols
-        }
-
-        for cid in sorted(grp.get_column("cluster").unique().to_list()):
-            sub = grp.filter(pl.col("cluster") == cid)
-            row: dict[str, object] = {
-                "position": position,
-                "cluster": int(cid),
-                "n": sub.height,
-                "mean_ppg": round(float(sub.get_column("ppg").mean() or 0.0), 2),
-            }
-            zs: list[tuple[str, float]] = []
-            for c in cols:
-                mean, sd = stats[c]
-                val = sub.get_column(c).mean()
-                if val is None or mean is None:
-                    continue
-                z = (float(val) - float(mean)) / float(sd or 1.0)
-                row[f"z_{c}"] = round(z, 2)
-                zs.append((c, z))
-
-            zs.sort(key=lambda t: abs(t[1]), reverse=True)
-            row["label"] = " / ".join(
-                f"{'high' if z > 0 else 'low'} {name}" for name, z in zs[:2]
-            ) or "undifferentiated"
-            rows.append(row)
-
-    return pl.DataFrame(rows, infer_schema_length=None).sort(["position", "mean_ppg"], descending=[False, True])
 
 
 def neighbors(
@@ -296,15 +217,19 @@ def neighbors(
     n: int = 8,
     season: int | None = None,
 ) -> pl.DataFrame:
-    """Players whose usage profile sits closest to this one, same position.
+    """Players whose per-opportunity profile sits closest to this one, same position.
 
-    Euclidean distance in the standardized feature space — the same space the
-    clustering used, so "nearest neighbor" and "same cluster" tell a consistent
-    story. This is the output the whole module exists for: the mid-round back
-    whose profile sits next to three players going four rounds earlier.
+    Euclidean distance in the standardized quality space. This is the output the
+    module exists for now that the clustering is gone: "who does this player look
+    like, and what do they cost" answered directly, rather than through a hard
+    group label that discarded the distances on the way.
 
-    Returns: player_id, player_name, position, team, cluster, distance, ppg,
-    pos_rank, games.
+    `clusters` is any frame carrying player_id, player_name, position, team and
+    the outcome columns — `scores()` is the intended source, and the parameter
+    keeps its name so existing callers do not break.
+
+    Returns: player_id, player_name, position, team, distance, ppg, pos_rank,
+    games.
     """
     if not clusters.height:
         return pl.DataFrame()
@@ -331,7 +256,7 @@ def neighbors(
     dist = np.linalg.norm(x - x[idx], axis=1)
 
     return (
-        grp.select("player_id", "player_name", "position", "team", "cluster", "games", "ppg", "pos_rank")
+        grp.select("player_id", "player_name", "position", "team", "games", "ppg", "pos_rank")
         .with_columns(pl.Series("distance", dist).round(3))
         .filter(pl.col("player_id") != player_id)
         .sort("distance")

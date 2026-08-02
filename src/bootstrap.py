@@ -217,7 +217,7 @@ def analysis() -> None:
     from src import archetypes, features, simulate
 
     step("features (player-season)", features.build)
-    step("archetypes (current season)", archetypes.cluster)
+    step("quality scores (current season)", archetypes.scores)
     step("simulation baseline", simulate.baseline)
 
 

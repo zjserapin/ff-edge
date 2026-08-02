@@ -1,4 +1,4 @@
-"""How positional value has moved, 2020-2025, in your league's scoring.
+"""How positional value has moved, 2018-2025, in your league's scoring.
 
 This is the descriptive track. It does not predict anything; it establishes the
 shape of the format you are drafting into, which is the thing most draft advice

@@ -28,7 +28,7 @@ def test_feature_columns_are_all_documented() -> None:
     """Every modelling feature needs a definition — those are the opaque ones."""
     documented = set(glossary.TERMS)
     for position in (None, "QB", "RB", "WR", "TE"):
-        for col in ft.feature_columns(position) + ft.cluster_feature_columns(position):
+        for col in ft.feature_columns(position) + ft.quality_features(position):
             assert col in documented, f"feature {col!r} has no glossary entry"
         for col in bo.model_features(position):
             assert col in documented, f"model feature {col!r} has no glossary entry"

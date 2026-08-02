@@ -61,12 +61,19 @@ TTL = {
 #   2. A label season needs FFC ADP for that year, and FFC has none for 2025 at
 #      any format. 2018-2024 is what exists.
 #
-# 2020-2025 features therefore yield 2021-2024 labels — four seasons, enough to
-# get the pipeline honest. Widening to 2018 (six label seasons, four test folds
-# instead of two) is an edit to these two lines plus a re-pull; the constraint
-# is time-to-first-run, not data availability.
-FEATURE_SEASONS: list[int] = list(range(2020, 2026))
-LABEL_SEASONS: list[int] = list(range(2021, 2025))
+# 2018-2025 features therefore yield 2019-2024 labels — six seasons. The window
+# started at 2020 to get the pipeline running, and widening was the single
+# highest-leverage change available: season-forward validation spends the first
+# two label years on the initial training window, so four label seasons bought
+# exactly two test folds and 284 out-of-sample rows. At that size no result is
+# distinguishable from any other, which is why the first backtest could only
+# report "roughly chance" and stop. Six label seasons give four folds and 540
+# out-of-sample rows, which roughly halved every interval in `breakout.py`.
+#
+# 2018 is the floor, and ADP sets it: FFC publishes nothing before it at
+# half-PPR/10-team. Every other source in the feature set reaches back further.
+FEATURE_SEASONS: list[int] = list(range(2018, 2026))
+LABEL_SEASONS: list[int] = list(range(2019, 2025))
 
 # Newest season with complete production. Current-state features and clustering
 # read from here; it is deliberately not SEASON, which is the season being

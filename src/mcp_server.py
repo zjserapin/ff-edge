@@ -36,9 +36,9 @@ import polars as pl
 from fastmcp import FastMCP
 
 from src import adp as adp_mod
-from src import cache, ids
+from src import cache, features, ids
 from src import nflverse as nv
-from src import peek, sleeper
+from src import peek, sleeper, stability
 from src.config import SEASON
 
 mcp = FastMCP("ff-edge")
@@ -218,6 +218,45 @@ def snap_trend(season: int = 2025, position: str = "RB", last_n: int = 4) -> str
     changed.
     """
     return _out(peek.snap_trend(season, position, last_n), limit=50)
+
+
+@mcp.tool
+def metric_stability(position: str = "WR") -> str:
+    """How well each metric repeats for the same player from one season to the next.
+
+    Use this before trusting any per-metric argument about a player. A column
+    below about 0.20 is describing last season rather than the player, so
+    "he posted an elite contested-catch rate" (0.061 at receiver, negative at
+    tight end) is not an argument about next season. Volume and role columns sit
+    around 0.5; per-touch efficiency columns are much lower.
+    """
+    table = stability.year_over_year(positions=(position,))
+    return _out(table, limit=40)
+
+
+@mcp.tool
+def touchdown_equity(season: int = 2025, position: str = "WR", min_games: int = 8) -> str:
+    """Share of his offense's expected touchdowns, plus red-zone and goal-line usage.
+
+    Use to find the scoring gap that target share cannot see. Two players on the
+    same target share are not the same asset when one gets the end-zone looks —
+    this is the column that separates them, and it is measured over the weeks he
+    played so it is not a reward for staying healthy.
+    """
+    df = features.build().filter(
+        (pl.col("season") == season)
+        & (pl.col("position") == position)
+        & (pl.col("games") >= min_games)
+    )
+    cols = [
+        c
+        for c in (
+            "player_name", "team", "games", "exp_td_share", "ez_target_share",
+            "rz_target_share", "gz_carry_share", "target_share", "ppg", "pos_rank",
+        )
+        if c in df.columns
+    ]
+    return _out(df.select(cols).sort("exp_td_share", descending=True), limit=50)
 
 
 @mcp.tool
