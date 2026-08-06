@@ -8,13 +8,59 @@ endpoint.
 This is a **data layer**, not a ranking product. It gets clean, joined, cached
 data onto your disk so you can ask your own questions.
 
+## The question this project answers
+
+One question, asked several ways: **beyond what the market already prices into
+a player's draft slot, is there anything measurable that predicts how he does
+against that price?** Not "who is good" — ADP already has an opinion on that —
+but "where is the market's opinion wrong, and can that be shown rather than
+argued."
+
+Everything in `src/` is one stage of a pipeline built to answer it:
+
+1. **Ingest** — pull production stats, opportunity shares, ADP, and news from
+   free sources, and cache them so the pipeline never re-hits a network for
+   data it already has (`nflverse.py`, `sleeper.py`, `adp.py`, `news.py`).
+2. **Join** — put every source on the same player, by the same id, so a stat
+   line and a market price refer to the same person (`ids.py`).
+3. **Transform** — turn raw stats into shares and rates that describe a
+   player's role rather than his box score (`features.py`, `context.py`).
+4. **Measure, before modeling anything** — check whether each metric even
+   repeats year over year. A metric that doesn't repeat is describing last
+   season's variance, not the player, and is dropped before it can pollute a
+   model (`stability.py`).
+5. **Model and backtest** — ask the beat-ADP question for real, scored against
+   draft price and validated on seasons the model never trained on
+   (`breakout.py`, `projection.py`, `rookies.py`, `archetypes.py`).
+6. **Simulate** — since a backtest on real usage says nothing about draft-day
+   *strategy*, replay thousands of drafts and seasons to price each template
+   against simply following ADP (`simulate.py`).
+7. **Surface disagreement** — where this project's read and the market's price
+   diverge, and by how much (`valuation.py`).
+8. **Screen role changes** — the one place the model is provably blind
+   (`HANDOFF.md` §3): it cannot predict who *gets* a bigger role. So that
+   input comes from you, sourced and scored by an automated claims ledger, and
+   the model only grades what a role change like that has historically been
+   worth (`promotion.py`, `claims.py`).
+
+`app.py` is a Streamlit shell over that pipeline — one tab per stage, roughly
+in the order above (Landscape → Players → Screen → Strategy → Board), plus a
+Glossary tab so no chart requires memorizing a column name.
+
+**Most of what the project found is negative** — the model doesn't beat ADP,
+clustering didn't hold up, most "skill" metrics don't repeat — and that's
+reported as the finding rather than hidden. See "What the analysis found"
+below for the numbers, or **[`HOW_IT_WORKS.md`](HOW_IT_WORKS.md)** for a
+guided walkthrough of how the pieces connect if you're getting reoriented
+after time away.
+
 ## Setup
 
 ```bash
 uv sync
 uv run python -m src.bootstrap --light   # ~2 min cold, hydrates everything but pbp
 uv run python -m src.simulate --sims 4000  # ~3s, writes the strategy artifact
-uv run streamlit run app.py              # the app: Landscape / Players / Strategy / Board / Glossary
+uv run streamlit run app.py              # the app: Landscape / Players / Screen / Strategy / Board / Glossary
 ```
 
 `uv run python -m src.bootstrap --light --analysis` does the cache and the
