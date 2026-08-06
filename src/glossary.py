@@ -625,6 +625,60 @@ TERMS: dict[str, Term] = {
     "target_share_wk": _t(
         "Weekly target share", "His share of the team's targets, that week only.", "",
         "Promotion"),
+    # --- Claims ledger ------------------------------------------------------
+    "role_score": _t(
+        "Role score", "Cumulative signed claim score: tier × specificity × novelty × recency.",
+        """Positive means the ledger's claims point at a growing role. The
+        weights are hand-set priors, not fitted parameters — season one exists
+        to collect the data that could justify better ones. Every score
+        decomposes into its quoted claims in the table below it.""",
+        "Ledger"),
+    "grade": _t(
+        "Ledger grade", "A/B/C/watch for role growth, from the cumulative claim score.",
+        """A additionally requires at least one concrete tier-1/2 claim — hype
+        volume alone cannot reach A no matter how loud. Not a projection: the
+        promotion screen grades the player; this grades the evidence that his
+        role is changing.""",
+        "Ledger"),
+    "claim_score": _t(
+        "Claim score", "One claim's signed weight in the role score.",
+        "The four factors are shown beside it so a score is never a mystery.",
+        "Ledger"),
+    "claim_type": _t(
+        "Claim type", "What kind of role-change evidence this is.",
+        """depth_chart, first_team_reps, coach_usage, injury_teammate,
+        departure, or role_change_observed. Performance takes are excluded at
+        extraction — they are the high-volume, low-value tier.""",
+        "Ledger"),
+    "specificity": _t(
+        "Specificity", "Concrete (falsifiable) vs vibes (coachspeak).",
+        "'We want to get him more involved' is vibes and weighs 0.4.",
+        "Ledger"),
+    "source_tier": _t(
+        "Source tier", "1 beat/structured, 2 national, 3 aggregator.",
+        """Hand-assigned to start, coarse on purpose: a season yields a handful
+        of resolvable claims per source, so three tiers is all the sample can
+        carry. Source grades earn changes over seasons.""",
+        "Ledger"),
+    "novel": _t(
+        "Novel", "First claim of its kind inside the novelty window.",
+        """Dedupe is by claim, not mention: forty aggregators quoting one beat
+        report count once, and echoes weigh 0.15. This is the mechanical fix
+        for stars generating high-volume, low-value context.""",
+        "Ledger"),
+    "n_novel": _t("Novel claims", "How many of the player's claims were first reports.", "", "Ledger"),
+    "best_tier": _t("Best tier", "The most trusted source among the player's claims.", "", "Ledger"),
+    "adp_at_latest": _t(
+        "ADP at claim", "The player's ADP the day the latest claim landed.",
+        """The already-priced check: a claim's value is only the part not yet
+        in price, and ADP moves within days on big news. Null means the market
+        has not priced him at all — a real claim there is pure edge.""",
+        "Ledger"),
+    "resolved_hit": _t(
+        "Resolved", "Did the claimed usage change materialize within three weeks?",
+        "Null is pending, not failure — off-season claims wait for games.",
+        "Ledger"),
+    "n_resolved": _t("Resolved claims", "Claims old enough to check against actual usage.", "", "Ledger"),
 }
 
 # Columns whose meaning depends on a number in the name, e.g. p_available_at_20.

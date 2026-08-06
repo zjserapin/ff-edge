@@ -25,6 +25,7 @@ from src import archetypes as ar
 from src import breakout as bo
 from src import features as ft
 from src import glossary
+from src import claims as cm
 from src import landscape as ls
 from src import projection as pj
 from src import promotion as pm
@@ -1554,6 +1555,11 @@ def _weekly_trust(season: int) -> pl.DataFrame:
     return pm.weekly_trust(season)
 
 
+@st.cache_data(show_spinner="Scoring the claims ledger…")
+def _claim_flags() -> pl.DataFrame:
+    return cm.flags()
+
+
 def _tab_screen(p: dict[str, Any]) -> None:
     dark = p["dark"]
     feats = _features()
@@ -1577,6 +1583,20 @@ def _tab_screen(p: dict[str, Any]) -> None:
         "markers at RB (snaps, red-zone carries), efficiency at WR/TE.",
         icon="🧭",
     )
+
+    # The claims ledger supplies candidates; the user stays the editor. A
+    # button rather than an auto-fill, so a hand-typed list is never clobbered.
+    ledger_flags = _claim_flags()
+    if ledger_flags.height:
+        flagged = ledger_flags.filter(pl.col("grade").is_in(["A", "B", "C"]))
+        if flagged.height and st.button(
+            f"Load {flagged.height} flagged names from the claims ledger",
+            help="Players the ledger currently grades A/B/C for role growth. "
+            "Every grade decomposes into quoted claims below.",
+        ):
+            st.session_state["screen_names"] = "\n".join(
+                flagged.get_column("player_name").to_list()
+            )
 
     raw_names = st.text_area(
         "Players whose role is growing (one per line)",
@@ -1698,6 +1718,64 @@ def _tab_screen(p: dict[str, Any]) -> None:
             "supports — measured, reported, and not a feature."
         )
         table(pm.archetype_split(coh))
+
+    st.divider()
+    st.subheader("Claims ledger")
+    st.caption(
+        "Automated role-change claims: depth-chart moves (no LLM), plus "
+        "beat-report extraction when an API key is set. Every score "
+        "decomposes into the quoted claims that produced it — the moment "
+        "that stops being true, delete the layer. Absence of claims about a "
+        "boring veteran starter is bullish stability, not missing data."
+    )
+    ledger = cm.load()
+    if not ledger.height:
+        st.info(
+            "Ledger is empty. It fills as `uv run python -m src.bootstrap "
+            "--light` (or a daily cron) runs `claims.pull()` — depth-chart "
+            "diffs need two snapshots on different days, and news extraction "
+            "needs `ANTHROPIC_API_KEY` in the shell.",
+            icon="📓",
+        )
+    else:
+        st.caption(
+            f"{ledger.height} claims · newest "
+            f"{ledger.get_column('claimed_on').max()}"
+        )
+        if ledger_flags.height:
+            table(
+                ledger_flags.select(
+                    "player_name", "team", "role_score", "grade", "n_claims",
+                    "n_novel", "best_tier", "latest_claim", "adp_at_latest",
+                )
+            )
+        who_claims = st.selectbox(
+            "Decompose a player's flag into its claims",
+            ledger_flags.get_column("player_name").to_list()
+            if ledger_flags.height
+            else [],
+            key="ledger_player",
+        )
+        if who_claims:
+            table(
+                cm.player_claims(who_claims, ledger).select(
+                    "claimed_on", "claim_type", "direction", "specificity",
+                    "source", "source_tier", "novel", "claim_score", "quote",
+                )
+            )
+        with st.expander("Source grades (converge over seasons, not weeks)"):
+            st.caption(
+                "Per-source hit rate on resolved claims — did the claimed "
+                "usage materialize within three weeks? This is what earns a "
+                "source a better tier than the hand-set starting dict. "
+                "Empty until the season provides resolutions; season one is "
+                "labeled-data collection by design."
+            )
+            grades_df = cm.source_grades(cm.resolve(ledger))
+            if grades_df.height:
+                table(grades_df)
+            else:
+                st.caption("No resolved claims yet.")
 
 
 def _placeholder(name: str, phase: str) -> None:

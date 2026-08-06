@@ -166,6 +166,37 @@ SUPERFLEX_ADP_SCORING = "2qb"
 # season no matter how much production data we have for it.
 ADP_MISSING_YEARS: list[int] = [2025]
 
+# --- Claims ledger / LLM -----------------------------------------------------
+
+# Provider swap happens here and in src/llm.py only — logic files never touch a
+# model client directly. "anthropic" for personal/PoC, "bedrock" for the Ally
+# pattern; same interface either way.
+LLM_PROVIDER = os.environ.get("FF_EDGE_LLM_PROVIDER", "anthropic")
+
+# Haiku-class on purpose (CLAIMS_SPEC.md): extraction is high-volume structured
+# output with a verbatim-quote contract, not deep reasoning. One env var to
+# change if that stops being true.
+LLM_MODEL = os.environ.get("FF_EDGE_LLM_MODEL", "claude-haiku-4-5")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
+BEDROCK_MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "anthropic.claude-haiku-4-5")
+
+# The ledger is append-only and lives in the gitignored data/ directory. Claims
+# contain no league secrets, but data/ stays out of the public repo regardless.
+CLAIMS_PATH = DATA_DIR / "claims.parquet"
+
+# Recency half-life for claim scores, in days. August camp news goes stale fast;
+# a two-week half-life means a report from a month ago carries ~25% weight.
+CLAIM_HALF_LIFE_DAYS = 14.0
+
+# A claim is "novel" if no claim with the same (player, type, direction) exists
+# within this many days — 40 aggregators quoting one beat report count once.
+NOVELTY_WINDOW_DAYS = 7
+
+# A resolvable claim is checked against weekly usage this many weeks after it
+# lands; before that it is simply pending.
+RESOLUTION_WEEKS = 3
+
 # --- Simulation -------------------------------------------------------------
 
 # weekly_stats has no team-defense rows at all, so DST cannot be scored from

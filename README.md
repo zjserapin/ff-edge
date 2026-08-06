@@ -37,6 +37,13 @@ Without them the Sleeper section is skipped and the app falls back to saved
 league settings (10-team, half-PPR, two FLEX), so everything still runs — you
 just get the reference league's rules instead of your own.
 
+The claims ledger's news extraction needs one more optional key. Without it,
+the ledger still accumulates depth-chart claims and everything else runs:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...   # enables beat-report claim extraction
+```
+
 Drop `--light` to also pull play-by-play (~1GB, several minutes).
 
 ## Modules
@@ -52,6 +59,8 @@ normalizes what comes back.
 | `src/sleeper.py` | Read-only Sleeper client, including the `previous_league_id` walk. |
 | `src/adp.py` | FFC ADP, daily snapshots, and pick-survival probability. |
 | `src/ids.py` | The join layer. All cross-source ID and name matching lives here. |
+| `src/news.py` | Free news ingestion: Google News RSS, depth charts, Sleeper trending. |
+| `src/llm.py` | The one place a model API is touched. Anthropic ↔ Bedrock swap is config-only. |
 | `src/bootstrap.py` | One command to hydrate the cache. Never dies on one bad source. |
 | `src/peek.py` | Four worked examples that prove the joins hold. |
 | `src/mcp_server.py` | FastMCP server so the same cache is queryable in conversation. |
@@ -73,6 +82,8 @@ directly.
 | `src/simulate.py` | Monte Carlo draft + season sim comparing draft strategies. |
 | `src/valuation.py` | Quality against price — where this project disagrees with ADP. |
 | `src/promotion.py` | The promotion screen: you name whose role is growing, it grades them by position-specific criteria and reports the base rate. |
+| `src/claims.py` | The claims ledger: role-change claims scored by tier × specificity × novelty × recency, every flag decomposable to its quotes. See `CLAIMS_SPEC.md`. |
+| `src/prompts.py` | Versioned system prompts — the claim-extraction contract lives here, not inline. |
 | `src/uncertainty.py` | Wilson, bootstrap, and season-clustered intervals. |
 | `src/glossary.py` | What every metric means. Feeds column tooltips and the Glossary tab. |
 | `app.py` | Streamlit app: Landscape / Players / Screen / Strategy / Board / Glossary. |

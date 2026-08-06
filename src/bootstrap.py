@@ -124,6 +124,14 @@ def run(light: bool = False) -> None:
         lambda: adp.snapshot(SUPERFLEX_ADP_SCORING, LEAGUE_ADP_TEAMS),
     )
 
+    _section("claims ledger")
+    # Depth-chart diffs always run; news extraction self-skips without an
+    # ANTHROPIC_API_KEY in the shell. Like the ADP history, the ledger only
+    # accumulates going forward — a day not pulled is a day of claims lost.
+    from src import claims
+
+    step("claims pull (depth charts + news)", claims.pull)
+
     _section("ADP history — backtest labels")
     for year in FEATURE_SEASONS + [SEASON]:
         if year in ADP_MISSING_YEARS:

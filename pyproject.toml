@@ -17,6 +17,8 @@ dependencies = [
     # Promoted out of the notebook group: clustering and the breakout backtest
     # are part of the app now, not exploratory work.
     "scikit-learn>=1.5",
+    "anthropic>=0.120.2",
+    "pydantic>=2.13.4",
 ]
 
 [dependency-groups]

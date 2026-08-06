@@ -1,4 +1,9 @@
-# Claims ledger — Phase 2 spec (agreed 2026-08-03, not yet built)
+# Claims ledger — Phase 2 spec (agreed 2026-08-03, built 2026-08-05)
+
+**Status:** implemented in `src/news.py` (ingest), `src/llm.py` +
+`src/prompts.py` (extraction), `src/claims.py` (ledger, scoring, flags,
+resolution), wired into the Screen tab and bootstrap. Extraction activates
+when `ANTHROPIC_API_KEY` is set; everything else runs without it.
 
 The contextual layer. Scope was settled in conversation: **automated ingestion**
 (Zach confirmed manual logging is not realistic), free sources only, sporadic
