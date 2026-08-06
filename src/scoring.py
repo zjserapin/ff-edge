@@ -16,10 +16,17 @@ of the module — Sleeper names things like `rec_yd` and nflverse names them
 **Replacement level.** The value of a player is not his points, it's his points
 above what you could have had for free at the same position. That baseline falls
 out of roster slots times teams, not out of convention: in a 10-team league with
-two FLEX spots, roughly 70 of RB/WR/TE combined are starting in any given week,
-and *which* 70 depends on how the FLEX spots actually get allocated. That
-allocation is computed from the season's real scoring rather than assumed, and
-exposed as a parameter because it genuinely moves the answer.
+a FLEX and a SUPER_FLEX, roughly 60 of RB/WR/TE plus a second wave of
+quarterbacks are starting in any given week, and *which* ones depends on how
+those slots actually get allocated. That allocation is computed from the
+season's real scoring rather than assumed, and exposed as a parameter because it
+genuinely moves the answer.
+
+The superflex slot added for 2026 is the single largest rules change this league
+has made for valuation purposes — it roughly doubles league-wide QB demand and
+drops replacement quarterback about ten positional ranks, which reprices every
+quarterback in the draft. `starter_demand` derives that rather than special-
+casing it.
 """
 
 from __future__ import annotations
@@ -36,8 +43,9 @@ from src.config import (
     DEFAULT_SCORING,
     DEFAULT_TEAMS,
     FANTASY_POSITIONS,
-    FLEX_ELIGIBLE,
+    FLEX_SLOTS,
     LEAGUE_ID,
+    NON_STARTING_SLOTS,
     REGULAR_SEASON_WEEKS,
 )
 
@@ -226,12 +234,17 @@ def scoring_history(league_id: str | None = None, force: bool = False) -> pl.Dat
 
     Worth a caption on any chart that plots history under current scoring,
     because the Shiva Bowl is not the league it was: 2023 ran full PPR with one
-    FLEX and -1 per interception; 2024 onward is half-PPR with two FLEX and -2.
-    Recomputing history under today's rules is the right call — you draft into
-    today's rules — but a reader should know the past wasn't played that way.
+    FLEX and -1 per interception; 2024-2025 was half-PPR with two FLEX and -2;
+    2026 turned one of those FLEX slots into a SUPER_FLEX. Recomputing history
+    under today's rules is the right call — you draft into today's rules — but a
+    reader should know the past wasn't played that way, and the superflex change
+    means past quarterback value in particular is not comparable.
 
-    Returns: season, teams, rec, pass_int, flex_slots, playoff_teams,
-    playoff_week_start.
+    `flex_slots` counts every multi-position slot; `super_flex_slots` breaks out
+    the QB-eligible ones, because that is the count that repriced the position.
+
+    Returns: season, teams, rec, pass_int, flex_slots, super_flex_slots,
+    playoff_teams, playoff_week_start.
     """
     resolved = resolve_league_id(league_id, force=force)
     if not resolved:
@@ -251,7 +264,10 @@ def scoring_history(league_id: str | None = None, force: bool = False) -> pl.Dat
                 "teams": meta.get("total_rosters"),
                 "rec": sc.get("rec"),
                 "pass_int": sc.get("pass_int"),
-                "flex_slots": sum(1 for s in slots if s == "FLEX"),
+                "flex_slots": sum(1 for s in slots if s in FLEX_SLOTS),
+                "super_flex_slots": sum(
+                    1 for s in slots if "QB" in FLEX_SLOTS.get(s, ())
+                ),
                 "playoff_teams": settings.get("playoff_teams"),
                 "playoff_week_start": settings.get("playoff_week_start"),
             }
@@ -352,51 +368,92 @@ def score_season(
 
 
 def _dedicated_slots(roster_positions: list[str], teams: int) -> dict[str, float]:
-    """Starters demanded by name-matched slots alone, ignoring FLEX."""
+    """Starters demanded by name-matched slots alone, ignoring every flex type."""
     counts: dict[str, float] = {}
     for slot in roster_positions:
-        if slot in ("BN", "FLEX", "IR", "TAXI", "SUPER_FLEX", "REC_FLEX", "WRRB_FLEX"):
+        if slot in NON_STARTING_SLOTS or slot in FLEX_SLOTS:
             continue
         counts[slot] = counts.get(slot, 0.0) + teams
+    return counts
+
+
+def _flex_counts(roster_positions: list[str], teams: int) -> dict[str, int]:
+    """League-wide count of each flex slot type on the roster."""
+    counts: dict[str, int] = {}
+    for slot in roster_positions:
+        if slot in FLEX_SLOTS:
+            counts[slot] = counts.get(slot, 0) + teams
     return counts
 
 
 def _greedy_flex(
     season_points: pl.DataFrame,
     dedicated: dict[str, float],
-    n_flex: int,
-    flex_eligible: tuple[str, ...],
+    flex_counts: dict[str, int],
+    flex_eligible: tuple[str, ...] | None = None,
 ) -> dict[str, float]:
-    """Allocate FLEX slots to whichever position is best at its next open rank.
+    """Allocate every flex slot to whichever eligible position is best at its
+    next open rank.
 
     A convention ("FLEX is mostly RB") is a guess. This is the same question
     asked of the data: with RB20 and WR20 already starting, is RB21 or WR21 worth
-    more? Take that one, then ask again. Repeating it `n_flex` times is exactly
-    how the marginal starter gets chosen in a real lineup, and it means the
-    replacement baseline reflects the season's actual shape rather than a
+    more? Take that one, then ask again. Repeating it once per flex slot is
+    exactly how the marginal starter gets chosen in a real lineup, and it means
+    the replacement baseline reflects the season's actual shape rather than a
     received opinion about what flex spots are for.
+
+    **Slot types are filled most-restrictive-first**, and that ordering is what
+    makes the result exactly optimal rather than merely reasonable. A permissive
+    slot can always take what a restrictive one could have taken, so letting the
+    restrictive slot choose first never costs anything, while the reverse can:
+    if SUPER_FLEX grabbed WR21 before FLEX chose, FLEX would be left picking
+    from a strictly smaller set. The argument holds whenever the eligibility
+    sets nest or are disjoint, which covers dedicated ⊂ FLEX ⊂ SUPER_FLEX — this
+    league's shape. A roster carrying both REC_FLEX and WRRB_FLEX would have two
+    sets that overlap without nesting, and there this is a good heuristic rather
+    than a guarantee.
+
+    Superflex is where this stops being an accounting detail. A QB-eligible slot
+    pulls quarterbacks into the marginal-starter comparison, and in half-PPR the
+    QB20 the greedy is weighing is worth far more than the RB21 or WR21 it is
+    weighed against — so a superflex slot goes to a quarterback essentially
+    every time, league-wide QB demand roughly doubles, and replacement
+    quarterback falls from about QB11 to about QB21. Nothing about that is
+    assumed here; it falls out of the same comparison the FLEX slots go through.
     """
+    positions = sorted({p for slot in flex_counts for p in FLEX_SLOTS[slot]})
+    if flex_eligible is not None:
+        # An explicit override replaces the plain FLEX slot's eligibility only;
+        # a SUPER_FLEX still gets to consider quarterbacks.
+        positions = sorted(set(positions) | set(flex_eligible))
+
     ranked = {
         pos: season_points.filter(pl.col("position") == pos)
         .sort("pos_rank")
         .get_column("fantasy_points")
         .to_list()
-        for pos in flex_eligible
+        for pos in positions
     }
-    filled = {pos: int(dedicated.get(pos, 0)) for pos in flex_eligible}
+    filled = {pos: int(round(dedicated.get(pos, 0))) for pos in positions}
 
-    for _ in range(n_flex):
-        best, best_val = None, float("-inf")
-        for pos in flex_eligible:
-            idx = filled[pos]
-            val = ranked[pos][idx] if idx < len(ranked[pos]) else float("-inf")
-            if val > best_val:
-                best, best_val = pos, val
-        if best is None:
-            break
-        filled[best] += 1
+    for slot in sorted(flex_counts, key=lambda s: len(FLEX_SLOTS[s])):
+        eligible = (
+            flex_eligible
+            if (slot == "FLEX" and flex_eligible is not None)
+            else FLEX_SLOTS[slot]
+        )
+        for _ in range(flex_counts[slot]):
+            best, best_val = None, float("-inf")
+            for pos in eligible:
+                idx = filled.get(pos, 0)
+                val = ranked[pos][idx] if idx < len(ranked.get(pos, [])) else float("-inf")
+                if val > best_val:
+                    best, best_val = pos, val
+            if best is None:
+                break
+            filled[best] += 1
 
-    return {pos: float(filled[pos] - dedicated.get(pos, 0)) for pos in flex_eligible}
+    return {pos: float(filled[pos] - round(dedicated.get(pos, 0))) for pos in positions}
 
 
 def starter_demand(
@@ -404,13 +461,13 @@ def starter_demand(
     teams: int = DEFAULT_TEAMS,
     season_points: pl.DataFrame | None = None,
     flex_split: Mapping[str, float] | None = None,
-    flex_eligible: tuple[str, ...] = FLEX_ELIGIBLE,
+    flex_eligible: tuple[str, ...] | None = None,
 ) -> dict[str, float]:
     """How many of each position are starting league-wide in a given week.
 
     Dedicated slots are arithmetic: two RB slots across ten teams is twenty
-    starting backs. FLEX is the interesting part, and there are two ways to
-    settle it:
+    starting backs. The flex slots are the interesting part, and there are two
+    ways to settle them:
 
       flex_split given      Allocate proportionally. This is the app's slider.
       season_points given   Allocate greedily from the real data (the default,
@@ -418,23 +475,56 @@ def starter_demand(
       neither               Split evenly across eligible positions — a last
                             resort that only applies when no data was passed.
 
+    **`flex_split` only governs the slots it can describe.** The slider names
+    shares for RB/WR/TE, which is enough to express a FLEX slot and not enough
+    to express a SUPER_FLEX, whose whole question is whether the slot goes to a
+    quarterback. So any slot type whose eligible positions are all named in the
+    split is allocated proportionally, and the rest are computed greedily even
+    when a split was passed. Letting the slider silently decide superflex would
+    hard-code the answer to the one question that slot exists to ask.
+
     The answer moves the entire analysis: replacement RB is somewhere around
     RB27-30 in this format, and a naive "RB is half the flex" assumption can miss
-    that by five ranks, which is a full round of draft capital.
+    that by five ranks, which is a full round of draft capital. Adding a
+    superflex slot moves replacement quarterback about ten ranks, which is
+    larger than any other single rules change this league has made.
     """
     roster_positions = roster_positions or DEFAULT_ROSTER_POSITIONS
     demand = _dedicated_slots(roster_positions, teams)
-    n_flex = sum(1 for s in roster_positions if s == "FLEX") * teams
-    if not n_flex:
+    flex_counts = _flex_counts(roster_positions, teams)
+    if not flex_counts:
         return demand
 
+    split_slots: dict[str, int] = {}
     if flex_split:
-        total = sum(flex_split.values()) or 1.0
-        extra = {pos: n_flex * (w / total) for pos, w in flex_split.items()}
-    elif season_points is not None and season_points.height:
-        extra = _greedy_flex(season_points, demand, int(n_flex), flex_eligible)
+        named = {pos for pos, w in flex_split.items()}
+        split_slots = {
+            slot: n
+            for slot, n in flex_counts.items()
+            if set(FLEX_SLOTS[slot]) <= named
+        }
+
+    total = sum(flex_split.values()) if flex_split else 0.0
+    for slot, n in split_slots.items():
+        for pos, w in (flex_split or {}).items():
+            demand[pos] = demand.get(pos, 0.0) + n * (w / (total or 1.0))
+
+    remaining = {s: n for s, n in flex_counts.items() if s not in split_slots}
+    if not remaining:
+        return demand
+
+    if season_points is not None and season_points.height:
+        extra = _greedy_flex(season_points, demand, remaining, flex_eligible)
     else:
-        extra = {pos: n_flex / len(flex_eligible) for pos in flex_eligible}
+        extra = {}
+        for slot, n in remaining.items():
+            eligible = (
+                flex_eligible
+                if (slot == "FLEX" and flex_eligible is not None)
+                else FLEX_SLOTS[slot]
+            )
+            for pos in eligible:
+                extra[pos] = extra.get(pos, 0.0) + n / len(eligible)
 
     for pos, add in extra.items():
         demand[pos] = demand.get(pos, 0.0) + add

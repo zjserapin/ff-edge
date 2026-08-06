@@ -337,6 +337,19 @@ def _sidebar() -> dict[str, Any]:
             f"RB {flex_split['RB']:.0%} · WR {flex_split['WR']:.0%} · TE {flex_split['TE']:.0%}"
         )
 
+    superflex = sum(
+        1 for s in (league["roster_positions"] or DEFAULT_ROSTER_POSITIONS)
+        if "QB" in sc.FLEX_SLOTS.get(s, ())
+    )
+    if superflex:
+        st.sidebar.caption(
+            f"{superflex} SUPER_FLEX slot{'s' if superflex > 1 else ''} on this "
+            "roster are always computed, never set by the sliders above — the "
+            "sliders name RB/WR/TE shares, which cannot express the only "
+            "question a superflex asks. They go to quarterbacks, which is why "
+            "replacement QB sits near QB21 rather than QB11."
+        )
+
     unmapped = sc.unmapped_keys(scoring)
     if unmapped:
         with st.sidebar.expander(f"Not modeled ({len(unmapped)} scoring rules)"):
@@ -1239,6 +1252,23 @@ def _tab_strategy(p: dict[str, Any]) -> None:
         "in-season management constant*. That is not the same as what wins leagues.",
         icon="⚠️",
     )
+
+    if any("QB" in sc.FLEX_SLOTS.get(s, ()) for s in p["roster_positions"]):
+        st.error(
+            "**These numbers describe the 2024–25 format, not your superflex "
+            "league.** A strategy comparison only means something when the "
+            "draft market and the templates match the format, and neither does "
+            "yet: the board is priced from 1QB ADP, and every template here was "
+            "written for two FLEX slots — `elite_qb` drafts a single "
+            "quarterback, which cannot fill a superflex. Run as-is under a "
+            "superflex roster and the sim would report that quarterbacks are "
+            "nearly free *and* start twice, which is an artifact of the "
+            "mismatched market rather than a finding. The replacement-level "
+            "and PAR numbers on every other tab **are** superflex-correct; only "
+            "this tab is pinned. Unpinning it needs 2QB ADP boards (FFC has "
+            "them back to 2020) and QB-heavier templates — not new machinery.",
+            icon="🔒",
+        )
 
     st.altair_chart(theme.base_chart(_strategy_chart(summary, dark), dark), use_container_width=True)
     chart_note(

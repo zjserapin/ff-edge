@@ -132,15 +132,62 @@ def test_schedule_is_a_valid_round_robin() -> None:
             assert week[opponent] == team, "pairing is not symmetric"
 
 
-def test_lineup_selection_is_optimal(board_scores) -> None:
+TWO_FLEX = ["QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "FLEX", "K", "DEF"]
+SUPER_FLEX = ["QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "SUPER_FLEX", "K", "DEF"]
+
+
+def _brute_force_best(pts, codes, dedicated, flex_sets) -> float:
+    """Highest-scoring legal lineup, by exhaustive search over every subset.
+
+    The reference implementation the greedy is checked against: it tries every
+    combination of starters and every way to assign them to slots, so it cannot
+    inherit a bug from the thing it is testing.
+    """
+    from itertools import combinations, permutations
+
+    n_start = len(dedicated) + len(flex_sets)
+    best = 0.0
+    for chosen in combinations(range(len(codes)), n_start):
+        remaining = [codes[i] for i in chosen]
+        ok = True
+        for want in dedicated:
+            code = sim.POS_CODES[want]
+            if code in remaining:
+                remaining.remove(code)
+            else:
+                ok = False
+                break
+        if not ok:
+            continue
+        # Any assignment of the leftovers to the flex slots will do.
+        if not any(
+            all(
+                code in {sim.POS_CODES[p] for p in eligible}
+                for code, eligible in zip(order, flex_sets)
+            )
+            for order in permutations(remaining)
+        ):
+            continue
+        best = max(best, float(sum(pts[i] for i in chosen)))
+    return best
+
+
+@pytest.mark.parametrize(
+    "roster,flex_sets",
+    [
+        (TWO_FLEX, [("RB", "WR", "TE"), ("RB", "WR", "TE")]),
+        (SUPER_FLEX, [("RB", "WR", "TE"), ("QB", "RB", "WR", "TE")]),
+    ],
+    ids=["two_flex", "super_flex"],
+)
+def test_lineup_selection_is_optimal(board_scores, roster, flex_sets) -> None:
     """Greedy must match brute force on the actual slot structure.
 
-    Greedy is optimal here only because the dedicated slots are disjoint by
-    position and FLEX accepts exactly RB/WR/TE. This checks the claim rather
-    than asserting it — a superflex would break it.
+    The superflex case is the one worth having. The old implementation could
+    not fill a QB-eligible slot at all, and the module docstring said a
+    superflex would break the greedy — it does not, provided the slot types are
+    filled most-restrictive-first, which is what this proves.
     """
-    from itertools import combinations
-
     board, scores = board_scores
     rng = np.random.default_rng(3)
     orders = sim.draft_orders(board, 6, rng)
@@ -148,38 +195,40 @@ def test_lineup_selection_is_optimal(board_scores) -> None:
     picks = sim.run_draft(board, orders, "balanced", seats, 10, 16)
     k_dst = np.zeros((6, 10, scores.shape[1]), dtype=np.float32)
 
-    got = sim.weekly_lineup_points(picks, board, scores, k_dst)
+    got = sim.weekly_lineup_points(picks, board, scores, k_dst, roster)
     pos = board.get_column("pos_code").to_numpy()
+    dedicated = [s for s in roster if s in sim.POS_CODES]
 
-    slots = ["QB", "RB", "RB", "WR", "WR", "TE"]
     for s in range(2):
         for t in range(3):
-            roster = picks[s, t]
-            roster = roster[roster >= 0]
+            members = picks[s, t]
+            members = members[members >= 0]
             week = 0
-            pts = scores[roster, week]
-            codes = pos[roster]
+            best = _brute_force_best(
+                scores[members, week], pos[members], dedicated, flex_sets
+            )
+            assert abs(got[s, t, week] - best) < 1e-3, (
+                f"lineup suboptimal: {got[s, t, week]} vs {best}"
+            )
 
-            best = 0.0
-            for chosen in combinations(range(len(roster)), 8):
-                pool = list(chosen)
-                remaining = [codes[i] for i in pool]
-                need = list(slots)
-                ok = True
-                for want in need:
-                    code = sim.POS_CODES[want]
-                    if code in remaining:
-                        remaining.remove(code)
-                    else:
-                        ok = False
-                        break
-                if not ok or len(remaining) != 2:
-                    continue
-                if not all(c in (1, 2, 3) for c in remaining):
-                    continue
-                best = max(best, float(sum(pts[i] for i in pool)))
 
-            assert abs(got[s, t, week] - best) < 1e-3, f"lineup suboptimal: {got[s,t,week]} vs {best}"
+def test_superflex_slot_starts_a_second_quarterback(board_scores) -> None:
+    """The behavioural consequence: the same roster scores more under a
+    superflex, because a bench QB becomes a starter."""
+    board, scores = board_scores
+    rng = np.random.default_rng(11)
+    orders = sim.draft_orders(board, 8, rng)
+    seats = rng.integers(0, 10, 8)
+    picks = sim.run_draft(board, orders, "balanced", seats, 10, 16)
+    k_dst = np.zeros((8, 10, scores.shape[1]), dtype=np.float32)
+
+    two_flex = sim.weekly_lineup_points(picks, board, scores, k_dst, TWO_FLEX)
+    super_flex = sim.weekly_lineup_points(picks, board, scores, k_dst, SUPER_FLEX)
+
+    # Same eight slots either way, but the superflex can reach a position the
+    # two-FLEX roster cannot, so it is never worse and usually better.
+    assert (super_flex >= two_flex - 1e-3).all()
+    assert super_flex.mean() > two_flex.mean()
 
 
 def test_playoff_structure_matches_the_league(board_scores) -> None:

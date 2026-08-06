@@ -42,13 +42,14 @@ from src.config import (
     DEFAULT_TEAMS,
     DST_WEEKLY_MEAN,
     DST_WEEKLY_SD,
-    FLEX_ELIGIBLE,
+    FLEX_SLOTS,
     LABEL_SEASONS,
     LEAGUE_ADP_SCORING,
     LEAGUE_ADP_TEAMS,
     OUTPUT_DIR,
     PLAYOFF_TEAMS,
     REGULAR_SEASON_WEEKS,
+    SIM_ROSTER_POSITIONS,
 )
 
 # Position codes as small ints — the draft loop indexes arrays by them.
@@ -285,25 +286,37 @@ def weekly_lineup_points(
     scores: np.ndarray,
     k_dst: np.ndarray,
     roster_positions: list[str] | None = None,
-    flex_eligible: tuple[str, ...] = FLEX_ELIGIBLE,
 ) -> np.ndarray:
     """Best legal lineup every week, for every team, in every simulation.
 
     Greedy is provably optimal for this slot structure, which is why there is no
-    solver here: the dedicated slots are disjoint by position and FLEX accepts
-    exactly RB union WR union TE, so filling each dedicated slot with that
-    position's highest scorers and then taking the best remaining two across the
-    flex-eligible positions cannot be improved on. With a superflex or any slot
-    that overlapped a dedicated one, this would no longer hold.
+    solver here, and the 2026 superflex slot does not change that — it only
+    changes the order the slots are filled in.
+
+    Two facts carry the proof. Dedicated slots are disjoint by position, so
+    giving each one that position's highest scorers is never worse than any
+    alternative: a flex slot that could have used one of those players can use
+    the next one down just as well. And the multi-position slots are filled
+    **most restrictive first**, which is safe because a permissive slot can
+    always take what a restrictive one could have taken — letting FLEX choose
+    before SUPER_FLEX costs nothing, while the reverse can strand FLEX with a
+    strictly smaller set to choose from.
+
+    That argument needs the eligibility sets to nest or be disjoint, and
+    dedicated ⊂ FLEX ⊂ SUPER_FLEX does. A roster carrying both REC_FLEX and
+    WRRB_FLEX would have sets that overlap without nesting and this would become
+    a very good heuristic instead of a guarantee; no such roster exists here,
+    and `test_lineup_selection_is_optimal` brute-forces the real one rather than
+    taking any of this on faith.
 
     Returns (n_sims, teams, n_weeks).
     """
     roster_positions = roster_positions or DEFAULT_ROSTER_POSITIONS
     slots: dict[str, int] = {}
-    n_flex = 0
+    flex_counts: dict[str, int] = {}
     for slot in roster_positions:
-        if slot == "FLEX":
-            n_flex += 1
+        if slot in FLEX_SLOTS:
+            flex_counts[slot] = flex_counts.get(slot, 0) + 1
         elif slot in POS_CODES:
             slots[slot] = slots.get(slot, 0) + 1
 
@@ -322,21 +335,38 @@ def weekly_lineup_points(
     codes[empty] = -1
 
     total = np.zeros((n_sims, teams, n_weeks), dtype=np.float32)
-    leftovers = []
+    leftovers: dict[str, np.ndarray] = {}
 
-    for pos, count in slots.items():
+    for pos in POS_CODES:
         code = POS_CODES[pos]
         masked = np.where(codes[..., None] == code, pts, -np.inf)
         ordered = -np.sort(-masked, axis=2)
-        started = ordered[:, :, :count, :]
-        total += np.where(np.isfinite(started), started, 0).sum(axis=2)
-        if pos in flex_eligible:
-            leftovers.append(ordered[:, :, count:, :])
+        count = slots.get(pos, 0)
+        if count:
+            started = ordered[:, :, :count, :]
+            total += np.where(np.isfinite(started), started, 0).sum(axis=2)
+        # Everyone past the dedicated slots is flex-available. A position with
+        # no dedicated slot at all still contributes its whole bench — that is
+        # what makes a QB reachable by SUPER_FLEX in a roster with no QB slot.
+        leftovers[pos] = ordered[:, :, count:, :]
 
-    if n_flex and leftovers:
-        bench = np.concatenate(leftovers, axis=2)
-        best = -np.sort(-bench, axis=2)[:, :, :n_flex, :]
-        total += np.where(np.isfinite(best), best, 0).sum(axis=2)
+    # Most restrictive slot type first; each takes the best of what its own
+    # eligible positions have left, and hands the rest down to the next.
+    pool: np.ndarray | None = None
+    covered: set[str] = set()
+    for slot in sorted(flex_counts, key=lambda s: len(FLEX_SLOTS[s])):
+        eligible = [p for p in FLEX_SLOTS[slot] if p in leftovers]
+        parts = ([pool] if pool is not None else []) + [
+            leftovers[p] for p in eligible if p not in covered
+        ]
+        if not parts:
+            continue
+        pool = -np.sort(-np.concatenate(parts, axis=2), axis=2)
+        count = flex_counts[slot]
+        started = pool[:, :, :count, :]
+        total += np.where(np.isfinite(started), started, 0).sum(axis=2)
+        pool = pool[:, :, count:, :]
+        covered.update(eligible)
 
     return total + k_dst[:, :, :n_weeks]
 
@@ -442,13 +472,22 @@ def run(
     Only your team's rows are returned — the nine ADP-following opponents exist
     to make the draft realistic, not to be measured.
 
+    **Defaults to `SIM_ROSTER_POSITIONS`, not the league's current roster**, and
+    that is deliberate: this function compares draft strategies, which requires
+    the market and the templates to match the format. The 2026 superflex slot
+    has neither yet, so the comparison stays in the 2024-2025 format it can
+    model honestly. See the note on `SIM_ROSTER_POSITIONS`. Pass
+    `roster_positions` explicitly to override once superflex templates and a 2QB
+    board exist.
+
     Returns: strategy, season, sim, wins, points_for, seed, made_playoffs,
     won_title.
     """
     seasons = seasons or LABEL_SEASONS
     scoring = scoring or DEFAULT_SCORING
+    roster_positions = roster_positions or SIM_ROSTER_POSITIONS
     per_season = max(1, n_sims // len(seasons))
-    rounds = len([s for s in (roster_positions or DEFAULT_ROSTER_POSITIONS) if s != "IR"])
+    rounds = len([s for s in roster_positions if s != "IR"])
 
     out: list[pl.DataFrame] = []
     for i, season in enumerate(seasons):

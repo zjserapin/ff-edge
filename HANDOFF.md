@@ -185,6 +185,30 @@ Open questions to settle before building:
 
 ---
 
+## The 2026 superflex change (done 2026-08-05)
+
+The league turned one FLEX into a SUPER_FLEX. `scoring.starter_demand` used to
+skip every non-FLEX multi-position slot outright, so the league was starting 70
+players from an 80-slot roster and quarterback demand was stuck at one per team.
+
+Fixed by giving every flex type its eligible-position set (`config.FLEX_SLOTS`)
+and filling **most restrictive first** — which is not a style choice: a
+permissive slot can always take what a restrictive one could have, so FLEX
+choosing before SUPER_FLEX costs nothing while the reverse can strand it. That
+makes the greedy exactly optimal for nested sets (dedicated ⊂ FLEX ⊂
+SUPER_FLEX), and `test_lineup_selection_is_optimal` brute-forces it rather than
+asserting it.
+
+Effect: QB demand 10 → 20, replacement QB11 → QB21, baseline −74 points, and
+the top 14 by PAR goes from one quarterback to six.
+
+**The strategy sim is deliberately pinned to the old format**
+(`config.SIM_ROSTER_POSITIONS`) and says so in the app. Its board is 1QB ADP and
+its templates are two-FLEX shaped (`elite_qb` drafts one quarterback), so
+running it under superflex would report that QBs are nearly free *and* start
+twice — an artifact, not a finding. FFC publishes 2QB ADP back to 2020, so
+unpinning is a board swap plus new templates, not new machinery.
+
 ## Things to be careful about
 
 **`config.ROOT` uses `parents[1]`, not `parent`.** `src/config.py:35`. Using

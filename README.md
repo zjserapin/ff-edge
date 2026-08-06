@@ -34,7 +34,7 @@ uv run python -m src.bootstrap --light
 ```
 
 Without them the Sleeper section is skipped and the app falls back to saved
-league settings (10-team, half-PPR, two FLEX), so everything still runs — you
+league settings (10-team, half-PPR, FLEX + SUPER_FLEX), so everything still runs — you
 just get the reference league's rules instead of your own.
 
 The claims ledger's news extraction needs one more optional key. Without it,
@@ -194,9 +194,25 @@ model keys on vacated *carries*, the WR model on vacated *targets* — signals a
 pooled fit had to average together. Draft capital dominates everywhere; combine
 numbers are close to noise.
 
+**The 2026 superflex slot reprices quarterback more than any other rules change
+this league has made.** One of the two FLEX slots became a SUPER_FLEX, which
+puts quarterbacks into the marginal-starter comparison. League-wide QB demand
+goes from 10 to 20, replacement quarterback falls from QB11 to QB21, and the
+baseline drops 74 points — so every quarterback's PAR rises by that much.
+Sorting 2025 by PAR, the top 14 goes from **one** quarterback to **six**, and
+Josh Allen moves from 11th to 3rd overall. None of that is special-cased:
+`starter_demand` fills the most restrictive slot first and asks the same
+"who is worth more at the next open rank" question the FLEX slots go through.
+
 **Two quarterback-timing strategies beat drafting by ADP** — late-QB +3.6pp and
 elite-QB +2.8pp on title rate, with Bonferroni-corrected intervals excluding
-zero. Early-TE is significantly worse.
+zero. Early-TE is significantly worse. **These describe the 2024–25 two-FLEX
+format.** The strategy simulator is deliberately pinned there (`SIM_ROSTER_POSITIONS`):
+a strategy comparison needs the market and the templates to match the format,
+and the board is priced from 1QB ADP while every template was written for two
+FLEX slots. Unpinning it needs 2QB ADP boards (FFC has them back to 2020) and
+QB-heavier templates, not new machinery — the lineup optimizer already handles
+superflex and is brute-force tested against it.
 
 **But season choice dominates strategy choice.** Zero-RB averages 8.5 wins in
 2022 and 5.1 in 2024. That 3.4-win swing is larger than any gap between

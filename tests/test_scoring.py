@@ -119,26 +119,91 @@ def test_zero_weight_keys_contribute_nothing() -> None:
     assert df.select(with_fum).equals(df.select(without))
 
 
-def test_starter_demand_conserves_flex_slots(season_points: pl.DataFrame) -> None:
-    """Dedicated slots plus FLEX must equal total starters. 10 teams: 50 + 20 = 70."""
+TWO_FLEX = ["QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "FLEX", "K", "DEF"]
+SUPER_FLEX = ["QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "SUPER_FLEX", "K", "DEF"]
+
+
+def test_starter_demand_conserves_slots(season_points: pl.DataFrame) -> None:
+    """Every slot on the roster must start exactly one player, league-wide.
+
+    10 teams x 8 skill slots = 80 starters, however the flex slots get split.
+    A conservation failure means a slot was double-counted or dropped, which is
+    exactly what SUPER_FLEX used to do — it was silently skipped, so the league
+    started 70 players from an 80-slot roster.
+    """
     year = season_points.filter(pl.col("season") == season_points["season"].max())
-    demand = scoring.starter_demand(season_points=year, teams=10)
+    for roster in (TWO_FLEX, SUPER_FLEX):
+        demand = scoring.starter_demand(roster, season_points=year, teams=10)
+        total = sum(demand[p] for p in ("QB", "RB", "WR", "TE"))
+        assert total == pytest.approx(80.0), f"{roster}: {demand}"
+        # No flex allocation may take from a dedicated slot.
+        assert demand["QB"] >= 10 and demand["TE"] >= 10
+        assert demand["RB"] >= 20 and demand["WR"] >= 20
 
-    assert demand["QB"] == 10
-    assert sum(demand[p] for p in ("RB", "WR", "TE")) == pytest.approx(70.0)
-    # Greedy allocation should give every flex-eligible position at least its
-    # dedicated share and never take from one.
-    assert demand["RB"] >= 20 and demand["WR"] >= 20 and demand["TE"] >= 10
 
+def test_superflex_roughly_doubles_quarterback_demand(
+    season_points: pl.DataFrame,
+) -> None:
+    """The finding this whole change exists for.
 
-def test_flex_split_override_is_respected(season_points: pl.DataFrame) -> None:
-    """The sidebar slider path allocates proportionally, not greedily."""
-    demand = scoring.starter_demand(
-        teams=10, flex_split={"RB": 0.5, "WR": 0.5, "TE": 0.0}
+    A QB-eligible slot puts quarterbacks into the marginal-starter comparison,
+    and in half-PPR the QB20 on offer beats the RB21 or WR21 it is weighed
+    against essentially every time — so the slot goes to a quarterback and
+    league-wide QB demand goes from one per team to two.
+    """
+    year = season_points.filter(pl.col("season") == season_points["season"].max())
+    before = scoring.starter_demand(TWO_FLEX, season_points=year, teams=10)
+    after = scoring.starter_demand(SUPER_FLEX, season_points=year, teams=10)
+
+    assert before["QB"] == 10
+    assert after["QB"] >= 19, f"superflex barely moved QB demand: {after}"
+    # The slots came from somewhere: one FLEX became a SUPER_FLEX, so the
+    # RB/WR/TE pool loses ten starters.
+    assert sum(after[p] for p in ("RB", "WR", "TE")) == pytest.approx(
+        sum(before[p] for p in ("RB", "WR", "TE")) - 10.0
     )
+
+
+def test_superflex_moves_replacement_quarterback(season_points: pl.DataFrame) -> None:
+    """Replacement QB should fall about ten positional ranks, and the baseline
+    with it — that repricing is the entire point of the change."""
+    year = season_points.filter(pl.col("season") == season_points["season"].max())
+    before = scoring.replacement_level(year, TWO_FLEX, teams=10)
+    after = scoring.replacement_level(year, SUPER_FLEX, teams=10)
+
+    qb_before = before.filter(pl.col("position") == "QB").row(0, named=True)
+    qb_after = after.filter(pl.col("position") == "QB").row(0, named=True)
+
+    assert qb_before["replacement_rank"] <= 12
+    assert qb_after["replacement_rank"] >= 19
+    # A lower baseline means every quarterback's PAR rises.
+    assert qb_after["replacement_points"] < qb_before["replacement_points"]
+
+
+def test_flex_split_governs_only_the_slots_it_can_describe(
+    season_points: pl.DataFrame,
+) -> None:
+    """The sidebar slider names RB/WR/TE shares. That is enough to express a
+    FLEX and not enough to express a SUPER_FLEX, whose whole question is
+    whether the slot goes to a quarterback — so the split must not silently
+    decide it."""
+    year = season_points.filter(pl.col("season") == season_points["season"].max())
+    split = {"RB": 0.5, "WR": 0.5, "TE": 0.0}
+
+    # With only FLEX slots the split governs everything, proportionally.
+    demand = scoring.starter_demand(TWO_FLEX, teams=10, flex_split=split)
     assert demand["RB"] == pytest.approx(30.0)
     assert demand["WR"] == pytest.approx(30.0)
     assert demand["TE"] == pytest.approx(10.0)
+
+    # With a SUPER_FLEX the split still governs the FLEX, but the superflex is
+    # computed — and lands on quarterbacks.
+    demand = scoring.starter_demand(
+        SUPER_FLEX, teams=10, season_points=year, flex_split=split
+    )
+    assert demand["RB"] == pytest.approx(25.0)  # 20 dedicated + half of one FLEX
+    assert demand["WR"] == pytest.approx(25.0)
+    assert demand["QB"] >= 19, "flex_split silently suppressed the superflex"
 
 
 def test_replacement_is_past_the_starting_pool(season_points: pl.DataFrame) -> None:

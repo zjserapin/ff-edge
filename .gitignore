@@ -220,3 +220,8 @@ __marimo__/
 # ff-edge
 data/
 output/
+
+# Claude Code local state. Machine-local permissions and scratch worktrees, not
+# shared config — a checked-in .claude/settings.json would still be tracked.
+.claude/settings.local.json
+.claude/worktrees/

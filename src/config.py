@@ -108,19 +108,67 @@ LEAGUE_ID = os.environ.get("FF_EDGE_LEAGUE_ID", "")
 # these exist so the app starts with no network and so the analysis modules have
 # something to be called with directly.
 DEFAULT_TEAMS = 10
+
+# The 2026 roster. The league changed again for 2026: one of the two FLEX slots
+# became a SUPER_FLEX, which is the single largest rules change in its history
+# for valuation purposes. A superflex slot roughly doubles league-wide QB
+# demand — replacement quarterback moves from about QB11 to about QB21 — and
+# every PAR number in the project moves with it. See `scoring.starter_demand`.
 DEFAULT_ROSTER_POSITIONS: list[str] = [
-    "QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "FLEX", "K", "DEF",
+    "QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "SUPER_FLEX", "K", "DEF",
 ] + ["BN"] * 6
 
 # Weeks 1-14 decide the league; 15-17 are a 6-team playoff with byes for the top
 # two seeds. Positional finish is measured over the regular season because those
 # are the weeks a drafted roster is actually competing in.
+# The roster the draft simulator compares strategies under, deliberately NOT
+# DEFAULT_ROSTER_POSITIONS. A strategy comparison is only meaningful when the
+# draft market and the positional templates match the format being simulated,
+# and neither does for superflex yet: the board is priced from 1QB ADP, and
+# every template in `simulate.STRATEGIES` was written for a two-FLEX league
+# (`elite_qb` drafts a single quarterback, which cannot fill a superflex slot).
+#
+# Run those templates against a 1QB market under a superflex roster and the
+# sim reports that quarterbacks are nearly free *and* start twice — an artifact
+# of the mismatched market, not a finding. So the strategy sim stays pinned to
+# the 2024-2025 format it can actually model, and says so in the app.
+#
+# The unlock is real and cheap when it is worth doing: FFC publishes 2QB ADP
+# for past seasons too (verified back to 2020), so a superflex strategy study
+# needs that board plus QB-heavier templates, not new machinery. The lineup
+# optimizer already handles superflex and is brute-force tested against it.
+SIM_ROSTER_POSITIONS: list[str] = [
+    "QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "FLEX", "K", "DEF",
+] + ["BN"] * 6
+
 REGULAR_SEASON_WEEKS = 14
 PLAYOFF_WEEKS: list[int] = [15, 16, 17]
 PLAYOFF_TEAMS = 6
 
 FANTASY_POSITIONS: tuple[str, ...] = ("QB", "RB", "WR", "TE")
-FLEX_ELIGIBLE: tuple[str, ...] = ("RB", "WR", "TE")
+
+# Every multi-position slot Sleeper can put on a roster, and what each accepts.
+# Sleeper's own slot names, so a roster pulled live from the API maps onto this
+# without translation.
+#
+# The *size* of each eligibility set is load-bearing, not decorative: both the
+# replacement math and the simulator's lineup optimizer fill the most
+# restrictive slot first, which is what makes a greedy allocation exactly
+# optimal when the sets nest — and dedicated ⊂ FLEX ⊂ SUPER_FLEX is precisely
+# this league's shape. REC_FLEX and WRRB_FLEX do not nest with each other, so a
+# roster carrying both would make the allocation a heuristic; that combination
+# does not exist here and both functions say so out loud.
+FLEX_SLOTS: dict[str, tuple[str, ...]] = {
+    "REC_FLEX": ("WR", "TE"),
+    "WRRB_FLEX": ("RB", "WR"),
+    "FLEX": ("RB", "WR", "TE"),
+    "SUPER_FLEX": ("QB", "RB", "WR", "TE"),
+}
+
+# Slots that start nobody, so they demand nobody.
+NON_STARTING_SLOTS: tuple[str, ...] = ("BN", "IR", "TAXI")
+
+FLEX_ELIGIBLE: tuple[str, ...] = FLEX_SLOTS["FLEX"]
 
 # Verbatim from the 2026 league, used when Sleeper is unreachable. Note the
 # league changed in 2024: 2023 was full PPR with one FLEX and pass_int -1.
