@@ -174,6 +174,73 @@ def test_favourite_is_priced_above_the_underdog() -> None:
     )
 
 
+def test_preseason_environment_covers_every_team() -> None:
+    """Preseason the whole league must be priced, or the environment layer
+    silently ranks some offences and not others."""
+    env = ex.preseason_environment()
+    if not env.height:
+        pytest.skip("cold cache")
+    assert env.height == 32
+    assert (env.get_column("n_lined") >= 1).all()
+    # No win-total sheet filled in -> lines only, and the blend column equals it.
+    assert env.get_column("basis").unique().to_list() == ["lines"]
+    assert env.get_column("env_z").to_list() == env.get_column("lines_z").to_list()
+
+
+def test_win_totals_sheet_matches_the_environment_frame(tmp_path, monkeypatch) -> None:
+    """The template must line up with what it feeds. The teams table carries
+    relocated franchises and would produce a 36-row sheet for a 32-team league.
+    """
+    monkeypatch.setattr(ex, "win_totals_path", lambda season=2026: tmp_path / "wt.csv")
+    msg = ex.write_win_totals_template(2026)
+    if "no 2026 schedule" in msg:
+        pytest.skip("cold cache")
+    sheet = pl.read_csv(tmp_path / "wt.csv")
+    assert sheet.height == 32
+    assert sheet.get_column("team").n_unique() == 32
+    # Unfilled sheet reads as absent rather than as a league of zeros.
+    assert ex.win_totals(2026).height == 0
+
+
+def test_template_refuses_to_clobber(tmp_path, monkeypatch) -> None:
+    """The sheet is hand-maintained and there is no undo."""
+    monkeypatch.setattr(ex, "win_totals_path", lambda season=2026: tmp_path / "wt.csv")
+    first = ex.write_win_totals_template(2026)
+    if "no 2026 schedule" in first:
+        pytest.skip("cold cache")
+    assert "already exists" in ex.write_win_totals_template(2026)
+    assert "wrote" in ex.write_win_totals_template(2026, force=True)
+
+
+def test_win_totals_blend_shifts_only_the_teams_it_covers(
+    tmp_path, monkeypatch
+) -> None:
+    """A team absent from the sheet must keep its lines-only estimate rather
+    than being dragged toward the mean by a null."""
+    baseline = ex.preseason_environment()
+    if not baseline.height:
+        pytest.skip("cold cache")
+
+    covered = baseline.get_column("team").to_list()[:16]
+    pl.DataFrame(
+        {"team": covered, "win_total": [float(6 + i % 8) for i in range(len(covered))]}
+    ).write_csv(tmp_path / "wt.csv")
+    monkeypatch.setattr(ex, "win_totals_path", lambda season=2026: tmp_path / "wt.csv")
+
+    blended = ex.preseason_environment()
+    by_team = {r["team"]: r for r in blended.iter_rows(named=True)}
+    base_by_team = {r["team"]: r for r in baseline.iter_rows(named=True)}
+
+    for team in blended.get_column("team").to_list():
+        if team in covered:
+            assert by_team[team]["basis"] == "lines+win_totals"
+        else:
+            assert by_team[team]["basis"] == "lines"
+            assert by_team[team]["env_z"] == pytest.approx(
+                base_by_team[team]["env_z"]
+            )
+
+
 def test_line_coverage_is_visible(labeled: pl.DataFrame) -> None:
     """Preseason the sportsbooks have priced only the first few weeks, and the
     tool has to say so rather than quietly ranking on a half-priced slate."""

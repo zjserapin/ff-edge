@@ -49,6 +49,28 @@ Season-long player props ("10+ TDs", "4000 passing yards") are deliberately not
 used. They are not free at any useful coverage, they exist only for the stars
 who are already the easiest players to rank, and a single threshold gives one
 point on a distribution rather than an expectation.
+
+**Hand-entered win totals turned out to be unnecessary, and the measurement is
+worth recording so nobody re-proposes them.** Against 128 team-seasons of
+2022-2025:
+
+    actual wins            -> team fantasy points    0.615
+    weeks 1-3 implied      -> team fantasy points    0.619
+    full-season implied    -> team fantasy points    0.870  (concurrent)
+
+Actual wins is the *ceiling* a preseason win total could reach, since a win
+total is only a forecast of that number and a noisy one. The first three weeks
+of posted game lines already match that ceiling, cost nothing, and update
+themselves — and every one of the 32 teams has three or four priced games for
+2026 today. So `preseason_environment` runs on lines by default; the win-total
+slot exists and blends in when the file is present, but it is an override for a
+signal that is already covered rather than the primary input.
+
+Two honest caveats on that 0.619. nflverse ships closing lines, set the week of
+the game, while the lookahead lines available in August are less informed, so
+expect somewhat less in practice. And early-week lines carry opponent strength
+as well as team quality, which averaging over three games only partly washes
+out.
 """
 
 from __future__ import annotations
@@ -59,7 +81,7 @@ import polars as pl
 from src import breakout as bo
 from src import nflverse as nv
 from src import scoring as sc
-from src.config import FANTASY_POSITIONS, LABEL_SEASONS, SEASON
+from src.config import DATA_DIR, FANTASY_POSITIONS, LABEL_SEASONS, SEASON
 
 # Half a point per game over a 14-week fantasy season. The unit a tier break
 # has to clear: below this, two players are the same asset in practice.
@@ -331,6 +353,165 @@ def team_environment(
         pl.col("spread_line").alias("spread"),
     )
     return pl.concat([home, away]).sort(["season", "week", "team"])
+
+
+def win_totals_path(season: int = SEASON):
+    """Where the hand-maintained win-total file lives. Inside `data/`, which is
+    gitignored — this is data, not configuration."""
+    return DATA_DIR / f"win_totals_{season}.csv"
+
+
+def write_win_totals_template(season: int = SEASON, force: bool = False) -> str:
+    """Write a blank win-total sheet for the season, one row per team.
+
+    Thirty-two numbers entered once a year, which is a different proposition
+    from the daily logging this project already declined. Fill the `win_total`
+    column from any free source that posts them and leave the rest alone;
+    blanks are ignored rather than treated as zero.
+
+    Refuses to clobber an existing file unless `force`, because the file is
+    hand-maintained and there is no undo.
+    """
+    path = win_totals_path(season)
+    if path.exists() and not force:
+        return f"{path} already exists — pass force=True to overwrite"
+
+    # Teams come from this season's schedule, not the teams table — the latter
+    # carries relocated franchises (OAK, SD, STL) and would put 36 rows in a
+    # 32-team sheet, which then will not line up with `preseason_environment`.
+    games = nv.schedules([season])
+    if not games.height:
+        return f"no {season} schedule cached — run bootstrap first"
+    playing = (
+        pl.concat(
+            [
+                games.select(pl.col("home_team").alias("team")),
+                games.select(pl.col("away_team").alias("team")),
+            ]
+        )
+        .unique()
+        .drop_nulls()
+    )
+
+    teams = nv.teams()
+    abbr = "team" if "team" in teams.columns else "team_abbr"
+    name = "full" if "full" in teams.columns else "team_name"
+    lookup = teams.select(
+        pl.col(abbr).alias("team"), pl.col(name).alias("team_name")
+    ).unique(subset=["team"])
+
+    sheet = (
+        playing.join(lookup, on="team", how="left")
+        .sort("team")
+        .with_columns(pl.lit(None, dtype=pl.Float64).alias("win_total"))
+    )
+    sheet.write_csv(path)
+    return f"wrote {sheet.height} teams to {path}"
+
+
+def win_totals(season: int = SEASON) -> pl.DataFrame:
+    """Hand-entered Vegas win totals, if the sheet exists and has numbers.
+
+    Returns an empty frame when absent or unfilled, which is the normal state —
+    the lines-based environment does not need this.
+
+    Returns: team, win_total.
+    """
+    path = win_totals_path(season)
+    if not path.exists():
+        return pl.DataFrame()
+    sheet = pl.read_csv(path, schema_overrides={"win_total": pl.Float64})
+    if "win_total" not in sheet.columns:
+        return pl.DataFrame()
+    filled = sheet.filter(pl.col("win_total").is_not_null()).select("team", "win_total")
+    return filled if filled.height else pl.DataFrame()
+
+
+def _z(col: str) -> pl.Expr:
+    """Standardize within the frame, tolerating a degenerate column."""
+    sd = pl.col(col).std()
+    return (
+        pl.when(sd > 0).then((pl.col(col) - pl.col(col).mean()) / sd).otherwise(0.0)
+    )
+
+
+def preseason_environment(
+    season: int = SEASON,
+    max_week: int = 4,
+    win_total_weight: float = 0.3,
+) -> pl.DataFrame:
+    """Team offensive environment before the season, from whatever is priced.
+
+    Averages each team's implied total over the games the sportsbooks have
+    posted so far — all 32 teams have three or four for 2026 — and expresses it
+    as a z-score across the league, because the useful question preseason is
+    which offences are priced above the field rather than what any one will
+    score.
+
+    If a win-total sheet exists it is standardized the same way and blended in
+    at `win_total_weight`. **That weight is a prior, not a fit.** Validating it
+    would need historical preseason win totals, which are not in nflverse and
+    which this project does not have, so it is deliberately modest and the
+    unblended lines column is kept alongside for comparison. The measurement in
+    the module docstring is the reason it is not higher: lines already reach the
+    ceiling a win total could.
+
+    Returns: season, team, n_lined, early_implied, lines_z, win_total,
+    win_total_z, env_z, basis.
+    """
+    env = team_environment([season])
+    if not env.height:
+        return pl.DataFrame()
+
+    base = (
+        env.filter(pl.col("week") <= max_week)
+        .group_by("team")
+        .agg(
+            pl.len().alias("n_lined"),
+            pl.col("implied_total").mean().round(2).alias("early_implied"),
+        )
+        .with_columns(pl.lit(season, dtype=pl.Int32).alias("season"))
+        .with_columns(_z("early_implied").round(3).alias("lines_z"))
+    )
+
+    totals = win_totals(season)
+    if not totals.height:
+        return base.with_columns(
+            pl.lit(None, dtype=pl.Float64).alias("win_total"),
+            pl.lit(None, dtype=pl.Float64).alias("win_total_z"),
+            pl.col("lines_z").alias("env_z"),
+            pl.lit("lines").alias("basis"),
+        ).select(
+            "season", "team", "n_lined", "early_implied", "lines_z",
+            "win_total", "win_total_z", "env_z", "basis",
+        ).sort("env_z", descending=True)
+
+    merged = base.join(totals, on="team", how="left").with_columns(
+        _z("win_total").round(3).alias("win_total_z")
+    )
+    # A team missing from the sheet keeps its lines-only estimate rather than
+    # being dragged toward the mean by a null.
+    return (
+        merged.with_columns(
+            pl.when(pl.col("win_total_z").is_null())
+            .then(pl.col("lines_z"))
+            .otherwise(
+                (1 - win_total_weight) * pl.col("lines_z")
+                + win_total_weight * pl.col("win_total_z")
+            )
+            .round(3)
+            .alias("env_z"),
+            pl.when(pl.col("win_total_z").is_null())
+            .then(pl.lit("lines"))
+            .otherwise(pl.lit("lines+win_totals"))
+            .alias("basis"),
+        )
+        .select(
+            "season", "team", "n_lined", "early_implied", "lines_z",
+            "win_total", "win_total_z", "env_z", "basis",
+        )
+        .sort("env_z", descending=True)
+    )
 
 
 def line_coverage(season: int = SEASON) -> pl.DataFrame:
