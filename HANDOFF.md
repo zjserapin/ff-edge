@@ -156,7 +156,8 @@ the player once you have.
 
 ---
 
-## The proposed next build (not started)
+## The proposed next build (BUILT 2026-08-03 — see `src/promotion.py`, the
+## Screen tab, and `CLAIMS_SPEC.md` for the agreed Phase 2)
 
 A **promotion screen** with that division of labor:
 

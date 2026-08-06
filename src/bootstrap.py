@@ -33,6 +33,7 @@ from src.config import (
     PBP_SEASONS,
     SEASON,
     SLEEPER_USERNAME,
+    SUPERFLEX_ADP_SCORING,
 )
 
 RESULTS: list[dict[str, Any]] = []
@@ -115,6 +116,12 @@ def run(light: bool = False) -> None:
     step(
         f"adp snapshot {LEAGUE_ADP_SCORING}/{LEAGUE_ADP_TEAMS}",
         lambda: adp.snapshot(LEAGUE_ADP_SCORING, LEAGUE_ADP_TEAMS),
+    )
+    # The 2026 superflex reference board. Started 2026-08-03; like every ADP
+    # history it accumulates one day at a time and cannot be backfilled.
+    step(
+        f"adp snapshot {SUPERFLEX_ADP_SCORING}/{LEAGUE_ADP_TEAMS}",
+        lambda: adp.snapshot(SUPERFLEX_ADP_SCORING, LEAGUE_ADP_TEAMS),
     )
 
     _section("ADP history — backtest labels")

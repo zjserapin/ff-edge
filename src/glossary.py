@@ -580,6 +580,51 @@ TERMS: dict[str, Term] = {
                     predicting the average for everyone. Unlike the veteran breakout
                     probability, these are on one scale and comparable across positions.""",
                     "Rookies"),
+    # --- Promotion screen ---------------------------------------------------
+    "screen_pct": _t(
+        "Screen score", "Mean percentile on his position's promotion criteria.",
+        """Trust markers at RB (snap share, red-zone and goal-line carry share,
+        TD equity), efficiency at WR/TE (yards per route run, plus snap share
+        and TD equity). Percentiles are within position, this season, among
+        players with 4+ games. It is a grade of the profile, not a prediction
+        that the role actually grows — the user supplies that.""",
+        "Promotion"),
+    "quality_tier": _t(
+        "Quality tier", "Bottom 30% / middle / top 30% of prior-season quality.",
+        """Quality is a filter, not a picker: bottom-tercile promoted players
+        hit a top-quartile finish ~4% of the time, top-tercile ~18%. Much
+        better at ruling players out than ranking them in.""",
+        "Promotion"),
+    "tier_hit_rate": _t(
+        "Tier hit rate", "How often promoted players in this quality tier hit top-quartile PPG.",
+        """A base rate over the historical promotion cohort, not a projection
+        for this player. Always read with `tier_n` and the interval beside it.""",
+        "Promotion"),
+    "tier_n": _t("Tier n", "Promoted players in the tier the base rate is computed from.", "", "Promotion"),
+    "tier_ci_lo": _t("Tier CI low", "Lower bound of the Wilson interval on the tier hit rate.", "", "Promotion"),
+    "tier_ci_hi": _t("Tier CI high", "Upper bound of the Wilson interval on the tier hit rate.", "", "Promotion"),
+    "next_ppg_pct": _t(
+        "Next-season PPG percentile", "Points-per-game percentile within position, the following season.",
+        "The promotion cohort's outcome measure; a hit is the top quartile of it.",
+        "Promotion"),
+    "opp_change": _t(
+        "Role growth", "Percentile points of opportunity gained season over season.",
+        "The promotion cohort keeps players who grew by 10+ points from a below-median role.",
+        "Promotion"),
+    "hit": _t("Hit", "Finished in the top quartile of position PPG the next season.", "", "Promotion"),
+    "carry_share_wk": _t(
+        "Weekly carry share", "His share of the team's carries, that week only.",
+        "Week-level shares are noisy by construction — read the trend, not a point.",
+        "Promotion"),
+    "rz_carry_share_wk": _t(
+        "Weekly red-zone carry share", "His share of the team's red-zone carries, that week only.",
+        """The trust marker that predicts promoted RBs, at week grain so a
+        December role change is not averaged away. Null in weeks the team had
+        no red-zone carries.""",
+        "Promotion"),
+    "target_share_wk": _t(
+        "Weekly target share", "His share of the team's targets, that week only.", "",
+        "Promotion"),
 }
 
 # Columns whose meaning depends on a number in the name, e.g. p_available_at_20.

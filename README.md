@@ -72,9 +72,10 @@ directly.
 | `src/rookies.py` | Separate rookie model — draft capital, combine, vacated opportunity. |
 | `src/simulate.py` | Monte Carlo draft + season sim comparing draft strategies. |
 | `src/valuation.py` | Quality against price — where this project disagrees with ADP. |
+| `src/promotion.py` | The promotion screen: you name whose role is growing, it grades them by position-specific criteria and reports the base rate. |
 | `src/uncertainty.py` | Wilson, bootstrap, and season-clustered intervals. |
 | `src/glossary.py` | What every metric means. Feeds column tooltips and the Glossary tab. |
-| `app.py` | Streamlit app: Landscape / Players / Strategy / Board / Glossary. |
+| `app.py` | Streamlit app: Landscape / Players / Screen / Strategy / Board / Glossary. |
 
 ## MCP
 
@@ -216,6 +217,18 @@ off it: Dalton Kincaid at 100th-percentile TE quality and a 143 ADP; Luther
 Burden III at 2.06 yards per route on a 3.8th-percentile target share. Quality
 alone is not a buy signal, so a `path_score` requires somewhere to gain volume —
 a 90th-percentile receiver who is already his team's alpha has none.
+
+**What predicts a promoted player is position-specific, and at RB it is not
+efficiency.** Among backups whose role then grew 10+ percentile points
+(`src/promotion.py`, cohort 61 RB / 102 WR / 57 TE), prior efficiency at
+running back reads as noise — YPC −0.15, yards after contact 0.00, broken
+tackles −0.08 against next-season points — while the trust markers predict:
+snap share 0.47, red-zone carry share 0.34, TD-equity share 0.32. At WR/TE the
+efficiency logic holds (TE yards per route run 0.35). Quality terciles are a
+filter, not a picker: promoted players hit a top-quartile finish 4.1% / 10.2% /
+18.4% from bottom to top tercile. And nothing predicts the promotion itself
+(vacated opportunity ~0), so the Screen tab takes the names from you and grades
+them — it never claims to know who gets the job.
 
 ## What's verified
 

@@ -153,6 +153,14 @@ ADP_YEAR = SEASON
 LEAGUE_ADP_SCORING = "half-ppr"
 LEAGUE_ADP_TEAMS = 10
 
+# The league added a superflex slot for 2026, and a 1QB ADP misprices
+# quarterbacks in that format by a round or more. FFC publishes 2QB ADP as its
+# own format string; snapshotted like the others so the history accumulates.
+# It is a *reference* board for QB decisions, not the analysis default —
+# half-PPR/10 stays the modelling market because the backtest window is priced
+# in it.
+SUPERFLEX_ADP_SCORING = "2qb"
+
 # FFC returns zero rows for 2025 at every scoring x team-count combination.
 # Not a bug in the fetch — the data does not exist, so 2025 cannot be a label
 # season no matter how much production data we have for it.

@@ -27,6 +27,7 @@ from src import features as ft
 from src import glossary
 from src import landscape as ls
 from src import projection as pj
+from src import promotion as pm
 from src import rookies as rk
 from src import scoring as sc
 from src import simulate as sim
@@ -1543,6 +1544,162 @@ def _tab_board(p: dict[str, Any]) -> None:
         table(view.select([c for c in show if c in view.columns]))
 
 
+@st.cache_data(show_spinner="Building the promotion cohort…")
+def _promotion_cohort() -> pl.DataFrame:
+    return pm.cohort(_features())
+
+
+@st.cache_data(show_spinner="Aggregating weekly usage…")
+def _weekly_trust(season: int) -> pl.DataFrame:
+    return pm.weekly_trust(season)
+
+
+def _tab_screen(p: dict[str, Any]) -> None:
+    dark = p["dark"]
+    feats = _features()
+    if not feats.height:
+        st.warning("No features built. Run `uv run python -m src.bootstrap --light`.")
+        return
+
+    st.subheader("Promotion screen")
+    st.caption(
+        "You say whose role is growing — from camp reports, a depth chart, a "
+        "departure. The screen does the half the data can do: grade the player "
+        "on what predicted production among historically promoted players at "
+        "his position, and report the base rate for profiles like his."
+    )
+    st.info(
+        "**The model cannot tell you who gets the job, and does not try.** "
+        "Correlation with next-season role growth: vacated targets −0.04, "
+        "vacated carries −0.03, prior quality 0.02. The one real term is prior "
+        "opportunity at −0.33 — pure mean reversion. What *is* predictable is "
+        "how a promoted player does once you know the role is coming: trust "
+        "markers at RB (snaps, red-zone carries), efficiency at WR/TE.",
+        icon="🧭",
+    )
+
+    raw_names = st.text_area(
+        "Players whose role is growing (one per line)",
+        placeholder="Bhayshul Tuten\nJaylen Wright",
+        key="screen_names",
+    )
+    names = [n for n in (raw_names or "").splitlines() if n.strip()]
+    if not names:
+        st.caption("Type a name or two to get a grade.")
+    else:
+        coh = _promotion_cohort()
+        grades, missing = pm.screen(names, df=feats, coh=coh)
+        if missing:
+            st.warning("Not found among qualified players: " + ", ".join(missing))
+        if grades.height:
+            lead = [
+                "player_name", "position", "team", "games", "screen_pct",
+                "quality_tier", "tier_hit_rate", "tier_ci_lo", "tier_ci_hi", "tier_n",
+            ]
+            table(grades.select([c for c in lead if c in grades.columns]))
+            st.caption(
+                "The hit rate is a base rate over comparable promoted players, "
+                "not a projection for this one. A null tier means fewer than 8 "
+                "games — a season fragment is not graded."
+            )
+            with st.expander("Criteria percentiles (RB efficiency shown as reference only)"):
+                crit_cols = [c for c in grades.columns if c.endswith("_pct") and c != "screen_pct"]
+                table(grades.select(["player_name", "position"] + crit_cols))
+
+            # Weekly trend for one graded player: a December role change should
+            # be visible, not averaged into a season number.
+            season = int(feats.get_column("season").max())
+            who = st.selectbox(
+                "Weekly usage trend", grades.get_column("player_name").to_list(),
+                key="screen_trend_player",
+            )
+            row = feats.filter(
+                (pl.col("season") == season) & (pl.col("player_name") == who)
+            )
+            wk = _weekly_trust(season)
+            if row.height and wk.height:
+                pid = row.get_column("player_id")[0]
+                position = row.get_column("position")[0]
+                metric = st.selectbox(
+                    "Metric",
+                    ["rz_carry_share_wk", "carry_share_wk", "target_share_wk"]
+                    if position == "RB"
+                    else ["target_share_wk", "carry_share_wk", "rz_carry_share_wk"],
+                    format_func=lambda c: glossary.TERMS[c].label,
+                    key="screen_trend_metric",
+                )
+                mine = (
+                    wk.filter(pl.col("player_id") == pid)
+                    .select("week", metric)
+                    .drop_nulls()
+                    .sort("week")
+                    .with_columns(
+                        pl.col(metric).rolling_mean(4, min_samples=1).alias("trend")
+                    )
+                )
+                if mine.height:
+                    blue = theme.SEQUENTIAL_BLUE[3]
+                    pts = (
+                        alt.Chart(mine.to_pandas())
+                        .mark_point(size=70, filled=True, color=theme.ink(dark)["muted"])
+                        .encode(
+                            x=alt.X("week:Q", title="Week", axis=alt.Axis(tickMinStep=1)),
+                            y=alt.Y(f"{metric}:Q", title=glossary.TERMS[metric].label,
+                                    axis=alt.Axis(format=".0%")),
+                            tooltip=[
+                                alt.Tooltip("week:Q", title="Week"),
+                                alt.Tooltip(f"{metric}:Q", title="Share", format=".1%"),
+                            ],
+                        )
+                    )
+                    line = (
+                        alt.Chart(mine.to_pandas())
+                        .mark_line(strokeWidth=2, color=blue)
+                        .encode(x="week:Q", y=alt.Y("trend:Q", title=None))
+                    )
+                    st.altair_chart(
+                        theme.base_chart(pts + line, dark), use_container_width=True
+                    )
+                    chart_note(
+                        [metric],
+                        extra="Points are single weeks; the line is a 4-week rolling mean. "
+                        "A week with no team red-zone carries is a gap, not a zero.",
+                    )
+                    data_expander(mine)
+
+    st.divider()
+    coh = _promotion_cohort()
+    if not coh.height:
+        return
+
+    with st.expander("The evidence: what predicts a promoted player, by position"):
+        st.caption(
+            "Rank correlation of each prior-season metric with next-season PPG "
+            "percentile, among promoted players only. The RB efficiency rows "
+            "near zero are the finding — five metrics, all noise. Criteria were "
+            "fixed from the original exploratory session, not re-searched here."
+        )
+        table(pm.validate(coh))
+
+    with st.expander("Base rates by prior quality tier"):
+        st.caption(
+            "Quality is a filter, not a picker — monotone, roughly 4× from "
+            "bottom to top, and the intervals say how little the per-position "
+            "cells can carry."
+        )
+        table(pm.quality_tiers(coh))
+
+    with st.expander("The archetype split (decay-rate thread, closed)"):
+        st.caption(
+            "Promoted RBs split at the median prior pass-touch mix. The "
+            "hypothesis said receiving-profile backs should hit less often "
+            "under a bigger role; the point estimates lean the other way and "
+            "the intervals overlap. Two cells of ~30 is all this cohort "
+            "supports — measured, reported, and not a feature."
+        )
+        table(pm.archetype_split(coh))
+
+
 def _placeholder(name: str, phase: str) -> None:
     st.subheader(name)
     st.info(f"Not built yet — {phase}.", icon="🚧")
@@ -1552,13 +1709,15 @@ def main() -> None:
     st.title("ff-edge")
     p = _sidebar()
 
-    landscape, players, strategy, board, reference = st.tabs(
-        ["Landscape", "Players", "Strategy", "Board", "Glossary"]
+    landscape, players, screen, strategy, board, reference = st.tabs(
+        ["Landscape", "Players", "Screen", "Strategy", "Board", "Glossary"]
     )
     with landscape:
         _tab_landscape(p)
     with players:
         _tab_players(p)
+    with screen:
+        _tab_screen(p)
     with strategy:
         _tab_strategy(p)
     with board:
