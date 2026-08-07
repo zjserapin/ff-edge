@@ -443,6 +443,117 @@ def targets(
     )
 
 
+# Measured over 128 team-seasons (2022-2025): team skill-position fantasy
+# points regressed on mean implied team total. Not a fitted feature — a slope
+# between two things already measured, reported so the size of a context
+# argument can be checked rather than asserted.
+POINTS_PER_IMPLIED = 45.3
+LEAGUE_MEAN_IMPLIED = 22.0
+MEAN_TEAM_FF = 947.0
+
+
+def attach_environment(
+    players: pl.DataFrame, season: int = SEASON
+) -> pl.DataFrame:
+    """Add each player's team scoring environment, and what it is worth.
+
+    `env_swing` estimates the season-long points a player gains or loses purely
+    from the offence he plays in, relative to a league-average one: the
+    measured slope above, times how far his team's implied total sits from the
+    league mean, times his share of a typical offence.
+
+    **This is not double counting, and the reason is worth stating.** The
+    expected-points curve maps *positional ADP rank* to points, so it is blind
+    to team — it assigns this year's TE1 whatever the historical average TE1
+    scored, whether he plays for the best offence in football or the worst. The
+    market's view of the team shows up in the ADP *level* (a good player on a
+    bad offence is drafted later) but not in his positional rank. So the
+    adjustment adds information the curve genuinely does not have.
+
+    It is still an upper bound. Some of the discount is already in the price,
+    and `env_swing` does not know how much, so read it as "the size of the
+    argument" rather than a correction to subtract. A player whose PAR edge is
+    small next to his `env_swing` gap is one where context should decide.
+
+    Team codes are normalized on both sides — FFC says LAR where nflverse says
+    LA, and an unnormalized join silently drops those players to null rather
+    than failing.
+    """
+    if not players.height:
+        return players
+
+    env = ex.preseason_environment(season)
+    if not env.height:
+        return players.with_columns(
+            pl.lit(None, dtype=pl.Float64).alias("team_implied"),
+            pl.lit(None, dtype=pl.Float64).alias("env_z"),
+            pl.lit(None, dtype=pl.Float64).alias("env_swing"),
+        )
+
+    env = env.with_columns(ids.normalize_team("team")).select(
+        "team", pl.col("early_implied").alias("team_implied"), "env_z"
+    )
+    return (
+        players.with_columns(ids.normalize_team("team"))
+        .join(env, on="team", how="left")
+        .with_columns(
+            (
+                POINTS_PER_IMPLIED
+                * (pl.col("team_implied") - LEAGUE_MEAN_IMPLIED)
+                * (pl.col("exp_points") / MEAN_TEAM_FF)
+            ).round(1).alias("env_swing")
+        )
+    )
+
+
+def context_flags(players: pl.DataFrame, margin: float = 1.0) -> pl.DataFrame:
+    """Players whose team environment outweighs their edge on the board.
+
+    The pairs worth a second thought: someone ranked above a positional rival
+    by less than the environment gap between them. Those are the picks where
+    the board is not really the deciding input, and pretending otherwise is how
+    a defensible ranking produces an indefensible pick.
+
+    Returns: position, better_player, worse_player, par_edge, env_edge, verdict.
+    """
+    if not players.height or "env_swing" not in players.columns:
+        return pl.DataFrame()
+
+    rows = []
+    for position in players.get_column("position").unique().to_list():
+        sub = (
+            players.filter(
+                (pl.col("position") == position)
+                & pl.col("env_swing").is_not_null()
+                & pl.col("par").is_not_null()
+            )
+            .sort("par", descending=True)
+            .head(6)
+        )
+        seen = sub.iter_rows(named=True)
+        ranked = list(seen)
+        for i, better in enumerate(ranked):
+            for worse in ranked[i + 1:]:
+                par_edge = better["par"] - worse["par"]
+                env_edge = worse["env_swing"] - better["env_swing"]
+                if env_edge > par_edge + margin:
+                    rows.append(
+                        {
+                            "position": position,
+                            "better_player": better["name"],
+                            "worse_player": worse["name"],
+                            "par_edge": round(par_edge, 1),
+                            "env_edge": round(env_edge, 1),
+                            "verdict": "context outweighs the board edge",
+                        }
+                    )
+    return (
+        pl.DataFrame(rows).sort("env_edge", descending=True)
+        if rows
+        else pl.DataFrame()
+    )
+
+
 def compare_baselines(league_id: str | None = None, season: int = SEASON) -> pl.DataFrame:
     """How much the keeper adjustment actually moves each position.
 

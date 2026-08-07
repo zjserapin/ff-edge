@@ -231,3 +231,46 @@ def test_tiers_and_ranks_agree(built) -> None:
     ranks = players.get_column("board_rank").to_list()
     assert ranks == sorted(ranks)
     assert players.get_column("par").is_not_null().all()
+
+
+# --- team environment -------------------------------------------------------
+
+
+def test_environment_join_normalizes_team_codes(built) -> None:
+    """FFC says LAR where nflverse says LA. An unnormalized join does not fail,
+    it silently nulls every Rams player — which is worse."""
+    p = bd.attach_environment(built["players"])
+    if p.get_column("team_implied").is_null().all():
+        pytest.skip("no lines posted yet")
+    assert p.get_column("team_implied").null_count() == 0
+
+
+def test_env_swing_sign_follows_the_offence() -> None:
+    """Above-average offence helps, below-average hurts, and a replacement-level
+    player is barely moved either way."""
+    players = pl.DataFrame(
+        {
+            "name": ["good", "bad", "tiny"],
+            "position": ["TE"] * 3,
+            "team": ["CHI", "ARI", "ARI"],
+            "exp_points": [150.0, 150.0, 5.0],
+            "par": [30.0, 30.0, 0.0],
+        }
+    )
+    got = bd.attach_environment(players)
+    if got.get_column("team_implied").is_null().any():
+        pytest.skip("no lines posted yet")
+    by = {r["name"]: r["env_swing"] for r in got.iter_rows(named=True)}
+    assert by["good"] > 0 > by["bad"]
+    assert abs(by["tiny"]) < abs(by["bad"])
+
+
+def test_context_flags_catch_a_small_edge_against_a_big_gap(built) -> None:
+    """The pairs where the board is not really the deciding input."""
+    p = bd.attach_environment(built["players"])
+    if p.get_column("env_swing").is_null().all():
+        pytest.skip("no lines posted yet")
+    flags = bd.context_flags(p)
+    assert flags.height
+    # Every flagged pair must genuinely have context outweighing the board.
+    assert (flags.get_column("env_edge") > flags.get_column("par_edge")).all()
