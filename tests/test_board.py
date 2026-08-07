@@ -174,6 +174,57 @@ def test_draft_demand_never_exceeds_league_demand(built) -> None:
     assert (s.get_column("draft_demand") >= 0).all()
 
 
+def test_pick_inventory_is_internally_consistent(with_keepers) -> None:
+    """Pick numbers must be unique, in range, and consistent with the keeper
+    placements — the three ways a snake-plus-trades calculation goes wrong."""
+    pk = bd.picks()
+    if not pk.height:
+        pytest.skip("no draft order posted yet")
+
+    nums = pk.get_column("pick_no").to_list()
+    assert len(nums) == len(set(nums)), "a pick is listed twice"
+    assert all(1 <= n <= 15 * 10 for n in nums)
+
+    # Every pick consumed by a keeper is marked unusable, and vice versa.
+    for r in pk.iter_rows(named=True):
+        assert r["usable"] == (r["keeper"] is None)
+
+    kept_here = set(pk.filter(~pl.col("usable")).get_column("keeper").to_list())
+    my_keepers = set(
+        with_keepers["kept"]
+        .filter(pl.col("owner") == pk.get_column("from_owner").mode()[0])
+        .get_column("player_name")
+        .to_list()
+    ) if with_keepers["kept"].height else set()
+    # Keeper names on my picks must be real keepers, not stray draft picks.
+    all_keepers = set(with_keepers["kept"].get_column("player_name").to_list())
+    assert kept_here <= all_keepers
+
+
+def test_targets_respects_the_availability_floor(built) -> None:
+    """Only players who plausibly last may be suggested, best PAR first."""
+    players = built["players"]
+    assert "stdev" in players.columns, "dispersion must survive the board build"
+
+    got = bd.targets(players, 24, min_available=0.5)
+    assert got.height
+    assert (got.get_column("p_available_at_24") >= 0.5).all()
+    par = got.get_column("par").to_list()
+    assert par == sorted(par, reverse=True)
+
+    # A very early pick makes almost everyone available; a late one does not.
+    early = bd.targets(players, 2, min_available=0.5, top=50).height
+    late = bd.targets(players, 120, min_available=0.5, top=50).height
+    assert early > late
+
+
+def test_targets_refuses_to_guess_without_dispersion(built) -> None:
+    """A survival curve invented from a default stdev would look exactly as
+    confident as a real one, so the absence of dispersion must return nothing."""
+    stripped = built["players"].drop("stdev")
+    assert bd.targets(stripped, 24).height == 0
+
+
 def test_tiers_and_ranks_agree(built) -> None:
     """A better tier must never contain a worse board rank than a worse tier."""
     players = built["players"].sort("board_rank")

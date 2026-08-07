@@ -43,9 +43,9 @@ from src import scoring as sc
 from src import sleeper
 from src.config import (
     FANTASY_POSITIONS,
-    LEAGUE_ADP_SCORING,
     LEAGUE_ADP_TEAMS,
     SEASON,
+    SLEEPER_USERNAME,
     SUPERFLEX_ADP_SCORING,
 )
 
@@ -317,6 +317,130 @@ def build(
         "replacement": repl,
         "players": players,
     }
+
+
+def picks(
+    league_id: str | None = None,
+    user_id: str | None = None,
+    rounds: int = 15,
+) -> pl.DataFrame:
+    """Which picks you actually own, after trades and keeper placements.
+
+    Three things have to compose correctly here, and getting any of them wrong
+    silently produces a plausible but wrong pick list:
+
+    1. **Snake order.** Odd rounds run 1..N, even rounds N..1, so a slot's pick
+       number alternates rather than stepping by a constant.
+    2. **Traded picks.** `roster_id` on a traded pick is whose pick it
+       *originally* was, not who holds it — so a pick you acquired sits at the
+       original owner's slot, not yours. Reading it the other way puts your
+       picks in the wrong rounds entirely.
+    3. **Keeper placements.** Once declared, the commissioner slots each keeper
+       onto a specific pick, which consumes it. A keeper can land on a pick you
+       acquired rather than your own.
+
+    Returns: round, pick_no, from_owner, keeper, usable — one row per pick you
+    hold, in draft order.
+    """
+    league_id = league_id or sc.resolve_league_id(None)
+    if not league_id:
+        return pl.DataFrame()
+
+    draft = (sleeper._get(f"league/{league_id}/drafts") or [{}])[0]
+    draft_id = draft.get("draft_id")
+    order = draft.get("draft_order") or {}
+    if not draft_id or not order:
+        return pl.DataFrame()
+
+    rosters = sleeper._get(f"league/{league_id}/rosters") or []
+    users = {
+        u["user_id"]: u.get("display_name")
+        for u in (sleeper._get(f"league/{league_id}/users") or [])
+    }
+    rid_by_uid = {r.get("owner_id"): r.get("roster_id") for r in rosters}
+    slot_by_rid = {
+        rid_by_uid[uid]: slot for uid, slot in order.items() if uid in rid_by_uid
+    }
+    name_by_rid = {
+        rid_by_uid[uid]: users.get(uid) for uid in order if uid in rid_by_uid
+    }
+
+    # Resolve by display name from the environment when no id is passed, which
+    # keeps a personal handle out of the repo the same way the league id is.
+    if user_id is None:
+        user_id = next(
+            (uid for uid in order if users.get(uid) == SLEEPER_USERNAME), None
+        )
+    me = rid_by_uid.get(user_id)
+    if me is None:
+        return pl.DataFrame()
+
+    teams = len(slot_by_rid) or 10
+
+    def pick_no(rnd: int, slot: int) -> int:
+        return (rnd - 1) * teams + (slot if rnd % 2 == 1 else teams - slot + 1)
+
+    owner = {(r, rid): rid for r in range(1, rounds + 1) for rid in slot_by_rid}
+    for traded in (sleeper._get(f"draft/{draft_id}/traded_picks") or []):
+        key = (traded.get("round"), traded.get("roster_id"))
+        if key in owner:
+            owner[key] = traded.get("owner_id")
+
+    keeper_at: dict[int, tuple[int, str]] = {}
+    for p in (sleeper._get(f"draft/{draft_id}/picks") or []):
+        md = p.get("metadata") or {}
+        keeper_at[p.get("pick_no")] = (
+            p.get("roster_id"),
+            f"{md.get('first_name', '')} {md.get('last_name', '')}".strip(),
+        )
+
+    rows = []
+    for (rnd, original), holder in owner.items():
+        if holder != me:
+            continue
+        pk = pick_no(rnd, slot_by_rid[original])
+        kept = keeper_at.get(pk)
+        rows.append(
+            {
+                "round": rnd,
+                "pick_no": pk,
+                "from_owner": name_by_rid.get(original),
+                "keeper": kept[1] if kept else None,
+                "usable": kept is None,
+            }
+        )
+    return pl.DataFrame(rows).sort("pick_no") if rows else pl.DataFrame()
+
+
+def targets(
+    players: pl.DataFrame,
+    pick_no: int,
+    min_available: float = 0.35,
+    top: int = 5,
+) -> pl.DataFrame:
+    """Best players by PAR who plausibly last until `pick_no`.
+
+    Uses FFC's draft-slot dispersion through `adp.survival`, so this is "who is
+    worth taking *and* likely to still be there" rather than a wish list. The
+    probability is the honest half: two players at the same ADP with different
+    dispersion are very different planning problems, and the one with a tight
+    distribution is the one you cannot wait on.
+
+    Needs the `stdev` column, which rides along from the FFC board through
+    `draftable`. Returns empty rather than guessing if it is missing, since a
+    survival curve invented from a default dispersion would look exactly as
+    confident as a real one.
+    """
+    if not players.height or "stdev" not in players.columns:
+        return pl.DataFrame()
+    col = f"p_available_at_{pick_no}"
+    return (
+        adp_mod.survival(players, pick_no)
+        .filter(pl.col(col) >= min_available)
+        .sort("par", descending=True)
+        .head(top)
+        .select("name", "position", "adp", "par", "tier", col)
+    )
 
 
 def compare_baselines(league_id: str | None = None, season: int = SEASON) -> pl.DataFrame:
