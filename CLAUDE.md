@@ -119,6 +119,27 @@ different column namespace, and `scoring.EXPECTED_COLUMNS` correctly reads
   adjustment both ways on purpose — if a correction ever reads near zero, the
   complexity is not earning its keep and should come out.
 
+### Formats come from `src/profiles.py`, never from loose arguments
+
+A `LeagueProfile` carries a roster format **and the ADP market that prices it**
+as one object, because the 2026 superflex bug was exactly what happens when
+those two drift apart. Never set a roster format without setting the market;
+`profiles.customize` exists for one-off variants.
+
+```bash
+FF_EDGE_PROFILE=standard_12 uv run python -c "from src import board; print(board.build()['players'].head())"
+```
+
+Three built-ins: `shiva_bowl` (default, live from Sleeper), `standard_12`,
+`dynasty_10`. `resolve()` raises on an unknown name rather than falling back — a
+typo that silently returned the Shiva Bowl would price a standard league as a
+superflex keeper league and look entirely plausible doing it.
+
+`board.build()` returns `warnings` alongside the frames. An unpriceable profile
+must produce a sentence, not an empty DataFrame that looks like a network blip.
+**FFC publishes no 2026 dynasty ADP** (55 drafts, zero rows) — `dynasty_10`
+reports that rather than substituting a redraft board.
+
 ### League format is superflex as of 2026
 
 `QB/RB/RB/WR/WR/TE/FLEX/SUPER_FLEX/K/DEF` + 5 BN, 10 teams, 0.5 PPR.

@@ -213,8 +213,11 @@ def test_targets_respects_the_availability_floor(built) -> None:
     assert par == sorted(par, reverse=True)
 
     # A very early pick makes almost everyone available; a late one does not.
-    early = bd.targets(players, 2, min_available=0.5, top=50).height
-    late = bd.targets(players, 120, min_available=0.5, top=50).height
+    # `top` has to exceed the board or it caps both sides and the comparison
+    # silently becomes 50 == 50 — which is what happened when the board grew.
+    uncapped = players.height + 1
+    early = bd.targets(players, 2, min_available=0.5, top=uncapped).height
+    late = bd.targets(players, 120, min_available=0.5, top=uncapped).height
     assert early > late
 
 

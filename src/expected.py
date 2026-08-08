@@ -80,8 +80,10 @@ import polars as pl
 
 from src import breakout as bo
 from src import nflverse as nv
+from src import profiles as pf
 from src import scoring as sc
 from src.config import DATA_DIR, FANTASY_POSITIONS, LABEL_SEASONS, SEASON
+from src.profiles import LeagueProfile
 
 # Half a point per game over a 14-week fantasy season. The unit a tier break
 # has to clear: below this, two players are the same asset in practice.
@@ -94,20 +96,34 @@ TIER_GAP_POINTS = 7.0
 SMOOTH_WINDOW = 3
 
 
-def _labeled(seasons: list[int] | None = None) -> pl.DataFrame:
+def _labeled(
+    seasons: list[int] | None = None,
+    profile: LeagueProfile | None = None,
+) -> pl.DataFrame:
     """Each season's draft board joined to what those players actually scored.
 
     A drafted player who never posted a season scores zero rather than being
     dropped — missing the year is an outcome, and excluding it would inflate
     every expectation on the board by conditioning on health.
+
+    Both halves of the join are profile-dependent, and it matters that they move
+    together. The board is the profile's ADP market, so a standard-league curve
+    is estimated from standard-league prices; the labels are scored under the
+    profile's own rules, so a standard league's RB1 is not credited with
+    reception points nobody in that league earns. Mixing them — a PPR label on a
+    standard price — would systematically overstate pass-catching backs at every
+    rank.
     """
     seasons = seasons or LABEL_SEASONS
+    profile = profile or pf.resolve()
     parts = []
     for season in seasons:
-        board = bo.adp_board(season)
+        board = bo.adp_board(
+            season, scoring=profile.adp_scoring, teams=profile.adp_teams
+        )
         if not board.height:
             continue
-        pts = sc.score_season([season]).select(
+        pts = sc.score_season([season], profile.scoring).select(
             pl.col("player_id").alias("gsis_id"), "fantasy_points", "games"
         )
         parts.append(
@@ -124,6 +140,7 @@ def adp_curve(
     window: int = SMOOTH_WINDOW,
     labeled: pl.DataFrame | None = None,
     monotone: bool = True,
+    profile: LeagueProfile | None = None,
 ) -> pl.DataFrame:
     """Expected points by positional ADP rank, pooled across seasons.
 
@@ -153,7 +170,7 @@ def adp_curve(
     Returns: position, adp_pos_rank, n, exp_points, raw_points, med_points,
     sd, se.
     """
-    labeled = labeled if labeled is not None else _labeled(seasons)
+    labeled = labeled if labeled is not None else _labeled(seasons, profile)
     if not labeled.height:
         return pl.DataFrame()
 

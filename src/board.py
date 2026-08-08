@@ -34,11 +34,13 @@ inside a tier.
 
 from __future__ import annotations
 
+import numpy as np
 import polars as pl
 
 from src import adp as adp_mod
 from src import expected as ex
 from src import ids
+from src import profiles as pf
 from src import scoring as sc
 from src import sleeper
 from src.config import (
@@ -46,11 +48,15 @@ from src.config import (
     LEAGUE_ADP_TEAMS,
     SEASON,
     SLEEPER_USERNAME,
-    SUPERFLEX_ADP_SCORING,
 )
+from src.profiles import LeagueProfile
 
 
-def kept_players(league_id: str | None = None, force: bool = False) -> pl.DataFrame:
+def kept_players(
+    league_id: str | None = None,
+    force: bool = False,
+    profile: LeagueProfile | None = None,
+) -> pl.DataFrame:
     """Every player declared as a keeper, league-wide, from Sleeper.
 
     Reads the `keepers` field on each roster, which is populated once managers
@@ -58,8 +64,15 @@ def kept_players(league_id: str | None = None, force: bool = False) -> pl.DataFr
     that absence is load-bearing information, so `keeper_summary` reports which
     teams are still outstanding rather than treating undeclared as none.
 
+    A profile without keepers returns empty here, which is what makes the whole
+    keeper layer downstream a no-op instead of a branch at every call site.
+
     Returns: owner, player_id, player_name, position, team.
     """
+    profile = profile or pf.resolve()
+    if not profile.keepers or not profile.sleeper_backed:
+        return pl.DataFrame()
+
     league_id = league_id or sc.resolve_league_id(None, force=force)
     if not league_id:
         return pl.DataFrame()
@@ -101,6 +114,7 @@ def keeper_summary(
     league_id: str | None = None,
     roster_positions: list[str] | None = None,
     teams: int | None = None,
+    profile: LeagueProfile | None = None,
 ) -> pl.DataFrame:
     """Per-position: how many are kept, and how many slots the draft must fill.
 
@@ -112,8 +126,15 @@ def keeper_summary(
 
     Returns: position, league_demand, kept, draft_demand, undeclared_teams.
     """
-    kept = kept if kept is not None else kept_players(league_id)
-    settings = sc.league_settings(league_id)
+    profile = profile or pf.resolve()
+    kept = kept if kept is not None else kept_players(league_id, profile=profile)
+    # A synthetic profile describes a format nobody has a Sleeper league for, so
+    # asking Sleeper what the settings are would return the wrong league's.
+    settings = (
+        sc.league_settings(league_id)
+        if profile.sleeper_backed
+        else pf.as_settings(profile)
+    )
     roster_positions = roster_positions or settings["roster_positions"]
     teams = teams or settings["teams"]
 
@@ -154,16 +175,18 @@ def keeper_summary(
 def draftable(
     kept: pl.DataFrame | None = None,
     season: int = SEASON,
-    scoring: str = SUPERFLEX_ADP_SCORING,
-    teams: int = LEAGUE_ADP_TEAMS,
+    scoring: str | None = None,
+    teams: int | None = None,
     curve: pl.DataFrame | None = None,
+    profile: LeagueProfile | None = None,
 ) -> pl.DataFrame:
     """This season's ADP board with keepers removed and expectations attached.
 
-    Defaults to the **2QB** ADP board, not the league's half-PPR/10 board. In a
-    superflex league the 1QB market misprices quarterbacks by a round or more,
-    and since this is the board you draft off, it has to be the market that
-    matches the format.
+    The market comes from the profile, and for the Shiva Bowl that is the **2QB**
+    board rather than the league's half-PPR/10 one. In a superflex league the
+    1QB market misprices quarterbacks by a round or more, and since this is the
+    board you draft off, it has to be the market that matches the format. That
+    pairing is exactly what `profiles.LeagueProfile` exists to keep together.
 
     Name-matched against Sleeper, since the two sources share no ids. Matching
     is on `ids.normalize`, and `keeper_match_report` says how many keepers
@@ -172,7 +195,10 @@ def draftable(
 
     Returns the `expected.expected_points` columns plus `kept` and `kept_by`.
     """
-    curve = curve if curve is not None else ex.adp_curve()
+    profile = profile or pf.resolve()
+    scoring = scoring or profile.adp_scoring
+    teams = teams or profile.adp_teams
+    curve = curve if curve is not None else ex.adp_curve(profile=profile)
     board = adp_mod.fetch(scoring, teams, season)
     if not board.height or not curve.height:
         return pl.DataFrame()
@@ -201,6 +227,113 @@ def draftable(
         )
 
     return board.drop("_norm").sort("adp")
+
+
+def keeper_slots(league_id: str | None = None, rounds: int = 15) -> list[int]:
+    """Absolute pick numbers consumed by a keeper, league-wide.
+
+    A declared keeper is slotted onto a specific pick by the commissioner, and
+    that pick is then spent — nobody selects with it. So the draft has fewer
+    real selections than it has picks, and the two numbering systems come apart.
+    `keeper_adjusted_adp` needs this to translate between them.
+
+    Returns an empty list when there is no league or nothing is declared, which
+    makes every caller degrade to plain ADP rather than branch.
+    """
+    league_id = league_id or sc.resolve_league_id(None)
+    if not league_id:
+        return []
+    draft = (sleeper._get(f"league/{league_id}/drafts") or [{}])[0]
+    draft_id = draft.get("draft_id")
+    if not draft_id:
+        return []
+    return sorted(
+        p["pick_no"]
+        for p in (sleeper._get(f"draft/{draft_id}/picks") or [])
+        if p.get("pick_no")
+    )
+
+
+def keeper_adjusted_adp(
+    board: pl.DataFrame,
+    slots: list[int] | None = None,
+    teams: int = LEAGUE_ADP_TEAMS,
+    rounds: int = 15,
+) -> pl.DataFrame:
+    """Where players actually go once the keepers are off the board.
+
+    Public ADP is priced in redraft leagues where nobody is kept. Every keeper
+    in this league has an ADP inside the top 150, so each one is a player the
+    market expects to be drafted who will not be — and everyone behind him moves
+    up. **Any mock draft that does not model keepers is showing you players
+    roughly fifteen picks later than they will actually go**, which is the
+    difference between planning to take someone at 44 and watching him leave at
+    30.
+
+    Two columns, because keepers do two different things and conflating them is
+    the easy mistake:
+
+    `adj_adp` is his **selection index** — the count of players drafted before
+    him once keepers are removed from the pool. This is the pure removal effect
+    and it is what makes Barkley the 13th player taken rather than the 26th.
+
+    `exp_pick` is the **absolute pick number** that selection index lands on.
+    These differ because a keeper does not merely vanish from the pool, he also
+    consumes a pick: the draft is 150 picks but only 132 selections. Comparing
+    `adj_adp` against a pick number from `picks()` would therefore count the
+    keeper adjustment twice, in the wrong direction. Compare `exp_pick` against
+    your picks; read `adj_adp` when you want to know how the pool reordered.
+
+    With no keepers — every synthetic profile, and this league before anyone
+    declares — both columns equal `adp` and the function is a documented no-op.
+
+    Returns the board with `adj_adp`, `exp_pick`, and `adp_shift` added.
+    """
+    if not board.height or "adp" not in board.columns:
+        return board
+
+    kept_adp = (
+        board.filter(pl.col("kept")).get_column("adp").drop_nulls().sort().to_list()
+        if "kept" in board.columns
+        else []
+    )
+
+    if not kept_adp:
+        return board.with_columns(
+            pl.col("adp").alias("adj_adp"),
+            pl.col("adp").alias("exp_pick"),
+            pl.lit(0.0).alias("adp_shift"),
+        )
+
+    # Selection index: subtract the keepers priced ahead of him. searchsorted on
+    # a sorted list is the same count as a self-join and does not blow up on a
+    # board this size.
+    adp = board.get_column("adp").to_numpy()
+    ahead = np.searchsorted(np.asarray(kept_adp), adp, side="left")
+    adj = np.maximum(adp - ahead, 1.0)
+
+    # The pick numbers still available to select with, in order. The s-th
+    # selection happens at the s-th of these, interpolated because ADP is
+    # fractional and rounding it here would quietly discard the sub-pick
+    # precision that makes two players at the same rank distinguishable.
+    total = teams * rounds
+    consumed = set(slots or [])
+    open_picks = np.array(
+        [n for n in range(1, total + 1) if n not in consumed], dtype=float
+    )
+    if open_picks.size:
+        idx = np.clip(adj - 1.0, 0.0, float(open_picks.size - 1))
+        lo = np.floor(idx).astype(int)
+        hi = np.minimum(lo + 1, open_picks.size - 1)
+        exp_pick = open_picks[lo] + (idx - lo) * (open_picks[hi] - open_picks[lo])
+    else:
+        exp_pick = adj
+
+    return board.with_columns(
+        pl.Series("adj_adp", np.round(adj, 1)),
+        pl.Series("exp_pick", np.round(exp_pick, 1)),
+        pl.Series("adp_shift", np.round(adj - adp, 1)),
+    )
 
 
 def keeper_match_report(
@@ -277,24 +410,50 @@ def build(
     season: int = SEASON,
     use_draft_demand: bool = True,
     gap: float = ex.TIER_GAP_POINTS,
+    profile: LeagueProfile | None = None,
 ) -> dict[str, pl.DataFrame]:
-    """The whole board, end to end.
+    """The whole board, end to end, for one league profile.
 
     Returns a dict of frames rather than one wide table because the pieces are
     read at different moments — `summary` and `unmatched` are checked once
     before the draft, `players` is what sits open on the screen during it.
 
-    Keys: kept, summary, unmatched, replacement, players.
+    `warnings` carries the reason a frame came back empty. A board that cannot
+    be priced should say so in a sentence; an empty DataFrame looks identical to
+    a network blip and invites the caller to retry forever.
+
+    Keys: profile, warnings, kept, summary, unmatched, replacement, players.
     """
-    kept = kept_players(league_id)
-    summary = keeper_summary(kept, league_id)
-    pool = draftable(kept, season=season)
+    profile = profile or pf.resolve()
+    warnings: list[str] = []
+
+    gap_reason = pf.market_gap(profile, season)
+    if gap_reason:
+        warnings.append(gap_reason)
+
+    kept = kept_players(league_id, profile=profile)
+    summary = keeper_summary(kept, league_id, profile=profile)
+    pool = (
+        draftable(kept, season=season, profile=profile)
+        if not gap_reason
+        else pl.DataFrame()
+    )
     if not pool.height:
+        if not gap_reason:
+            warnings.append(
+                f"No {profile.adp_scoring} ADP board for {season}, or no "
+                "expected-points curve to attach to it."
+            )
         return {
+            "profile": profile, "warnings": warnings,
             "kept": kept, "summary": summary, "unmatched": pl.DataFrame(),
             "replacement": pl.DataFrame(), "players": pl.DataFrame(),
         }
 
+    pool = keeper_adjusted_adp(
+        pool, slots=keeper_slots(league_id) if profile.keepers else None,
+        teams=profile.teams,
+    )
     repl = replacement(pool, summary, use_draft_demand=use_draft_demand)
     players = (
         pool.filter(~pl.col("kept"))
@@ -311,6 +470,8 @@ def build(
     ).sort("par", descending=True)
 
     return {
+        "profile": profile,
+        "warnings": warnings,
         "kept": kept,
         "summary": summary,
         "unmatched": keeper_match_report(kept, pool),
@@ -554,7 +715,11 @@ def context_flags(players: pl.DataFrame, margin: float = 1.0) -> pl.DataFrame:
     )
 
 
-def compare_baselines(league_id: str | None = None, season: int = SEASON) -> pl.DataFrame:
+def compare_baselines(
+    league_id: str | None = None,
+    season: int = SEASON,
+    profile: LeagueProfile | None = None,
+) -> pl.DataFrame:
     """How much the keeper adjustment actually moves each position.
 
     The honesty check on this module's central claim. If pricing against the
@@ -563,9 +728,10 @@ def compare_baselines(league_id: str | None = None, season: int = SEASON) -> pl.
 
     Returns: position, league_replacement, draft_replacement, shift.
     """
-    kept = kept_players(league_id)
-    summary = keeper_summary(kept, league_id)
-    pool = draftable(kept, season=season)
+    profile = profile or pf.resolve()
+    kept = kept_players(league_id, profile=profile)
+    summary = keeper_summary(kept, league_id, profile=profile)
+    pool = draftable(kept, season=season, profile=profile)
     if not pool.height:
         return pl.DataFrame()
 
