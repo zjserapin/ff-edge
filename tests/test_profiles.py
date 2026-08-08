@@ -55,7 +55,7 @@ def test_resolve_reads_the_environment(monkeypatch) -> None:
     monkeypatch.setenv("FF_EDGE_PROFILE", "standard_12")
     assert pf.resolve().name == "standard_12"
     # An explicit argument still wins over the environment.
-    assert pf.resolve("dynasty_10").name == "dynasty_10"
+    assert pf.resolve("shiva_bowl").name == "shiva_bowl"
 
 
 def test_customize_does_not_mutate_the_builtin() -> None:
@@ -87,16 +87,19 @@ def test_standard_scoring_differs_from_the_league_only_in_receptions() -> None:
     assert standard["rec"] == 0.0
 
 
-def test_dynasty_reports_its_market_gap_rather_than_guessing() -> None:
-    """FFC publishes no 2026 dynasty board. That must be a sentence, not zero rows."""
-    dynasty = pf.resolve("dynasty_10")
-    gap = pf.market_gap(dynasty, 2026)
-    assert gap and "dynasty" in gap.lower()
-    # Historical seasons are fine — the curve is estimable even when the current
-    # board is not, and conflating the two would block work that can be done.
-    assert pf.market_gap(dynasty, 2024) is None
-    # Nothing else is blocked.
-    assert pf.market_gap(pf.resolve("standard_12"), 2026) is None
+def test_every_profile_is_redraft() -> None:
+    """Scope guard, not a style check.
+
+    This project prices a player against a market for one season. Dynasty asks
+    which young players are worth building on, which turns on age curves rather
+    than on this season's price, and nothing here estimates one. A dynasty
+    market would therefore answer the redraft question under a dynasty label.
+    """
+    for profile in pf.PROFILES.values():
+        assert profile.adp_scoring != "dynasty", (
+            f"{profile.name} prices off a dynasty market, but the board has no "
+            "age curve to make that mean anything"
+        )
 
 
 def test_a_keeperless_profile_makes_the_keeper_layer_a_no_op() -> None:
@@ -192,16 +195,16 @@ def test_demand_scales_with_team_count() -> None:
         assert twelve[position] > ten[position], position
 
 
-def test_dynasty_bench_and_taxi_add_no_demand() -> None:
-    """Depth slots are cosmetic for valuation, and the roster relies on it."""
+def test_depth_slots_add_no_demand() -> None:
+    """Bench, IR and taxi are cosmetic for valuation.
+
+    Worth asserting because it is what lets a profile describe a real roster —
+    including a 20-deep bench — without any of that depth leaking into
+    replacement level.
+    """
     from src import scoring as sc
 
-    dynasty = pf.resolve("dynasty_10")
-    assert "TAXI" in dynasty.roster_positions
-    stripped = [
-        slot for slot in dynasty.roster_positions
-        if slot not in NON_STARTING_SLOTS
-    ]
-    assert sc.starter_demand(dynasty.roster_positions, teams=10) == sc.starter_demand(
-        stripped, teams=10
-    )
+    starters = ["QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "K", "DEF"]
+    padded = starters + ["BN"] * 10 + ["TAXI"] * 4 + ["IR"] * 2
+    assert set(NON_STARTING_SLOTS) >= {"BN", "TAXI", "IR"}
+    assert sc.starter_demand(padded, teams=10) == sc.starter_demand(starters, teams=10)

@@ -23,9 +23,16 @@ Pick one with the environment, the same way the league id is passed:
 
     FF_EDGE_PROFILE=standard_12 uv run python -c "..."
 
-`shiva_bowl` is the default and the only Sleeper-backed profile; the others are
-synthetic formats for reusing the analysis against a league this project does
-not read live.
+`shiva_bowl` is the default and the only Sleeper-backed profile; `standard_12`
+is a synthetic format for reusing the analysis against a league this project
+does not read live.
+
+**Redraft only, and that is a scope decision rather than a gap.** Everything
+here prices a player against a market for a single season. Dynasty asks a
+different question — which young players are worth building on — and the answer
+turns on age curves and quality signals rather than on this season's price. A
+profile that ran the board over a dynasty startup would be answering the redraft
+question with a dynasty label on it, which is worse than not answering.
 """
 
 from __future__ import annotations
@@ -36,7 +43,6 @@ from dataclasses import dataclass, field, replace
 from src.config import (
     DEFAULT_ROSTER_POSITIONS,
     DEFAULT_SCORING,
-    LEAGUE_ADP_SCORING,
     LEAGUE_ADP_TEAMS,
     SUPERFLEX_ADP_SCORING,
 )
@@ -75,14 +81,6 @@ class LeagueProfile:
 # else. Spelling it as a delta rather than a second literal dict keeps the two
 # from drifting when the league changes a rule that is not about receptions.
 _STANDARD_SCORING = dict(DEFAULT_SCORING) | {"rec": 0.0}
-_PPR_SCORING = dict(DEFAULT_SCORING) | {"rec": 1.0}
-
-# A dynasty startup roster. Bench and taxi depth is cosmetic for valuation —
-# `config.NON_STARTING_SLOTS` means neither contributes demand — so the only
-# load-bearing line here is the starters.
-_DYNASTY_ROSTER = [
-    "QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "FLEX", "K", "DEF",
-] + ["BN"] * 10 + ["TAXI"] * 4
 
 
 PROFILES: dict[str, LeagueProfile] = {
@@ -123,32 +121,6 @@ PROFILES: dict[str, LeagueProfile] = {
             "it moves replacement level at RB/WR/TE directly.",
             "Standard is half-PPR with `rec` set to 0.0 and every other scoring "
             "rule inherited from the Shiva Bowl.",
-        ],
-    ),
-    "dynasty_10": LeagueProfile(
-        name="dynasty_10",
-        label="10-team dynasty startup",
-        teams=10,
-        roster_positions=_DYNASTY_ROSTER,
-        scoring=_PPR_SCORING,
-        adp_scoring="dynasty",
-        adp_teams=10,
-        keepers=False,
-        sleeper_backed=False,
-        notes=(
-            "PARTIAL — see `market_gap`. FFC has collected only 55 dynasty "
-            "drafts for 2026 and publishes no player rows at any team count, "
-            "so there is no 2026 dynasty board to price against. History is "
-            "there (2018-2025), so the curve can be estimated; the current "
-            "board cannot. The profile refuses to substitute a redraft board "
-            "rather than reporting a confident wrong number."
-        ),
-        assumptions=[
-            "PPR, one QB, two FLEX. Superflex dynasty is at least as common — "
-            "swap `roster_positions` and set `adp_scoring='2qb'` together.",
-            "A startup is valued here as a one-year redraft. Dynasty value is "
-            "multi-year and age-dependent, and this project has no age curve, "
-            "so the ranking answers 'who helps in 2026', not 'who to build on'.",
         ],
     ),
 }
@@ -197,20 +169,3 @@ def as_settings(profile: LeagueProfile) -> dict:
         "playoff_teams": 6,
         "source": f"profile: {profile.name}",
     }
-
-
-def market_gap(profile: LeagueProfile, season: int) -> str | None:
-    """Why this profile cannot be priced this season, or None if it can.
-
-    Checked before a board is built so the failure is a sentence rather than an
-    empty frame. Only the known-empty case is hardcoded; anything else is left
-    to the fetch, which reports its own emptiness.
-    """
-    if profile.adp_scoring == "dynasty" and season >= 2026:
-        return (
-            f"FFC publishes no dynasty ADP for {season} (55 drafts collected, "
-            "zero player rows at every team count). Historical dynasty ADP "
-            "exists through 2025, so the expected-points curve is estimable, "
-            "but there is no current board to draft off."
-        )
-    return None

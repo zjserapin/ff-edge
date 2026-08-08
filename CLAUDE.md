@@ -130,15 +130,19 @@ those two drift apart. Never set a roster format without setting the market;
 FF_EDGE_PROFILE=standard_12 uv run python -c "from src import board; print(board.build()['players'].head())"
 ```
 
-Three built-ins: `shiva_bowl` (default, live from Sleeper), `standard_12`,
-`dynasty_10`. `resolve()` raises on an unknown name rather than falling back — a
-typo that silently returned the Shiva Bowl would price a standard league as a
-superflex keeper league and look entirely plausible doing it.
+Two built-ins: `shiva_bowl` (default, live from Sleeper) and `standard_12`.
+`resolve()` raises on an unknown name rather than falling back — a typo that
+silently returned the Shiva Bowl would price a standard league as a superflex
+keeper league and look entirely plausible doing it.
 
 `board.build()` returns `warnings` alongside the frames. An unpriceable profile
 must produce a sentence, not an empty DataFrame that looks like a network blip.
-**FFC publishes no 2026 dynasty ADP** (55 drafts, zero rows) — `dynasty_10`
-reports that rather than substituting a redraft board.
+
+**Redraft only, deliberately.** Everything here prices a player against a market
+for one season. Dynasty is a different question — which young players are worth
+building on — and it turns on age curves and quality signals rather than this
+season's price. Nothing in this project estimates an age curve, so a dynasty
+profile would answer the redraft question under a dynasty label. Don't add one.
 
 ### League format is superflex as of 2026
 

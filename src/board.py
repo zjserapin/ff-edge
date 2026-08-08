@@ -427,23 +427,16 @@ def build(
     profile = profile or pf.resolve()
     warnings: list[str] = []
 
-    gap_reason = pf.market_gap(profile, season)
-    if gap_reason:
-        warnings.append(gap_reason)
-
     kept = kept_players(league_id, profile=profile)
     summary = keeper_summary(kept, league_id, profile=profile)
-    pool = (
-        draftable(kept, season=season, profile=profile)
-        if not gap_reason
-        else pl.DataFrame()
-    )
+    pool = draftable(kept, season=season, profile=profile)
     if not pool.height:
-        if not gap_reason:
-            warnings.append(
-                f"No {profile.adp_scoring} ADP board for {season}, or no "
-                "expected-points curve to attach to it."
-            )
+        warnings.append(
+            f"No {profile.adp_scoring} ADP board for {season} at "
+            f"{profile.adp_teams} teams, or no expected-points curve to attach "
+            "to it. FFC suppresses a format until it has collected enough "
+            "drafts, so a thin market reads as an empty one."
+        )
         return {
             "profile": profile, "warnings": warnings,
             "kept": kept, "summary": summary, "unmatched": pl.DataFrame(),
