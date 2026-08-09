@@ -625,6 +625,34 @@ TERMS: dict[str, Term] = {
     "target_share_wk": _t(
         "Weekly target share", "His share of the team's targets, that week only.", "",
         "Promotion"),
+    "air_yards_share_wk": _t(
+        "Weekly air-yards share",
+        "His share of the team's air yards, that week only.",
+        """How much of the team's downfield intent he commands, which target
+        share alone cannot say: a possession receiver and a field-stretcher can
+        hold the same share of targets and nothing like the same share of the
+        offence. Air yards are signed — a screen is thrown behind the line — so
+        the week is null when the team's total is not positive.""",
+        "Promotion"),
+    "rz_target_share_wk": _t(
+        "Weekly red-zone target share",
+        "His share of the team's red-zone targets, that week only.",
+        """The receiver counterpart to red-zone carry share, and where the
+        touchdowns come from. Null in weeks the team had no red-zone targets,
+        which is common enough that a single week means little.""",
+        "Promotion"),
+    "early": _t(
+        "Early", "Mean over his first observed weeks for that marker.", "",
+        "Promotion"),
+    "late": _t(
+        "Late", "Mean over his most recent observed weeks for that marker.", "",
+        "Promotion"),
+    "delta": _t(
+        "Change", "Late minus early — the size of the role shift.",
+        """Windows count weeks he appeared, not calendar weeks, so a player who
+        missed a month still compares like with like. Read it next to n_early
+        and n_late: a shift resting on two weeks is a rumour.""",
+        "Promotion"),
     # --- Claims ledger ------------------------------------------------------
     "role_score": _t(
         "Role score", "Cumulative signed claim score: tier × specificity × novelty × recency.",

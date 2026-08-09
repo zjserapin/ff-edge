@@ -1664,11 +1664,14 @@ def _screen_sections(dark: bool) -> None:
                 crit_cols = [c for c in grades.columns if c.endswith("_pct") and c != "screen_pct"]
                 table(grades.select(["player_name", "position"] + crit_cols))
 
-            # Weekly trend for one graded player: a December role change should
-            # be visible, not averaged into a season number.
+            # Did the role move? Stated as two levels and a difference, across
+            # every marker for his position at once. A single metric on a line
+            # chart asked the reader to find a trend in twelve noisy points,
+            # which is a request they will grant whether or not one is there.
             season = int(feats.get_column("season").max())
             who = st.selectbox(
-                "Weekly usage trend", grades.get_column("player_name").to_list(),
+                "Role change, week over week",
+                grades.get_column("player_name").to_list(),
                 key="screen_trend_player",
             )
             row = feats.filter(
@@ -1678,50 +1681,93 @@ def _screen_sections(dark: bool) -> None:
             if row.height and wk.height:
                 pid = row.get_column("player_id")[0]
                 position = row.get_column("position")[0]
-                metric = st.selectbox(
-                    "Metric",
-                    ["rz_carry_share_wk", "carry_share_wk", "target_share_wk"]
-                    if position == "RB"
-                    else ["target_share_wk", "carry_share_wk", "rz_carry_share_wk"],
-                    format_func=lambda c: glossary.TERMS[c].label,
-                    key="screen_trend_metric",
+                metrics = [
+                    m for m in pm.TRUST_METRICS.get(position, [])
+                    if m in wk.columns
+                ]
+                window = st.slider(
+                    "Weeks in each window", 2, 6, 4, key="screen_trend_window"
                 )
+
+                shift = pm.role_shift(wk, pid, position, window=window)
+                if shift.height:
+                    st.caption(
+                        f"First and last {window} weeks **he appeared**, not "
+                        "calendar weeks — a player who missed a month still "
+                        "compares like with like. Read `delta` next to the "
+                        "counts: a shift resting on two weeks is a rumour."
+                    )
+                    table(
+                        shift.with_columns(
+                            pl.col("metric").map_elements(
+                                lambda m: glossary.TERMS[m].label
+                                if m in glossary.TERMS else m,
+                                return_dtype=pl.Utf8,
+                            )
+                        ),
+                        pretty=False,
+                    )
+
                 mine = (
                     wk.filter(pl.col("player_id") == pid)
-                    .select("week", metric)
-                    .drop_nulls()
+                    .select(["week"] + metrics)
                     .sort("week")
+                    .unpivot(
+                        index="week", on=metrics,
+                        variable_name="metric", value_name="share",
+                    )
+                    .drop_nulls("share")
+                    # Non-strict: a marker without a glossary entry keeps its
+                    # raw name rather than becoming null and vanishing off the
+                    # chart, which is the failure mode worth avoiding here.
                     .with_columns(
-                        pl.col(metric).rolling_mean(4, min_samples=1).alias("trend")
+                        pl.col("metric").replace(
+                            {m: glossary.TERMS[m].label for m in metrics
+                             if m in glossary.TERMS}
+                        )
                     )
                 )
                 if mine.height:
                     blue = theme.SEQUENTIAL_BLUE[3]
+                    pdf = mine.to_pandas()
                     pts = (
-                        alt.Chart(mine.to_pandas())
-                        .mark_point(size=70, filled=True, color=theme.ink(dark)["muted"])
+                        alt.Chart(pdf)
+                        .mark_point(size=60, filled=True,
+                                    color=theme.ink(dark)["muted"])
                         .encode(
-                            x=alt.X("week:Q", title="Week", axis=alt.Axis(tickMinStep=1)),
-                            y=alt.Y(f"{metric}:Q", title=glossary.TERMS[metric].label,
+                            x=alt.X("week:Q", title="Week",
+                                    axis=alt.Axis(tickMinStep=1)),
+                            y=alt.Y("share:Q", title=None,
                                     axis=alt.Axis(format=".0%")),
                             tooltip=[
                                 alt.Tooltip("week:Q", title="Week"),
-                                alt.Tooltip(f"{metric}:Q", title="Share", format=".1%"),
+                                alt.Tooltip("metric:N", title="Marker"),
+                                alt.Tooltip("share:Q", title="Share", format=".1%"),
                             ],
                         )
                     )
-                    line = (
-                        alt.Chart(mine.to_pandas())
+                    trend = (
+                        alt.Chart(pdf)
                         .mark_line(strokeWidth=2, color=blue)
-                        .encode(x="week:Q", y=alt.Y("trend:Q", title=None))
+                        .transform_window(
+                            roll="mean(share)", frame=[-3, 0], groupby=["metric"],
+                        )
+                        .encode(x="week:Q", y=alt.Y("roll:Q", title=None))
                     )
                     st.altair_chart(
-                        theme.base_chart(pts + line, dark), use_container_width=True
+                        theme.base_chart(
+                            (pts + trend)
+                            .properties(height=190, width="container")
+                            .facet(row=alt.Row("metric:N", title=None), spacing=8),
+                            dark,
+                        ),
+                        use_container_width=True,
                     )
                     chart_note(
-                        [metric],
-                        extra="Points are single weeks; the line is a 4-week rolling mean. "
-                        "A week with no team red-zone carries is a gap, not a zero.",
+                        metrics,
+                        extra="Points are single weeks; the line is a 4-week "
+                        "rolling mean. A week the team had no red-zone plays is "
+                        "a gap, not a zero.",
                     )
                     data_expander(mine)
 

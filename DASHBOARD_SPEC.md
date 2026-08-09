@@ -340,7 +340,10 @@ ToS-dubious.
 
 1. ~~`value_gap` on the draft board + per-position quality-vs-price view~~ done
 2. ~~Delete keeper accounting~~ done
-3. Promotion screen: receiver metrics in `weekly_trust`, fix filtering, retire
-   the line plot
+3. ~~Promotion screen: receiver metrics in `weekly_trust`, fix filtering, retire
+   the line plot~~ done — `air_yards_share_wk` and `rz_target_share_wk` added,
+   `TRUST_METRICS` gives each position its own markers, and the single-metric
+   line plot is replaced by `role_shift` (early vs late levels, stated) plus a
+   faceted small multiple across all three markers at once
 4. Landscape: sizing and interactivity, then tier bands, then concentration
 5. Feed the scarcity layer into rankings *(largest, most speculative)*

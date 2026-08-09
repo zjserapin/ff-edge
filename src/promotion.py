@@ -447,6 +447,78 @@ def archetype_split(coh: pl.DataFrame | None = None) -> pl.DataFrame:
     return pl.DataFrame(rows)
 
 
+# The weekly markers worth watching, per position. Separate from `CRITERIA`,
+# which grades a *season* — these are the within-season series, and a receiver
+# has no business being offered a red-zone carry share.
+TRUST_METRICS: dict[str, list[str]] = {
+    "RB": ["carry_share_wk", "rz_carry_share_wk", "target_share_wk"],
+    "WR": ["target_share_wk", "air_yards_share_wk", "rz_target_share_wk"],
+    "TE": ["target_share_wk", "air_yards_share_wk", "rz_target_share_wk"],
+}
+
+
+def role_shift(
+    weekly: pl.DataFrame,
+    player_id: str,
+    position: str,
+    window: int = 4,
+) -> pl.DataFrame:
+    """Did his role actually grow? Early weeks against late weeks, per marker.
+
+    The reason this exists rather than a line chart: a role change is a *level
+    shift*, and a reader asked to eyeball twelve noisy weekly points for a shift
+    will find one whether or not it is there. Stating the two levels and the
+    difference is the same information without the invitation to see a trend in
+    noise.
+
+    **Windows count weeks he appeared, not calendar weeks.** A player who missed
+    October has a gap, and taking calendar weeks 1-4 against 11-14 would compare
+    his healthy start against nothing. This takes his first and last `window`
+    *observed* weeks per metric, so an injured season still compares like with
+    like — and `n_early`/`n_late` are returned so a comparison resting on two
+    weeks is visible as such.
+
+    **The windows are shrunk rather than allowed to overlap**, which is the
+    whole reason this is a function and not two `head`/`tail` calls at the call
+    site. Nabers played four weeks in 2025; asking for a four-week window at
+    each end returns the same four weeks twice and a delta of exactly 0.000 on
+    every marker — a structural artifact that reads like a confident finding of
+    "no change". So the window shrinks to at most half his observed weeks, and a
+    player with fewer than four is not compared at all.
+
+    Returns: metric, early, late, delta, n_early, n_late — one row per marker
+    for the position, empty if the player has too few weeks to split.
+    """
+    metrics = TRUST_METRICS.get(position, TRUST_METRICS["WR"])
+    have = [m for m in metrics if m in weekly.columns]
+    mine = weekly.filter(pl.col("player_id") == player_id).sort("week")
+    if not mine.height or not have:
+        return pl.DataFrame()
+
+    rows = []
+    for metric in have:
+        seen = mine.select("week", metric).drop_nulls().sort("week")
+        # Four observed weeks is the floor: below it there is no way to split
+        # his season into two halves that are not the same weeks twice.
+        if seen.height < 4:
+            continue
+        width = min(window, seen.height // 2)
+        values = seen.get_column(metric)
+        early = values.head(width)
+        late = values.tail(width)
+        rows.append(
+            {
+                "metric": metric,
+                "early": round(float(early.mean()), 3),
+                "late": round(float(late.mean()), 3),
+                "delta": round(float(late.mean()) - float(early.mean()), 3),
+                "n_early": early.len(),
+                "n_late": late.len(),
+            }
+        )
+    return pl.DataFrame(rows) if rows else pl.DataFrame()
+
+
 def weekly_trust(season: int = CURRENT_SEASON, force: bool = False) -> pl.DataFrame:
     """Week-by-week trust markers, so a December role change is not averaged away.
 
@@ -460,8 +532,18 @@ def weekly_trust(season: int = CURRENT_SEASON, force: bool = False) -> pl.DataFr
     carries in a week); the app draws them with a rolling mean and this
     function stays raw so the smoothing choice is visible where it is made.
 
+    **Receivers get receiver markers.** This used to compute three columns, all
+    of them carry- or target-count based, which left a pass-catcher with one
+    usable series and the screen offering him two rushing metrics. Target share
+    alone also cannot separate the two things a receiver's role is made of: a
+    possession receiver and a field-stretcher can hold the same share of targets
+    and nothing like the same share of the offence. So air yards and red-zone
+    targets are carried too — the first is how much of the team's downfield
+    intent he commands, the second is where the touchdowns come from.
+
     Returns: season, week, player_id, carry_share_wk, rz_carry_share_wk,
-    target_share_wk — null where the team had no such plays that week.
+    target_share_wk, rz_target_share_wk, air_yards_share_wk — null where the
+    team had no such plays that week.
     """
     from src.context import RED_ZONE
 
@@ -511,10 +593,25 @@ def weekly_trust(season: int = CURRENT_SEASON, force: bool = False) -> pl.DataFr
         tgt = _weekly(
             pass_raw,
             "receiver_player_id",
-            [pl.len().cast(pl.Float64).alias("tgt")],
+            [
+                pl.len().cast(pl.Float64).alias("tgt"),
+                (pl.col("yardline_100") <= RED_ZONE).sum().cast(pl.Float64).alias("rz_tgt"),
+                # Negative air yards are real — a screen is thrown behind the
+                # line — so this is a signed sum, and the team denominator is
+                # guarded below rather than assumed positive.
+                pl.col("air_yards").fill_null(0.0).sum().alias("air"),
+            ],
         ).select(
             "season", "week", "player_id",
             (pl.col("tgt") / pl.col("team_tgt")).alias("target_share_wk"),
+            pl.when(pl.col("team_rz_tgt") > 0)
+            .then(pl.col("rz_tgt") / pl.col("team_rz_tgt"))
+            .otherwise(None)
+            .alias("rz_target_share_wk"),
+            pl.when(pl.col("team_air") > 0)
+            .then(pl.col("air") / pl.col("team_air"))
+            .otherwise(None)
+            .alias("air_yards_share_wk"),
         )
         out = tgt if out is None else out.join(
             tgt, on=["season", "week", "player_id"], how="full", coalesce=True

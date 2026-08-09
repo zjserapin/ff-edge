@@ -205,3 +205,90 @@ def test_weekly_trust_sums_to_one_within_team_week(feats: pl.DataFrame) -> None:
     week1 = wk.filter((pl.col("week") == 1) & pl.col("carry_share_wk").is_not_null())
     total = float(week1.get_column("carry_share_wk").sum())
     assert total == pytest.approx(round(total), abs=0.01)
+
+
+# --- Weekly trust markers ---------------------------------------------------
+
+
+def test_trust_metrics_never_offer_a_receiver_a_carry() -> None:
+    """The bug this whole section exists to prevent.
+
+    The weekly picker used to hand WRs a reordered copy of the RB list, so a
+    receiver was graded on red-zone *carries*. Positions get their own markers
+    or the screen is asking the wrong question of half the players it grades.
+    """
+    for position in ("WR", "TE"):
+        markers = pr.TRUST_METRICS[position]
+        assert markers, f"{position} has no weekly markers"
+        assert not [m for m in markers if "carry" in m], (
+            f"{position} is being offered carry metrics: {markers}"
+        )
+    assert any("carry" in m for m in pr.TRUST_METRICS["RB"]), (
+        "RB should still be graded on carries"
+    )
+
+
+def test_receiver_markers_measure_three_different_things() -> None:
+    """Target share alone cannot separate a possession receiver from an alpha.
+
+    A field-stretcher and a chain-mover can hold the same share of targets and
+    nothing like the same share of the offence, so volume, downfield intent and
+    scoring position each need their own series.
+    """
+    markers = set(pr.TRUST_METRICS["WR"])
+    assert "target_share_wk" in markers
+    assert "air_yards_share_wk" in markers
+    assert "rz_target_share_wk" in markers
+
+
+def _synthetic_weeks(shares: list[float | None], player: str = "p1") -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "season": [2025] * len(shares),
+            "week": list(range(1, len(shares) + 1)),
+            "player_id": [player] * len(shares),
+            "target_share_wk": shares,
+            "air_yards_share_wk": shares,
+            "rz_target_share_wk": shares,
+        }
+    )
+
+
+def test_role_shift_windows_never_overlap() -> None:
+    """A four-game season must not report a delta of exactly zero.
+
+    Nabers played four weeks in 2025. Asking for a four-week window at each end
+    returns the same four weeks twice and a delta of 0.000 on every marker,
+    which reads like a confident finding of "no change" and is an artifact of
+    the windowing. The window shrinks instead.
+    """
+    weekly = _synthetic_weeks([0.4, 0.4, 0.1, 0.1])
+    got = pr.role_shift(weekly, "p1", "WR", window=4)
+    assert got.height, "four observed weeks should still be comparable"
+    row = got.filter(pl.col("metric") == "target_share_wk").row(0, named=True)
+    assert row["n_early"] == 2 and row["n_late"] == 2, "windows must be halved"
+    assert row["delta"] == pytest.approx(-0.3), "the real decline must survive"
+
+
+def test_role_shift_refuses_a_season_too_short_to_split() -> None:
+    """Below four observed weeks there are no two halves, so report nothing."""
+    assert not pr.role_shift(_synthetic_weeks([0.4, 0.3, 0.2]), "p1", "WR").height
+
+
+def test_role_shift_counts_weeks_played_not_calendar_weeks() -> None:
+    """A missed month is a gap, not a stretch of zeros.
+
+    Calendar windows would compare a healthy start against an absence and call
+    the difference a role change.
+    """
+    # Weeks 1-4 played, 5-10 missed, 11-14 played at a much higher share.
+    shares = [0.1, 0.1, 0.1, 0.1] + [None] * 6 + [0.5, 0.5, 0.5, 0.5]
+    got = pr.role_shift(_synthetic_weeks(shares), "p1", "WR", window=4)
+    row = got.filter(pl.col("metric") == "target_share_wk").row(0, named=True)
+    assert row["n_early"] == 4 and row["n_late"] == 4
+    assert row["early"] == pytest.approx(0.1)
+    assert row["late"] == pytest.approx(0.5)
+
+
+def test_role_shift_is_empty_for_an_unknown_player() -> None:
+    assert not pr.role_shift(_synthetic_weeks([0.3] * 8), "nobody", "WR").height
