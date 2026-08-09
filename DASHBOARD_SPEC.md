@@ -349,7 +349,8 @@ ToS-dubious.
    done — charts enlarged and pan/zoom enabled, `landscape.tier_breaks` draws
    boundary rules on the dropoff, and concentration is now faceted per position
    with the ordered top-N on the ordinal ramp
-5. Feed the scarcity layer into rankings *(largest, most speculative)*
+5. Feed the scarcity layer into rankings — **scoped and not recommended as
+   written; see below**
 
 ## Two findings the Landscape work turned up
 
@@ -380,3 +381,114 @@ this window the position spread out instead.
 - **The position palette is validated, not eyeballed** — it passes the CVD and
   lightness checks in both modes. Light mode raises a contrast warning on WR and
   TE, which obliges a table view; every chart here already ships one.
+
+---
+
+# Item 5 scoped — "feed the scarcity layer into rankings"
+
+**Recommendation: do not build it as written. Build the reframed version
+instead.** Two reasons, both measured rather than argued.
+
+## Reason 1 — the *level* of scarcity is already in the board, by construction
+
+This is definitional, not empirical:
+
+```
+par              = exp_points - replacement_points
+replacement_points  comes from  scoring.starter_demand(roster_positions, teams)
+```
+
+`starter_demand` is positional scarcity. It is the reason replacement quarterback
+moved from QB11 to QB21 when the superflex slot arrived, and the reason the
+league's whole board reordered behind it. **PAR is the scarcity-adjusted
+ranking.** Multiplying it by a second scarcity term would count the same fact
+twice, and the result would look like a refinement while being an error — the
+same class of mistake as reading `adj_adp` against a pick number.
+
+## Reason 2 — the *trend* in scarcity is not a signal
+
+If positional scarcity moved reliably year to year, last season's level would be
+worth carrying into 2026. Spearman of PAR-per-starting-slot against season,
+2018-2025, bootstrapped over seasons:
+
+| position | ρ | 95% CI | 2018 → 2025 | verdict |
+|---|---|---|---|---|
+| QB | +0.05 | [−0.62, +0.93] | 3.97 → 3.51 | indistinguishable from flat |
+| RB | +0.10 | [−0.62, +1.00] | 4.74 → 4.25 | indistinguishable from flat |
+| WR | −0.26 | [−0.79, +0.86] | 3.42 → 2.60 | indistinguishable from flat |
+| **TE** | **−0.90** | **[−0.95, −0.36]** | **3.85 → 1.28** | **real decline** |
+
+Three of four positions have intervals spanning nearly the whole range. And the
+year-over-year autocorrelation at those three is *negative* (QB −0.14, RB −0.35,
+WR −0.42): a scarce year tends to be followed by a slack one. Feeding last
+season's scarcity forward would push the board the wrong way at three positions
+out of four — though on eight seasons that mean-reversion is itself too noisy to
+lean on in the opposite direction either.
+
+**Tight end is the one real finding**, and it agrees with the concentration
+result from the Landscape pass: PAR per starting slot fell from 3.85 to 1.28 and
+the top five went from 31.7% of the position to 23.9%. The position got
+shallower *and* flatter. That is one number worth knowing, not a layer worth
+building.
+
+## What is worth building: the cost of waiting, at your actual picks
+
+The board says what a player is worth. It does not say what it costs to wait,
+and that is the question actually being asked on the clock. It needs three things
+the board never combines: the *shape* of the curve rather than its level, the
+draft-slot dispersion FFC publishes, and your own pick list.
+
+Expected PAR of the best player still available, at each of your first six
+usable picks:
+
+| pos | 4 | 17 | 24 | 37 | 44 | 47 |
+|---|---|---|---|---|---|---|
+| QB | 41.8 | 35.0 | 21.9 | 15.9 | 14.6 | 13.5 |
+| RB | 61.2 | 61.2 | 59.6 | 42.3 | 33.9 | 28.1 |
+| WR | 62.4 | 52.0 | 48.4 | 25.9 | 20.4 | 19.7 |
+| TE | 33.8 | 33.8 | 33.8 | 33.7 | 33.6 | 33.5 |
+
+Cost of waiting one slot:
+
+| pos | 4→17 | 17→24 | 24→37 | 37→44 | 44→47 |
+|---|---|---|---|---|---|
+| QB | 6.8 | **13.1** | 6.0 | 1.3 | 1.1 |
+| RB | 0.0 | 1.6 | **17.3** | 8.4 | 5.8 |
+| WR | **10.4** | 3.7 | **22.4** | 5.6 | 0.7 |
+| TE | 0.0 | 0.0 | 0.1 | 0.1 | 0.1 |
+
+Three readable instructions fall straight out, and none of them is on the board
+today:
+
+- **Waiting on tight end costs nothing** — 0.3 points across forty-three picks.
+  The best available TE is expected to survive every early pick you own, because
+  the top of the position is kept and the rest is flat.
+- **Running back is free to wait until 24 and expensive after** — 1.6 points to
+  wait from 17, then 17.3 from 24 to 37.
+- **The 24 → 37 gap is where the draft happens for you.** WR loses 22.4 and RB
+  17.3 across it. That is the pick to trade up into or to plan two rounds ahead
+  of.
+
+This is also the honest version of the co-pilot the Strategy tab was wanted for —
+"take the quarterback now or wait a round" — computed from pieces that already
+exist rather than from a simulator pinned to the wrong format.
+
+## A correctness bug found while scoping — needs a decision
+
+`adp.survival` computes P(available) from **raw ADP against a pick number**, and
+`board.targets` and the Draft Day availability panel both sit on it. In a keeper
+league that is the double-count trap in the other direction: keepers are off the
+board, so players go *earlier* than public ADP, and survival is overstated.
+
+Measured at pick 24:
+
+| player | adp | exp_pick | P(avail) raw | P(avail) adjusted |
+|---|---|---|---|---|
+| James Cook III | 19.4 | 12.4 | **0.137** | **0.003** |
+| Derrick Henry | 13.9 | 9.8 | 0.002 | 0.000 |
+
+A 45× overstatement on the player it matters for. `keeper_adjusted_adp` already
+computes `exp_pick` for exactly this comparison; `survival` simply is not using
+it. The fix is to let `survival` take a column argument and pass `exp_pick` from
+the board, which changes availability numbers on the draft-day tab and is worth
+doing before 8/22.
