@@ -1055,7 +1055,7 @@ def _breakout_section(dark: bool) -> None:
     st.caption(
         "Events per variable is the standard adequacy check for a fit like this, "
         "and the conventional floor is ten. Nothing here reaches it. That is the "
-        "cost of stratifying an 831-row sample four ways, and it is the first "
+        "cost of stratifying a 957-row sample four ways, and it is the first "
         "thing to read before any number below."
     )
     table(res["adequacy"])
@@ -1079,7 +1079,7 @@ def _breakout_section(dark: bool) -> None:
     st.caption(
         "Players sorted into four groups by predicted probability, against what "
         "actually happened. If the model worked, the actual rate would rise left "
-        "to right. Four groups rather than ten because 540 out-of-sample rows "
+        "to right. Four groups rather than ten because 666 out-of-sample rows "
         "makes a decile ±6 points — too wide to read."
     )
     cal_pd = cal.to_pandas()

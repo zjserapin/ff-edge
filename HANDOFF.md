@@ -1,9 +1,11 @@
 # ff-edge — handoff
 
-**Session date:** 2026-08-06
-**Branch:** `measure-what-repeats`, 8 commits, **pushed to origin**.
-**State:** 190 tests pass, 2 skip cleanly without a league. Working tree clean.
-**The draft is 2026-08-22 at 19:00.** That is the deadline for anything in §1.
+**Session date:** 2026-08-09
+**Branch:** `measure-what-repeats`, 21 commits ahead of `main`.
+**11 of them unpushed** — origin is at `10eb558` from 08-06.
+**State:** 225 tests pass, 1 skips cleanly without a league. App renders with
+zero exceptions. Working tree clean.
+**The draft is 2026-08-22 at 19:00.** Twelve days.
 
 Read this before doing anything else. It is written to be the whole context.
 
@@ -11,282 +13,311 @@ Read this before doing anything else. It is written to be the whole context.
 
 ## The one-paragraph version
 
-Last session ended with a promotion screen proposed but unbuilt. This session
-built it, then built the contextual layer behind it (an automated claims
-ledger), then discovered the league had switched to **superflex** — which broke
-the replacement math badly enough that quarterback demand was being counted at
-half its real value — then built the ranking system on top: expected points
-from an ADP curve, tiers cut by isotonic regression, and a draft board priced
-against the players who can actually be drafted. The league is now wired in
-live: **all 18 keepers, every traded pick, and the real draft slot come from
-Sleeper**, and the board reflects them.
+The previous session built the analysis; this one built the **product** and then
+spent most of its time finding out where the product was lying. A Draft Day tab
+now surfaces `board.py`, which was fully built and completely unreachable two
+weeks before a draft. A league-profile layer makes the format and its ADP market
+inseparable, because them drifting apart is what caused the superflex bug. PAR
+turned out to be a rating of the *draft slot* rather than the player, so the
+board grew a second opinion that is not derived from ADP. Four real bugs were
+found and fixed, three of them by tests that were themselves only testing half
+of what they claimed. The seventh label season was added at the end.
 
-The most useful thing to know going in: **the user's own contextual reasoning
-beat the model twice in one conversation**, and both times the data backed him
-rather than the board. That is the theme of the next session.
+The thing to carry forward: **every significant find this session came from
+looking at output, not from reading code.** Rendering a chart to PNG found the
+zero-baseline. Running the screen on an injured player found the windowing
+artifact. A failing test nobody expected found Arizona.
 
 ---
 
 ## What is new, by module
 
-| module | what it does |
+| module | what changed |
 |---|---|
-| `src/promotion.py` | Grade a player whose role is growing, by position-specific criteria. Week-level trust markers. |
-| `src/claims.py` | The claims ledger — role-change claims, scored, auditable, resolvable. |
-| `src/news.py` | Free ingestion: Google News RSS, nflverse depth charts, Sleeper trending. |
-| `src/llm.py` | The one place a model API is touched. Anthropic ↔ Bedrock by config. |
-| `src/prompts.py` | Versioned prompts. The extraction contract lives here. |
-| `src/expected.py` | Expected points by ADP rank, isotonic tiers, Vegas team environment. |
-| `src/board.py` | The draft board: keepers, picks, PAR against the draftable pool, context. |
+| `src/profiles.py` | **New.** A format and its ADP market as one indivisible choice. `shiva_bowl`, `standard_12`. |
+| `src/board.py` | `keeper_adjusted_adp`, `keeper_slots`, `attach_quality`, `cost_of_waiting`. |
+| `src/adp.py` | `survival` takes `adp_col` — availability must be measured in pick numbers, not ADP. |
+| `src/landscape.py` | `tier_breaks` — where the dropoff actually cliffs. |
+| `src/promotion.py` | `TRUST_METRICS`, `role_shift`, receiver metrics in `weekly_trust`. |
+| `src/valuation.py` | Takes a profile, so `market_pct` is priced in the league's own market. |
+| `src/ids.py` | `AZ → ARI`. |
+| `src/rookies.py` | Team codes normalized on **both** sides of the stayed/left comparison. |
+| `app.py` | Draft Day tab; Screen retired into it; Landscape rebuilt; `width="stretch"`. |
+| `CLAUDE.md` | **New.** The traps, the conventions, the non-negotiables. |
+| `DASHBOARD_SPEC.md` | **New.** The agreed spec, both rounds, and item 5's scoping. |
 
-`CLAIMS_SPEC.md` is the design contract for the ledger and is marked built.
+---
+
+## The four bugs, because they are the most useful thing here
+
+### 1. Arizona did not exist (silent, live, worst of the four)
+
+nflverse's **2026 roster feed alone** spells Arizona `AZ`; its own 2025 rosters,
+weekly stats, schedules and draft picks all say `ARI`. `rookies.py` decided
+whether a player changed teams by comparing those two codes directly — not a
+`join`, just `new_team != team` — so **every Cardinal who stayed read as gone**
+and the whole team's production fell into the vacated pool.
+
+    Arizona vacated target share    1.00   (would rank 1st in the league)
+    corrected                       0.209  (league mean 0.249 — below average)
+
+The rookie opportunity analysis was pointing at the exact opposite of the truth.
+
+**The test that should have caught it was testing half the join** — it normalized
+one side and compared against a raw feed, and passed for as long as nflverse
+agreed with itself.
+
+### 2. Availability was measured against the wrong number line
+
+`adp.survival` compared **raw ADP against a pick number**. Public ADP is priced
+where nobody is kept; a real pick number is not. `board.targets` and the
+Draft Day availability panel both sat on it.
+
+    James Cook, P(available at pick 24)    0.137 raw    0.003 adjusted
+
+Fixed by giving `survival` an `adp_col` and passing `exp_pick`. Fixing it
+**changed the answer** to the feature built on top: on raw ADP the early
+quarterback wait looked cheap; adjusted, it is the most expensive wait on the
+board.
+
+### 3. `path_score` never measured what its test claimed
+
+It averages room-to-grow against a reversed teammate share, and **both are true
+of a team alpha at once** — no room left, nobody in front of him. They cancel:
+
+    opportunity_pct   alpha 76.9  vs other 43.9   gap +32.9
+    path_score        alpha 50.7  vs other 50.4   gap  +0.3
+
+The old test asserted the composite and passed on **a single running back**; WR
+and TE already leaned the wrong way. The invariant is now asserted where it
+lives, and a second test pins the limitation so reweighting fails loudly.
+**The formula was not changed — that is a judgment call, not a bug fix.**
+
+### 4. A four-game season reported a confident zero
+
+`role_shift` with a four-week window on a player who played four weeks returns
+the same four weeks twice and a delta of exactly `0.000` on every marker — an
+artifact that reads like a finding of "no change". Windows now shrink to at most
+half the observed weeks and refuse a season under four.
 
 ---
 
 ## Findings, in order of how much they should shape what you do next
 
-### 1. The superflex slot was silently mispriced, and is now the largest single valuation fact
+### 1. PAR is a rating of the draft slot, not of the player
 
-The league turned one FLEX into a SUPER_FLEX for 2026. `starter_demand` only
-ever counted slots literally named `FLEX`, so the league was starting 70 players
-out of an 80-slot roster and QB demand was pinned at one per team.
+`exp_points` maps a player's *positional ADP rank* to what players at that rank
+historically scored, so **within a position the board reproduces the market's
+order exactly**.
 
-Fixed by giving every flex type its eligible positions (`config.FLEX_SLOTS`) and
-filling **most restrictive first** — which is what makes the greedy allocation
-exactly optimal when the sets nest, and `test_lineup_selection_is_optimal`
-brute-forces it rather than asserting it.
+| | 2026 ADP | pos rank | PAR | 2025 actual | 2025 finish |
+|---|---|---|---|---|---|
+| Nabers | 60.2 | WR21 | 14.2 | 48.1 | WR81 *(4 games)* |
+| Waddle | 72.4 | WR25 | 0.0 | 148.1 | WR9 |
 
-Effect: QB demand 10 → 20, replacement QB11 → QB21, baseline −74 points, and the
-top 14 of 2025 by PAR goes from one quarterback to six.
+Waddle outscored Nabers by 100 points and carries the worse PAR, entirely
+because he is drafted twelve picks later. This is `board.py` working as designed
+and is the honest consequence of the measured null — but the tab presented it as
+a player rating, which it is not. There is now a warning callout and a second
+opinion beside it.
 
-**The strategy simulator is deliberately pinned to the old format**
-(`config.SIM_ROSTER_POSITIONS`) and says so on the tab. Its board is 1QB ADP and
-its templates are two-FLEX shaped, so running it under superflex would report
-that QBs are nearly free *and* start twice. FFC publishes 2QB ADP back to 2020,
-so unpinning it is a board swap plus new templates, not new machinery.
+### 2. `value_gap` is the second opinion, and it is not derived from ADP
 
-### 2. The ADP curve is not monotone, and the pooling is the finding
+Quality percentile within position minus price percentile within position,
+weighted by how much each metric repeats. Adams comes back at quality **7**
+against a market percentile of **72**; Shakir the reverse.
 
-Windowed means over 2019-2024 make the 7th running back off the board worth more
-than the 1st — an 11-point inversion against standard errors of 9 to 16. Isotonic
-regression finds the closest non-increasing fit and pools the offending ranks
-rather than inventing an ordering.
+**Quarterbacks are not scored** — yards per route run, separation and yards
+after contact have no QB analogue, so all 23 come back null. In a superflex
+league that is a hole exactly where the edge is. Blank means *not measured*.
 
-RB ranks 1-7 collapse to a single 172.5, and the resulting tier runs to RB10.
-**Gibbs at ADP 1.5 and Barkley at 17.0 are the same asset** as far as six seasons
-can tell. Tiering is an empirical result here, not a presentation choice: the
-spread around the curve is more than five times the step between ranks.
+### 3. Waiting is free at tight end and expensive at quarterback
 
-### 3. Keeper adjustment matters at exactly one position
+`board.cost_of_waiting`, expected PAR of the best player of a position still
+available at each pick you own:
 
-Replacement in a keeper league is league demand *less what is kept*, over the
-players still available:
+| pos | 4→17 | 17→24 | 24→37 | 37→44 |
+|---|---|---|---|---|
+| QB | **20.3** | 4.4 | 3.1 | 4.5 |
+| RB | 3.5 | 11.6 | **19.5** | 13.0 |
+| WR | 14.4 | 15.5 | 10.5 | 0.4 |
+| TE | 0.0 | 0.1 | 0.4 | 0.5 |
 
-    QB   122.3 -> 169.5   (+47.2)
-    TE    82.6 ->  85.2   (+2.6)
-    RB   114.3 -> 114.3     0.0
-    WR   112.2 -> 112.2     0.0
+Tight end costs **0.3 points across all six picks**. Running back is cheap until
+24 and expensive after. The 24 → 37 gap is where your draft happens.
 
-13 of the 18 declared keepers are QBs. `board.compare_baselines` runs it both
-ways so the correction stays checkable — if it ever reads near zero, the
-complexity is not earning its keep.
+### 4. The dropoff is a slope, not a staircase
 
-### 4. Keepers being off the board shifts everyone else ~15 picks earlier
+Running back falls 1.8, 1.0 and 1.7 points per game across the first four ranks,
+then settles at **0.68 per rank, range 0.50-0.98**, the whole way to 48. **RB12
+and RB24 are not in the data.** Reaching pays at the very top and steadily less
+after — a different instruction than "reach for the tier break".
 
-All 18 keepers have ADP inside the top 150. They are off the board *and* consume
-picks, so the rest move up. Barkley 26.3 → 13.3, Hampton 36.4 → 22.4, McBride
-65.3 → 49.3. **Any mock that does not model keepers is showing players ~15 picks
-late.** This adjustment is currently computed ad hoc in conversation and is
-**not yet a function** — see §Next, item 3.
+### 5. Concentration has barely moved, and tight end moved the wrong way
 
-### 5. Team environment routinely outweighs the board's own edges
+Over 2018-2025 QB, RB and WR all shifted under two points. Tight end went
+**down**: top five from 31.7% of the position to 23.9%, top fifteen from 64.7%
+to 58.6%. The elite-tight-end premium claims a few players own the position;
+over this window the position spread out. Consistent with §3.
 
-Measured over 128 team-seasons: team skill-position fantasy points move **45.3
-per point of mean implied team total**. Best-to-worst offence is worth 34-69
-points to a player depending on his share.
+### 6. Positional scarcity does not trend, so it was not fed into rankings
 
-`board.context_flags` names pairs where a board edge is smaller than the
-environment gap. The sharpest on the live board: **Trey McBride over Colston
-Loveland is a 2.4-point edge against a 42.8-point environment gap**, because
-Arizona is the lowest-priced offence in the NFL (17.42 implied, −1.97 SD).
+Spearman of PAR-per-starting-slot against season, bootstrapped:
 
-This is not double counting — the expected-points curve is *rank*-based and
-therefore team-blind. But it is an upper bound, since some discount is already
-in the ADP level and `env_swing` cannot know how much.
+| pos | ρ | 95% CI |
+|---|---|---|
+| QB | +0.05 | [−0.62, +0.93] |
+| RB | +0.10 | [−0.62, +1.00] |
+| WR | −0.26 | [−0.79, +0.86] |
+| **TE** | **−0.90** | **[−0.95, −0.36]** |
 
-### 6. RB promotion criteria (carried forward, unchanged)
+Three of four are indistinguishable from flat. And the *level* of scarcity is
+already in the board by construction — `par = exp_points − replacement`, and
+replacement comes from `starter_demand`. Adding a second scarcity term would
+count one fact twice. **Scoped and declined; see `DASHBOARD_SPEC.md`.**
 
-Among backups whose role then grew: snap share 0.47, red-zone carry share 0.34,
-TD-equity share 0.32 — while **prior efficiency reads as noise** (YPC −0.15,
-yards after contact 0.00). At WR/TE the efficiency logic holds (TE yprr 0.35).
-Quality terciles are a filter not a picker: 4.1% / 10.2% / 18.4%.
+### 7. Carried forward, unchanged
 
-The decay-rate thread is **closed**: promoted receiving-profile RBs hit 13.3% vs
-3.2% for rushing-profile — the opposite of the hypothesis, with overlapping
-intervals on cells of ~30. Measured, reported, not a feature.
+Superflex demand (QB 10 → 20, replacement QB11 → QB21); keeper adjustment
+matters only at QB (+47.2); keepers shift everyone ~15 picks earlier; team
+environment routinely outweighs board edges (45.3 points per point of implied
+team total); RB promotion criteria (snap share 0.47, red-zone carry share 0.34,
+prior efficiency reads as noise).
+
+---
+
+## The 2025 label season — decision recorded
+
+**Taken 2026-08-09, twelve days before the draft, with the churn understood.**
+FFC backfilled 2025 after the previous session recorded it as permanently
+missing, so `ADP_MISSING_YEARS` was stale and `LABEL_SEASONS` was one season
+short of what the data supported.
+
+    labelled player-seasons     831 -> 957
+    test folds                    4 -> 5
+    out-of-sample rows          540 -> 666   (+23%)
+
+**Every conclusion is unchanged**, which is the honest headline:
+
+    breakout   AUC 0.528 vs 0.493 price     delta +0.035  CI [-0.014, +0.083]
+    projection rho 0.497 vs 0.494 price     delta +0.002  CI [-0.008, +0.010]
+
+The continuous interval tightened by about a sixth. The null is now measured on
+666 rows rather than 540. QB remains significantly *worse* than price
+(−0.066, CI [−0.152, −0.008]).
+
+**Why it was taken now rather than after the draft:** it only moves estimates,
+never the shape of any conclusion, and better estimates before drafting beat
+better estimates after. The risk accepted is that every published number moved
+slightly, so **any figure quoted from a session before 2026-08-09 is stale.**
+
+**Not re-run on the new window:** the four "things that were tried and did not
+help" in `breakout.py` are deltas against the old 0.513 baseline. They are
+labelled as six-season results. Directions, not current figures.
 
 ---
 
 ## The league, as the code now sees it
 
-Pulled live. Display name `zaCHattack15`, but **the shell exports do not reach
-the Bash tool's environment** — pass ids directly in scripts, or prefix the
-command (`FF_EDGE_LEAGUE_ID=... uv run ...`).
+Pulled live. **All 10 teams have now declared — 20 keepers, not 18.** The
+previous handoff's "one undeclared team" is stale.
 
-- **Shiva Bowl**, 10 teams, 0.5 PPR, `QB/RB/RB/WR/WR/TE/FLEX/SUPER_FLEX/K/DEF`
-  + 5 BN, 15 rounds, 2 keepers, reverse-standings waivers.
-- **Keepers cost the drafted round, minus one the first year kept, minus two the
-  second. Waiver pickups cost ADP round plus one. Two-year maximum.**
-- His keepers: **Jayden Daniels (R6) and Trevor Lawrence (R9)** — both QB slots
-  filled. **Daniels is in year two, so 2026 is his last.**
-- Draft slot 4. **17 picks owned, 15 usable**, including five in an eight-pick
-  window: `R5#44, R5#47, R5#48, R5#50, R6#51`. No R10, no R13.
-- One team (`bordum`) has not declared; the board reports `undeclared_teams`
-  rather than assuming the pool is final.
-
-The structural edge: 6 teams need 7 QB-capable starters from ~3 startable
-quarterbacks. He needs zero.
+- **Shiva Bowl**, 10 teams, 0.5 PPR, `QB/RB/RB/WR/WR/TE/FLEX/SUPER_FLEX/K/DEF`.
+- His keepers: **Jayden Daniels (R6) and Trevor Lawrence (R9)**. Daniels is in
+  year two, so 2026 is his last.
+- Draft slot 4. **17 picks owned, 15 usable.**
+- The structural edge: 6 teams need 7 QB-capable starters from ~3 startable
+  quarterbacks. He needs zero.
 
 ---
 
-## Where to pick up — four threads, in the user's own priority order
+## Where to pick up
 
-### 1. Dashboard refactor — spec first, and expect a long interview
+Nothing is half-built. Every item from both spec rounds is done or deliberately
+deferred. In rough priority order:
 
-**The user's words: too many metrics he is not following, or that were proved
-useless. Some graphics are solid and he wants more of those; most is not where
-the project ended up.**
+### 1. Push. Twelve days out and unpushed since 08-06.
 
-This is the big one and it is a **spec exercise before it is a build exercise**.
-Do not start editing `app.py` (1800+ lines, 6 tabs). Interview first. Questions
-worth asking, at minimum:
+Eleven commits sit local, everything this session built. `Projects/CLAUDE.md`
+requires explicit approval, so **ask** — but ask early rather than the night
+before the draft.
 
-- Which existing charts does he actually use? (The stability chart and the
-  landscape PAR-over-time charts were praised; most tables were not.)
-- What decisions should the dashboard support — draft day, weekly start/sit,
-  trades, waivers? Those are four different products.
-- What survives from `breakout.py` / `projection.py`? Both are honest negative
-  results. A negative result deserves a paragraph, not a tab.
-- Does the k-means removal note still need its own callout?
-- Should the Screen and Board tabs merge into one draft-day view?
-- Who else looks at this? He mentioned "myself and others" — that changes the
-  explanation burden a lot.
+### 2. Draft-day dry run
 
-Write the spec to a file and get agreement before touching the app.
+The tab has never been driven under time pressure, only rendered. Sit with it,
+walk the pick selector through 4 → 17 → 24, and see whether the answer arrives
+in the ten seconds a real pick allows. That is a different test from "renders
+without exceptions", and it is the only one that matters on the 22nd.
 
-### 2. Contextual scoring — the user wants to learn it, so build it slowly
+### 3. Fill `data/win_totals_2026.csv`
 
-He wants to **trial on an easy-to-ingest free source (Reddit or X/Twitter API),
-on a subset — WR, 5-10 players to start.** Also a spec exercise.
+Written and blank. The one manual input that would improve the preseason
+environment layer, and the best available proxy for "will this team still be
+trying in December".
 
-What already exists to build on: `claims.py` has the whole scoring spine (tier ×
-specificity × novelty × recency), the verbatim-quote guard, resolution against
-`weekly_trust`, and per-source grading. `news.py` has RSS. The ledger currently
-runs on Google News RSS plus depth charts.
+### 4. Contextual scoring on Reddit — still unstarted, still wanted
 
-Honest notes for that spec:
-- **Reddit's API is the friendlier of the two** — free tier, no cost, decent
-  rate limits, and `r/fantasyfootball` game threads are dense with role talk.
-  X/Twitter's free tier is severely limited and effectively read-only-tiny.
-- The volume/value inversion he identified in the original scoping still holds:
-  Reddit will be *high* volume and *low* value per item. The novelty dedupe and
-  tier weighting exist for exactly this, but expect to retune both.
-- A 5-10 player WR subset is a good call because it makes the **resolution**
-  step tractable — that is what turns the ledger into labeled data, and it is
-  the part that cannot be shortcut.
-- Season one is still labeled-data collection. Do not promise predictive
-  validation before there is a corpus.
+The user wants to **learn** this, so build it slowly and explain first. Spec it
+before writing code. `claims.py` has the whole scoring spine; Reddit's API is
+the friendlier of the two free options; a 5-10 player WR subset makes the
+resolution step tractable. Season one is labeled-data collection — do not
+promise predictive validation before there is a corpus.
 
-### 3. Move the conversational findings into the dashboard
+### 5. ML/DL — the constraint is unchanged and now better measured
 
-**The user explicitly wants the conclusions reachable without an LLM in the
-loop.** Concretely, these exist only as ad-hoc analysis in this session's
-transcript and should become functions plus views:
+Adding a seventh label season moved nothing, which is more evidence for the
+existing conclusion: **the binding constraint is label seasons, not algorithms.**
+Where the volume actually is: week-level and play-level tables, claim extraction
+once the ledger fills, and change-point detection over weekly usage.
 
-- **Keeper-adjusted ADP** (§4 above) — currently computed inline. Should be a
-  function in `board.py` and a column on the board. Highest value, lowest
-  effort; do this one first.
-- **Availability at each of your picks** — `board.targets` exists but is not
-  surfaced anywhere in the app.
-- **Environment vs board edge** — `board.context_flags` exists, not surfaced.
-- **Quality/opportunity percentile lookup for a target list** — was done ad hoc
-  against `archetypes.scores`; deserves a proper "compare my shortlist" view.
-- **Pick inventory** — `board.picks` exists, not surfaced.
+**The one genuinely open question this session raised:** the project measures
+*ranking* accuracy and is blind to *payoff asymmetry*. The spread around the ADP
+curve is more than five times the step between ranks, so which players land at
+the top of their tier's distribution is worth far more than nailing the order —
+and nothing here has tested whether that is predictable. That is a better thread
+than re-running a measured null with more parameters.
 
-Most of this is *surfacing what was just built*, not new analysis.
+### 6. Deferred by decision
 
-### 4. ML / deep learning — brainstorm before building
-
-He wants something with real impact. **Be careful here**: the project has
-measured, repeatedly, that fitted models do not beat ADP, and that the binding
-constraint is label seasons (2.5-6.5 events per variable), not algorithms. A
-neural net on the same 831 labeled player-seasons will do worse, not better, and
-that is a prediction the project's own evidence supports.
-
-Where the data volume actually is, and therefore where learning has a chance:
-
-- **Week-level rather than season-level.** `weekly_stats` and the play-level
-  `ff_opportunity` tables are orders of magnitude larger than the season-level
-  label set. A start/sit or weekly-usage model has a real sample.
-- **Play-level opportunity models.** Expected points per play given down,
-  distance, field position, personnel — nflverse has every play.
-- **Claim extraction / NLP.** Genuinely a language problem, genuinely has
-  volume once the ledger accumulates, and it is the piece he wants to learn.
-- **Sequence models over weekly usage.** Role changes are a change-point
-  detection problem, which is a real ML framing rather than a bolt-on.
-
-The honest framing for that conversation: **pick the problem where more data
-exists than the season-level board has**, and where the answer is not already
-priced by ADP. Anything else re-runs a measured null with more parameters.
+- **Strategy tab → 2027.** Only useful as a live co-pilot; needs live rankings,
+  roster state and league draft rates.
+- **Dynasty.** Out of scope: it needs an age curve this project does not have.
+- **Scarcity into rankings.** Scoped and declined — §6 above.
 
 ---
 
 ## Things to be careful about
 
-**`config.ROOT` uses `parents[1]`, not `parent`.** `src/config.py`. Using
-`.parent` silently repoints `DATA_DIR` at `src/data` and orphans the cache.
+**Read `CLAUDE.md` first.** Every silent-failure trap is there now rather than
+buried at line 260 of this file. The team-code entry in particular says *both
+sides, every time, including a bare equality check* — that phrasing is load
+bearing and was written after Arizona.
 
-**`data/` is gitignored and must stay that way.** The repo is public. League ids
-and Sleeper handles come from the shell for that reason — a league id exposes
-nine other people's data.
+**Never push without asking.**
+
+**`data/` is gitignored and must stay that way.** The repo is public.
 
 **Shell exports do not reach the Bash tool.** Prefix commands instead.
 
-**Never push without asking.** `Projects/CLAUDE.md` requires explicit approval in
-the current conversation.
-
 **Season-forward validation only.** Never a random split.
 
-**Traps found and fixed — do not reintroduce:**
-- `spread_line` in nflverse is **positive when the home team is favoured**,
-  opposite to betting convention. Read `spread` from `expected.team_environment`,
-  never `spread_line` raw.
-- FFC says `LAR`, nflverse says `LA`. Both sides of any team join must go
-  through `ids.normalize_team` — the failure is a silent null, not an error.
-- A traded pick's `roster_id` is whose pick it *originally* was, not who holds
-  it. Reading it the other way puts picks in entirely the wrong rounds.
-- The teams table carries relocated franchises (36 rows, not 32). Key team
-  sheets off the season schedule.
-- `rank(descending=True)` gives rank 1 to the *largest* value.
-- Both `ff_opportunity` pbp tables carry weeks 19-22 with no `season_type`.
-- The rush table has `rushing_td_exp` *and* `rush_touchdown_exp`; they disagree
-  on 4,558 rows and the short-named one is a sentinel.
+**Numbers from before 2026-08-09 are stale** — the label window changed.
+
+**Verify with output, not inspection.** Use `streamlit.testing.v1.AppTest` for
+the app; it catches exceptions a spec-level check will not. For charts, render
+to PNG and *look* — `uv add vl-convert-python`, then remove it again; it is a
+verification tool, not an app dependency. That is how the zero-baseline problem
+was found, and it built fine either way.
 
 ---
 
 ## Where to pick up
 
 ```bash
-uv run pytest                                     # 190 tests, ~10s
-FF_EDGE_LEAGUE_ID=... uv run streamlit run app.py # Landscape/Players/Screen/Strategy/Board/Glossary
-FF_EDGE_LEAGUE_ID=... uv run python -c "from src import board; print(board.build()['players'].head(20))"
+uv run pytest                                     # 225 tests, ~11s
+FF_EDGE_LEAGUE_ID=... uv run streamlit run app.py # Draft Day/Landscape/Players/Strategy/Board/Glossary
+FF_EDGE_PROFILE=standard_12 uv run python -c "from src import board; print(board.build()['players'].head())"
 ```
 
 The claims ledger fills going forward only — `uv run python -m src.bootstrap
---light` daily during camp is what accumulates it, and news extraction needs
-`ANTHROPIC_API_KEY` in the shell (depth-chart claims work without it).
-
-Win totals: `data/win_totals_2026.csv` is written and blank. Filling it is the
-one manual input that would improve the preseason environment layer, and it is
-the best available proxy for the "will this team still be trying in December"
-question that game lines cannot answer preseason.
+--light` daily during camp is what accumulates it.

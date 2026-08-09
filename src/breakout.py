@@ -21,9 +21,9 @@ across tiers at roughly 0.22 and defined everywhere. It is the default here;
 `adp_tier` and `tier_delta` are still carried for display, and `beat_ratio` is a
 parameter, so the tier framing is one argument away.
 
-**The honest size.** 831 labeled player-seasons across six label years, ~190
+**The honest size.** 957 labeled player-seasons across seven label years, ~219
 positives, and season-forward validation spends the first two years on the
-initial training window, leaving four test folds and 540 out-of-sample rows.
+initial training window, leaving five test folds and 666 out-of-sample rows.
 Every design choice below follows from that: a linear model rather than a boosted
 one, four calibration bins rather than ten, and an ADP-only baseline reported
 beside every score.
@@ -45,10 +45,10 @@ should be read before any number below.
 
     configuration                          out-of-sample AUC
     pooled, 10 features, C=1.0                    0.468
-    stratified, 4 per position                    0.513
+    stratified, 4 per position                    0.528
 
-    stratified vs ADP-only            +0.037   95% CI [-0.011, +0.087]
-    base rate                          0.226   (831 labeled player-seasons)
+    stratified vs ADP-only            +0.035   95% CI [-0.014, +0.083]
+    base rate                          0.229   (957 labeled player-seasons)
 
 The pooled model is below chance, with inverted calibration. Stratifying moves it
 to roughly even. Pooling mixes four different relationships and learns their
@@ -77,7 +77,10 @@ Nothing here inverts a model and calls it a signal, and nothing reports a
 position's result without its denominator.
 
 **Things that were tried and did not help.** Recorded because a negative result
-that is not written down gets re-run every year:
+that is not written down gets re-run every year. All four were measured on the
+**six-season window (2019-2024, 540 out-of-sample rows)** and have not been
+re-run since 2025 became a label season; the baseline they are deltas against
+was 0.513 rather than today's 0.528. Directions, not current figures:
 
     play-context features added to these sets      0.513 -> 0.500
     quality/opportunity composite scores           delta -0.013
@@ -364,7 +367,7 @@ def model_features(position: str | None = None) -> list[str]:
     """Features the backtest may see, price included. Position-specific by default.
 
     Four per position, not ten, and the arithmetic forces it. Stratifying splits
-    831 labeled player-seasons four ways, and season-forward folds cut that
+    957 labeled player-seasons four ways, and season-forward folds cut that
     again, so the first quarterback fold trains on 42 rows with 13 positives. The
     usual floor is ten events per variable; ten features there would be barely
     one. Four gives 2.5 to 6.5 depending on position — still thin, and the most
@@ -374,8 +377,9 @@ def model_features(position: str | None = None) -> list[str]:
     each position, never by searching for what scores well — with samples this
     small, searching *will* find something.
 
-    Adding the play-context columns from `context.py` was tried and measured:
-    AUC fell from 0.513 to 0.500. Those columns persist year to year and are
+    Adding the play-context columns from `context.py` was tried and measured on
+    the six-season window: AUC fell from 0.513 to 0.500. Not re-run since 2025
+    joined the labels. Those columns persist year to year and are
     genuinely informative about a player, and at this events-per-variable ratio
     a sixth feature still costs more variance than it buys. That is a statement
     about the sample, not about the metrics.

@@ -145,8 +145,8 @@ test, so a noisy column cannot drift back in.
 
 **Prior-season usage does not predict beating ADP, and this is now measured to
 ±0.01.** The original binary label — did he finish inside 60% of his price —
-gave stratified AUC 0.513 against 0.476 for price alone, a gap of +0.037 with an
-interval of [-0.011, +0.087]. That interval is too wide to conclude anything.
+gave stratified AUC 0.528 against 0.493 for price alone, a gap of +0.035 with an
+interval of [-0.014, +0.083]. That interval is too wide to conclude anything.
 
 Keeping the outcome continuous instead (where did he finish among drafted
 players at his position, scored by rank correlation) uses every pair rather than
@@ -154,9 +154,9 @@ only those spanning a threshold:
 
 | | rank correlation |
 |---|---:|
-| model | 0.495 |
-| ADP alone | 0.495 |
-| **difference** | **−0.000, 95% CI [−0.010, +0.011]** |
+| model | 0.497 |
+| ADP alone | 0.494 |
+| **difference** | **+0.002, 95% CI [−0.008, +0.010]** |
 
 Predicting next season's finish is easy — usage persists, so anything sane gets
 to ~0.5. Beating the *price* is the question, and the answer is no, now with an

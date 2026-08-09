@@ -144,7 +144,7 @@ TERMS: dict[str, Term] = {
                   "Backtest"),
     "spearman": _t("Rank correlation", "How well predicted order matched actual order. 1.0 is perfect.",
                    """Uses every pair of players rather than only those spanning a
-                   threshold, which is why it can measure on 540 rows what AUC
+                   threshold, which is why it can measure on 666 rows what AUC
                    cannot.""", "Backtest"),
     "spearman_adp_only": _t("Rank correlation, price alone", "The same, for a model that sees only ADP.",
                             "The number the model has to beat to be worth anything.", "Backtest"),

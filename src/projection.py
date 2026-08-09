@@ -2,7 +2,7 @@
 
 `breakout` predicts a yes/no: did a player finish inside 60% of his draft price.
 That is the decision a drafter actually makes, and it is also an expensive way to
-spend 540 rows. Thresholding a continuous outcome throws away everything except
+spend 666 rows. Thresholding a continuous outcome throws away everything except
 which side of the line a player landed on — RB4 and RB40 are the same "no" if you
 paid for RB3, and the model is told nothing about the difference.
 

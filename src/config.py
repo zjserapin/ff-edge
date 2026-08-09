@@ -58,22 +58,31 @@ TTL = {
 #
 #   1. Features lag labels by a season. A player's 2023 usage predicts his 2024
 #      finish, so N label seasons need N+1 seasons of features.
-#   2. A label season needs FFC ADP for that year, and FFC has none for 2025 at
-#      any format. 2018-2024 is what exists.
+#   2. A label season needs FFC ADP for that year.
 #
-# 2018-2025 features therefore yield 2019-2024 labels — six seasons. The window
-# started at 2020 to get the pipeline running, and widening was the single
-# highest-leverage change available: season-forward validation spends the first
-# two label years on the initial training window, so four label seasons bought
-# exactly two test folds and 284 out-of-sample rows. At that size no result is
-# distinguishable from any other, which is why the first backtest could only
-# report "roughly chance" and stop. Six label seasons give four folds and 540
-# out-of-sample rows, which roughly halved every interval in `breakout.py`.
+# 2018-2025 features therefore yield 2019-2025 labels — seven seasons. The
+# window started at 2020 to get the pipeline running, and widening it has been
+# the highest-leverage change available each time: season-forward validation
+# spends the first two label years on the initial training window, so four label
+# seasons bought two test folds and 284 out-of-sample rows. At that size no
+# result is distinguishable from any other, which is why the first backtest
+# could only report "roughly chance" and stop. Six gave four folds and 540 rows,
+# which roughly halved every interval in `breakout.py`. Seven gives five folds
+# and 666 rows — a 23% larger test set that tightened the continuous-target
+# interval by about a sixth and moved no conclusion at all.
+#
+# **2025 was added on 2026-08-09.** It was excluded because FFC genuinely
+# published nothing for it at any format — see `ADP_MISSING_YEARS` — and that
+# stopped being true: 156 rows at half-PPR/10, 144 of them matching a skill
+# player, which sits between 2022's 115 and 2024's 157 rather than being an
+# outlier. Production for the year is complete. Nothing about the exclusion was
+# wrong when it was written; the upstream data changed, so re-check it rather
+# than trusting this comment.
 #
 # 2018 is the floor, and ADP sets it: FFC publishes nothing before it at
 # half-PPR/10-team. Every other source in the feature set reaches back further.
 FEATURE_SEASONS: list[int] = list(range(2018, 2026))
-LABEL_SEASONS: list[int] = list(range(2019, 2025))
+LABEL_SEASONS: list[int] = list(range(2019, 2026))
 
 # Newest season with complete production. Current-state features and clustering
 # read from here; it is deliberately not SEASON, which is the season being
@@ -209,10 +218,18 @@ LEAGUE_ADP_TEAMS = 10
 # in it.
 SUPERFLEX_ADP_SCORING = "2qb"
 
-# FFC returns zero rows for 2025 at every scoring x team-count combination.
-# Not a bug in the fetch — the data does not exist, so 2025 cannot be a label
-# season no matter how much production data we have for it.
-ADP_MISSING_YEARS: list[int] = [2025]
+# Seasons FFC publishes no board for at any scoring x team-count combination,
+# and which therefore cannot be label seasons no matter how much production data
+# exists for them.
+#
+# Empty as of 2026-08-09. This held `[2025]` and that was correct when written —
+# FFC returned zero rows for 2025 everywhere. They have since backfilled it
+# (half-PPR/10: 156 rows; 2QB: 215; PPR: 249), so the exclusion was costing a
+# label season for a reason that had expired. The list stays because the failure
+# it guards against is real and recurring: FFC suppresses a format until it has
+# collected enough drafts, so a *current* season reads as missing for months
+# before it fills in. Check rather than assume when a season looks empty.
+ADP_MISSING_YEARS: list[int] = []
 
 # --- Claims ledger / LLM -----------------------------------------------------
 
