@@ -211,6 +211,96 @@ def scarcity_curve(
     )
 
 
+# A tier break in per-game terms. `expected.TIER_GAP_POINTS` is half a point per
+# game stated as a season total; the scarcity curve can be plotted either way, so
+# the same indifference threshold needs both spellings rather than one converted
+# at the call site and forgotten at the other.
+TIER_GAP_PPG = 0.5
+TIER_GAP_TOTAL = 7.0
+
+
+def tier_breaks(
+    curve: pl.DataFrame,
+    basis: str = "ppg",
+    gap: float | None = None,
+) -> pl.DataFrame:
+    """Where the dropoff cliffs — the ranks a tier starts at, per position.
+
+    The scarcity curve shows the shape; this says where to stop reaching. A
+    tier boundary is the rank at which the curve has fallen far enough from the
+    tier leader that the two are no longer the same asset, so the ranks inside
+    one band are players you should be close to indifferent between.
+
+    **Averaged across the seasons passed in, deliberately.** Cutting tiers
+    per season and drawing them all would put four sets of boundaries on one
+    panel and answer nothing; a boundary that only appears in 2021 is a fact
+    about 2021's injuries. Averaging first asks the question the drafter has,
+    which is where the cliff usually falls.
+
+    Returns: position, tier, first_rank, last_rank, n_ranks, top_value,
+    bottom_value, drop_from_prev — one row per tier, empty if the curve is.
+    """
+    if not curve.height:
+        return pl.DataFrame()
+
+    value_col = "ppg" if basis == "ppg" else "fantasy_points"
+    if value_col not in curve.columns:
+        return pl.DataFrame()
+    gap = gap if gap is not None else (TIER_GAP_PPG if basis == "ppg" else TIER_GAP_TOTAL)
+
+    mean_curve = (
+        curve.group_by(["position", "pos_rank"])
+        .agg(pl.col(value_col).mean().alias(value_col))
+        .sort(["position", "pos_rank"])
+    )
+
+    # Walked in **rank** order rather than value order, which is the one way
+    # this differs from `expected.tiers` and the reason it is not reused. The
+    # mean curve is not guaranteed monotone: with `basis="ppg"` a minimum-games
+    # filter drops different players in different seasons, so a rank averaged
+    # over two seasons can sit above one averaged over three. Sorting by value
+    # then reads the ranks out of order and produces tiers that interleave —
+    # tier 8 starting at rank 27 after tier 7 ended at 29 — which draws as a
+    # cliff in the wrong place. Rank order makes the bands contiguous by
+    # construction, and a rise simply does not open a tier.
+    banded_parts: list[pl.DataFrame] = []
+    for position in mean_curve.get_column("position").unique().sort().to_list():
+        sub = mean_curve.filter(pl.col("position") == position).sort("pos_rank")
+        values = sub.get_column(value_col).to_list()
+        assigned: list[int] = []
+        tier = 1
+        leader = float(values[0])
+        for value in values:
+            if leader - float(value) > gap:
+                tier += 1
+                leader = float(value)
+            assigned.append(tier)
+        banded_parts.append(sub.with_columns(pl.Series("tier", assigned, dtype=pl.Int32)))
+
+    if not banded_parts:
+        return pl.DataFrame()
+    banded = pl.concat(banded_parts, how="diagonal_relaxed")
+
+    out = (
+        banded.group_by(["position", "tier"])
+        .agg(
+            pl.col("pos_rank").min().alias("first_rank"),
+            pl.col("pos_rank").max().alias("last_rank"),
+            pl.len().alias("n_ranks"),
+            pl.col(value_col).max().round(2).alias("top_value"),
+            pl.col(value_col).min().round(2).alias("bottom_value"),
+        )
+        .sort(["position", "tier"])
+    )
+    # How far the curve fell to get here — the size of the cliff, which is the
+    # number that says whether the boundary is worth reaching for.
+    return out.with_columns(
+        (
+            pl.col("top_value").shift(1).over("position") - pl.col("top_value")
+        ).round(2).alias("drop_from_prev")
+    )
+
+
 def cross_positional_value(
     seasons: list[int] | None = None,
     scoring: Mapping[str, float] | None = None,

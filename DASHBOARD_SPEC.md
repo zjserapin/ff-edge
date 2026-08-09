@@ -345,5 +345,38 @@ ToS-dubious.
    `TRUST_METRICS` gives each position its own markers, and the single-metric
    line plot is replaced by `role_shift` (early vs late levels, stated) plus a
    faceted small multiple across all three markers at once
-4. Landscape: sizing and interactivity, then tier bands, then concentration
+4. ~~Landscape: sizing and interactivity, then tier bands, then concentration~~
+   done — charts enlarged and pan/zoom enabled, `landscape.tier_breaks` draws
+   boundary rules on the dropoff, and concentration is now faceted per position
+   with the ordered top-N on the ordinal ramp
 5. Feed the scarcity layer into rankings *(largest, most speculative)*
+
+## Two findings the Landscape work turned up
+
+**The dropoff is a slope, not a staircase.** Running back falls 1.8, 1.0 and 1.7
+points per game across the first four ranks, then settles at 0.5–1.0 per rank the
+whole way down — mean 0.68, range 0.50–0.98 from rank 10 to 48. The named cliffs
+of draft folklore, RB12 and RB24, are not in the data. Reaching pays at the very
+top and steadily less after, which is a different instruction than "reach for the
+tier break".
+
+**Concentration has barely moved, and tight end moved the wrong way.** Over
+2018-2025, QB, RB and WR concentration all shifted by under two points, which on
+shares this size is flat. Tight end is the exception and it went *down*: top five
+from 31.7% of the position to 23.9%, top fifteen from 64.7% to 58.6%. The
+elite-tight-end premium is a claim that a few players own the position, and over
+this window the position spread out instead.
+
+## Chart conventions this pass established
+
+- **The y-axis is not anchored at zero on the dropoff**, because the panel's job
+  is the shape between ranks rather than each rank's size against nothing. With a
+  zero baseline the RB curve sat in the top half of the plot and the cliff it
+  exists to show flattened into the margin. Bars would need the baseline; a line
+  encoding shape does not.
+- **Ordered quantities take the ordinal ramp, not categorical hues.** Top 5/15/30
+  is ordered, so it is one hue light-to-dark and position gets its own panel.
+  The chart previously had this backwards.
+- **The position palette is validated, not eyeballed** — it passes the CVD and
+  lightness checks in both modes. Light mode raises a contrast warning on WR and
+  TE, which obliges a table view; every chart here already ships one.

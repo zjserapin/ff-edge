@@ -379,6 +379,7 @@ def _sidebar() -> dict[str, Any]:
 def _tab_landscape(p: dict[str, Any]) -> None:
     dark = p["dark"]
     pos_scale = theme.position_scale(dark)
+    ink = theme.ink(dark)
 
     st.subheader("How positional value has moved")
     st.caption(
@@ -431,7 +432,7 @@ def _tab_landscape(p: dict[str, Any]) -> None:
                 alt.Tooltip("replacement_ppg:Q", title="Replacement PPG", format=".1f"),
             ],
         )
-        .properties(height=380)
+        .properties(height=520)
     )
     labels = (
         alt.Chart(par_pd[par_pd["season"] == par_pd["season"].max()])
@@ -443,8 +444,15 @@ def _tab_landscape(p: dict[str, Any]) -> None:
             color=alt.Color("position:N", scale=pos_scale, legend=None),
         )
     )
-    st.altair_chart(theme.base_chart(line + labels, dark), use_container_width=True)
-    chart_note(["par_mean_starter", "demand", "replacement_rank", "replacement_ppg"])
+    st.altair_chart(
+        theme.base_chart((line + labels).interactive(), dark),
+        use_container_width=True,
+    )
+    chart_note(
+        ["par_mean_starter", "demand", "replacement_rank", "replacement_ppg"],
+        extra="Drag to pan, scroll to zoom. Each line is direct-labelled at the "
+        "last season, so identity never rests on colour alone.",
+    )
     data_expander(
         par.select(
             "season", "position", "demand", "replacement_rank", "replacement_ppg",
@@ -471,7 +479,7 @@ def _tab_landscape(p: dict[str, Any]) -> None:
         "you *where*. A cliff is worth reaching for, a gentle slope is worth "
         "waiting on, and both can produce the same average."
     )
-    c1, c2 = st.columns([1, 2])
+    c1, c2, c3 = st.columns([2, 2, 2])
     with c1:
         basis = st.radio(
             "Measured as",
@@ -487,6 +495,20 @@ def _tab_landscape(p: dict[str, Any]) -> None:
     basis_key = "ppg" if basis == "Points per game" else "total"
     with c2:
         max_rank = st.slider("Ranks to show", 12, 60, 36, 6, key="scarcity_rank")
+    with c3:
+        show_tiers = st.checkbox("Show tier breaks", value=True, key="scarcity_tiers")
+        default_gap = 2.0 if basis_key == "ppg" else 28.0
+        tier_gap = st.slider(
+            "Tier width",
+            *( (0.5, 4.0, default_gap, 0.5) if basis_key == "ppg"
+               else (7.0, 56.0, default_gap, 7.0) ),
+            key="scarcity_gap",
+            help=(
+                "How far the curve must fall from a tier's best player before "
+                "the next man is a different asset. Wider means fewer, broader "
+                "bands."
+            ),
+        )
 
     scarcity = _scarcity(
         p["scoring_key"],
@@ -506,16 +528,51 @@ def _tab_landscape(p: dict[str, Any]) -> None:
             if basis_key == "ppg"
             else ("fantasy_points", "Season points")
         )
-        sc_pd = scarcity.filter(pl.col("season").is_in(sorted(chosen))).to_pandas()
+        picked = scarcity.filter(pl.col("season").is_in(sorted(chosen)))
+        breaks = (
+            ls.tier_breaks(picked, basis=basis_key, gap=tier_gap)
+            if show_tiers
+            else pl.DataFrame()
+        )
+
+        # Altair refuses to facet a layer whose layers carry different data, so
+        # the curve rows and the tier-boundary rows travel as one frame with a
+        # `mark` discriminator and each layer filters to its own.
+        stacked = picked.with_columns(pl.lit("curve").alias("mark"))
+        if breaks.height:
+            stacked = pl.concat(
+                [
+                    stacked,
+                    breaks.filter(pl.col("tier") > 1).select(
+                        "position",
+                        pl.col("first_rank").alias("pos_rank"),
+                        "tier",
+                        "drop_from_prev",
+                        pl.lit("break").alias("mark"),
+                    ),
+                ],
+                how="diagonal_relaxed",
+            )
+        sc_pd = stacked.to_pandas()
+
+        base = alt.Chart(sc_pd)
         curves = (
-            alt.Chart(sc_pd)
+            base.transform_filter(alt.datum.mark == "curve")
             .mark_line(
                 strokeWidth=2.5,
                 point=alt.OverlayMarkDef(size=70, filled=True),
             )
             .encode(
                 x=alt.X("pos_rank:Q", title="Positional rank"),
-                y=alt.Y(f"{y_field}:Q", title=y_title),
+                # Not anchored at zero, and that is the point of the panel. The
+                # question is the *shape* between ranks, not each rank's size
+                # against nothing — with a zero baseline the RB curve occupies
+                # the top half of the plot and the cliff it is drawn to show
+                # flattens into the margin. (Bars would need the baseline; a
+                # line encoding shape does not.)
+                y=alt.Y(
+                    f"{y_field}:Q", title=y_title, scale=alt.Scale(zero=False)
+                ),
                 color=alt.Color(
                     "season:N",
                     scale=alt.Scale(
@@ -533,20 +590,59 @@ def _tab_landscape(p: dict[str, Any]) -> None:
                     alt.Tooltip("games:Q", title="Games"),
                 ],
             )
-            .properties(height=340, width=260)
-            .facet(column=alt.Column("position:N", title=None, sort=list(theme.position_colors())))
+            .properties(height=430, width=330)
         )
-        st.altair_chart(theme.base_chart(curves, dark), use_container_width=True)
+
+        layers = [curves]
+        if breaks.height:
+            # Boundaries, not bands. The information is *where* the curve stops
+            # being the same asset; filling the interior would spend the only
+            # free channel restating the line's own height.
+            rules = (
+                base.transform_filter(alt.datum.mark == "break")
+                .mark_rule(strokeDash=[3, 3], strokeWidth=1, color=ink["muted"])
+                .encode(
+                    x=alt.X("pos_rank:Q"),
+                    tooltip=[
+                        alt.Tooltip("tier:Q", title="Tier starts"),
+                        alt.Tooltip("pos_rank:Q", title="At rank"),
+                        alt.Tooltip("drop_from_prev:Q", title="Fell by", format=".2f"),
+                    ],
+                )
+            )
+            layers.append(rules)
+
+        faceted = (
+            alt.layer(*layers)
+            .interactive()
+            .facet(column=alt.Column("position:N", title=None,
+                                     sort=list(theme.position_colors())))
+            .resolve_scale(x="shared", y="independent")
+        )
+        st.altair_chart(theme.base_chart(faceted, dark), use_container_width=True)
         chart_note(
             ["pos_rank", "ppg", "fantasy_points", "games"],
             extra=(
-                f"Showing ranks 1–{max_rank} for {', '.join(str(c) for c in sorted(chosen))}. "
-                "Narrow the slider to spread the early ranks out — that is where "
-                "the dropoff actually decides your draft."
+                f"Showing ranks 1–{max_rank} for "
+                f"{', '.join(str(c) for c in sorted(chosen))}. Dashed rules are "
+                "tier boundaries on the mean curve across those seasons — cut "
+                "per season they would be four sets of lines about four sets of "
+                "injuries. Drag to pan, scroll to zoom."
             ),
         )
+        if breaks.height:
+            st.caption(
+                "**Below the top few, this is a slope rather than a staircase.** "
+                "At running back the curve falls 1.8, 1.0 and 1.7 points per "
+                "game across the first four ranks, then settles at 0.5–1.0 per "
+                "rank the rest of the way down. The named cliffs of draft "
+                "folklore — RB12, RB24 — are not in the data; reaching is worth "
+                "it at the very top and steadily less so after."
+            )
+            with st.expander(f"Tier boundaries ({breaks.height} across four positions)"):
+                table(breaks, pretty=False)
         data_expander(
-            scarcity.filter(pl.col("season").is_in(sorted(chosen))).select(
+            picked.select(
                 "season", "position", "pos_rank", "player_display_name",
                 "games", "fantasy_points", "ppg", "par_ppg",
             )
@@ -601,14 +697,31 @@ def _tab_landscape(p: dict[str, Any]) -> None:
         "measure of how many replacement bodies the league cycled through."
     )
     conc = _concentration(p["scoring_key"], (5, 15, 30))
-    conc_pd = conc.to_pandas()
+    # Faceted by position and coloured by top-N, not the reverse. Top 5 / 15 / 30
+    # is an *ordered* quantity, so it belongs on the single-hue ordinal ramp
+    # where darker means a wider slice of the pool; position is identity and gets
+    # its own panel. Painting an ordered variable with categorical hues asks the
+    # reader to remember an arbitrary mapping for something that has a natural
+    # one.
+    steps = theme.ordinal_steps(3, dark)
+    top_domain = [5, 15, 30]
     conc_chart = (
-        alt.Chart(conc_pd)
-        .mark_line(strokeWidth=2, point=alt.OverlayMarkDef(size=45, filled=True))
+        alt.Chart(conc.to_pandas())
+        .mark_line(strokeWidth=2, point=alt.OverlayMarkDef(size=55, filled=True))
         .encode(
             x=alt.X("season:O", title=None),
-            y=alt.Y("share:Q", title="Share of positional points", axis=alt.Axis(format="%")),
-            color=alt.Color("position:N", scale=pos_scale, title="Position"),
+            y=alt.Y(
+                "share:Q",
+                title="Share of positional points",
+                axis=alt.Axis(format="%"),
+                scale=alt.Scale(zero=False),
+            ),
+            color=alt.Color(
+                "top_n:N",
+                scale=alt.Scale(domain=top_domain, range=steps),
+                title="Top N",
+                legend=alt.Legend(orient="top"),
+            ),
             tooltip=[
                 alt.Tooltip("season:O", title="Season"),
                 alt.Tooltip("position:N", title="Position"),
@@ -617,17 +730,56 @@ def _tab_landscape(p: dict[str, Any]) -> None:
                 alt.Tooltip("pool_size:Q", title="Pool"),
             ],
         )
-        .properties(height=180)
-        .facet(column=alt.Column("top_n:N", title="Top N players"))
+        .properties(height=300, width=330)
+        .facet(column=alt.Column("position:N", title=None,
+                                 sort=list(theme.position_colors())))
+        .resolve_scale(y="independent")
     )
     st.altair_chart(theme.base_chart(conc_chart, dark), use_container_width=True)
     chart_note(
         ["share", "pool_size"],
         extra=(
-            "Each panel is a different top-N. The pool is capped at roughly three "
-            "times the number of starters, so this measures how top-heavy the "
-            "draftable players are rather than how many bodies the league used."
+            "One panel per position, darker for a wider slice of the pool. The "
+            "pool is capped at roughly three times the number of starters, so "
+            "this measures how top-heavy the draftable players are rather than "
+            "how many bodies the league used. Note the independent y-axes — the "
+            "question is the direction each position moved, not whether the top "
+            "5 outrank the top 30, which they do by construction."
         ),
+    )
+
+    # The chart shows the shape; this answers the question the chart is being
+    # asked. Eyeballing eight seasons of a line for a trend invites finding one.
+    first, last = (
+        int(conc.get_column("season").min()),
+        int(conc.get_column("season").max()),
+    )
+    drift = (
+        conc.filter(pl.col("season").is_in([first, last]))
+        .pivot(on="season", index=["position", "top_n"], values="share")
+        .with_columns(
+            (pl.col(str(last)) - pl.col(str(first))).round(4).alias("change")
+        )
+        .sort(["position", "top_n"])
+    )
+    st.markdown(f"###### Where it actually moved, {first} to {last}")
+    st.caption(
+        "Positive means the top of that position took a bigger slice than it "
+        "did at the start of the window. Two endpoints, not a fitted trend — "
+        "with eight seasons a slope would be a decoration on the same two "
+        "numbers."
+    )
+    table(drift, pretty=False)
+    st.info(
+        "**The answer is mostly no, and tight end moved the other way.** "
+        "Quarterback, running back and receiver concentration all shifted by "
+        "under two points across eight seasons, which on shares this size is "
+        "flat. Tight end is the exception and it went *down*: the top five fell "
+        "from 31.7% of the position to 23.9%, and the top fifteen from 64.7% to "
+        "58.6%. The elite-tight-end premium is a claim about a few players "
+        "owning the position, and over this window the position spread out "
+        "instead.",
+        icon="📉",
     )
     data_expander(conc)
 
