@@ -113,7 +113,7 @@ def table(df: pl.DataFrame, pretty: bool = True, **kwargs: Any) -> None:
 
     config = {col: st.column_config.Column(help=text) for col, text in helps.items()}
     st.dataframe(
-        pdf, use_container_width=True, hide_index=True, column_config=config, **kwargs
+        pdf, width="stretch", hide_index=True, column_config=config, **kwargs
     )
 
 
@@ -446,7 +446,7 @@ def _tab_landscape(p: dict[str, Any]) -> None:
     )
     st.altair_chart(
         theme.base_chart((line + labels).interactive(), dark),
-        use_container_width=True,
+        width="stretch",
     )
     chart_note(
         ["par_mean_starter", "demand", "replacement_rank", "replacement_ppg"],
@@ -619,7 +619,7 @@ def _tab_landscape(p: dict[str, Any]) -> None:
                                      sort=list(theme.position_colors())))
             .resolve_scale(x="shared", y="independent")
         )
-        st.altair_chart(theme.base_chart(faceted, dark), use_container_width=True)
+        st.altair_chart(theme.base_chart(faceted, dark), width="stretch")
         chart_note(
             ["pos_rank", "ppg", "fantasy_points", "games"],
             extra=(
@@ -678,7 +678,7 @@ def _tab_landscape(p: dict[str, Any]) -> None:
         )
         .properties(height=320)
     )
-    st.altair_chart(theme.base_chart(bars, dark), use_container_width=True)
+    st.altair_chart(theme.base_chart(bars, dark), width="stretch")
     chart_note(
         ["overall_par_rank", "par_ppg"],
         extra=(
@@ -735,7 +735,7 @@ def _tab_landscape(p: dict[str, Any]) -> None:
                                  sort=list(theme.position_colors())))
         .resolve_scale(y="independent")
     )
-    st.altair_chart(theme.base_chart(conc_chart, dark), use_container_width=True)
+    st.altair_chart(theme.base_chart(conc_chart, dark), width="stretch")
     chart_note(
         ["share", "pool_size"],
         extra=(
@@ -960,7 +960,7 @@ def _stability_section(dark: bool) -> None:
         .mark_rule(strokeDash=[4, 4], strokeWidth=1, color=theme.ink(dark)["muted"])
         .encode(x=alt.datum(stab.NOISE_FLOOR))
     )
-    st.altair_chart(theme.base_chart(bars + floor, dark), use_container_width=True)
+    st.altair_chart(theme.base_chart(bars + floor, dark), width="stretch")
     chart_note(
         ["r_yoy", "n_pairs"],
         extra=(
@@ -1111,7 +1111,7 @@ def _breakout_section(dark: bool) -> None:
         .mark_rule(strokeDash=[4, 4], strokeWidth=1, color=theme.ink(dark)["muted"])
         .encode(y=alt.Y("base_rate:Q"))
     )
-    st.altair_chart(theme.base_chart(bars + errors + baseline, dark), use_container_width=True)
+    st.altair_chart(theme.base_chart(bars + errors + baseline, dark), width="stretch")
     chart_note(
         ["base_rate", "lift"],
         extra=(
@@ -1424,7 +1424,7 @@ def _tab_strategy(p: dict[str, Any]) -> None:
             icon="🔒",
         )
 
-    st.altair_chart(theme.base_chart(_strategy_chart(summary, dark), dark), use_container_width=True)
+    st.altair_chart(theme.base_chart(_strategy_chart(summary, dark), dark), width="stretch")
     chart_note(
         ["title_rate", "playoff_rate", "mean_wins"],
         extra=(
@@ -1523,7 +1523,7 @@ def _tab_strategy(p: dict[str, Any]) -> None:
         .mark_text(fontSize=11, color=theme.ink(dark)["primary"])
         .encode(x=alt.X("season:O"), y=alt.Y("strategy:N"), text=alt.Text("mean_wins:Q", format=".1f"))
     )
-    st.altair_chart(theme.base_chart(heat + labels, dark), use_container_width=True)
+    st.altair_chart(theme.base_chart(heat + labels, dark), width="stretch")
     chart_note(
         ["mean_wins"],
         extra=(
@@ -1650,7 +1650,7 @@ def _tab_board(p: dict[str, Any]) -> None:
         .mark_text(align="left", dx=9, fontSize=10, color=theme.ink(dark)["primary"])
         .encode(x=alt.X("market_pct:Q"), y=alt.Y("quality_pct:Q"), text="name:N")
     )
-    st.altair_chart(theme.base_chart(parity + points + labels, dark), use_container_width=True)
+    st.altair_chart(theme.base_chart(parity + points + labels, dark), width="stretch")
     chart_note(
         ["quality_pct", "market_pct", "value_gap", "path_score"],
         extra=(
@@ -1913,7 +1913,7 @@ def _screen_sections(dark: bool) -> None:
                             .facet(row=alt.Row("metric:N", title=None), spacing=8),
                             dark,
                         ),
-                        use_container_width=True,
+                        width="stretch",
                     )
                     chart_note(
                         metrics,
@@ -2295,7 +2295,7 @@ def _tab_draft_day(p: dict[str, Any]) -> None:
         )
         st.altair_chart(
             (fair + pts + labels).properties(height=520).interactive(),
-            use_container_width=True,
+            width="stretch",
         )
         chart_note(
             ["quality_pct", "market_pct", "value_gap"],
