@@ -22,6 +22,7 @@ import polars as pl
 import streamlit as st
 
 from src import archetypes as ar
+from src import board as bd
 from src import breakout as bo
 from src import features as ft
 from src import glossary
@@ -40,6 +41,7 @@ from src.config import (
     DEFAULT_SCORING,
     DEFAULT_TEAMS,
     CURRENT_SEASON,
+    FANTASY_POSITIONS,
     FEATURE_SEASONS,
     OUTPUT_DIR,
     SEASON,
@@ -1590,8 +1592,14 @@ def _claim_flags() -> pl.DataFrame:
     return cm.flags()
 
 
-def _tab_screen(p: dict[str, Any]) -> None:
-    dark = p["dark"]
+def _screen_sections(dark: bool) -> None:
+    """The promotion screen and the claims ledger.
+
+    Was its own tab. It is a tie-break layer rather than a destination — the
+    board orders players, and this is what separates two of them inside a tier —
+    so it now sits at the bottom of Draft Day, which is the moment it is read
+    under time pressure.
+    """
     feats = _features()
     if not feats.height:
         st.warning("No features built. Run `uv run python -m src.bootstrap --light`.")
@@ -1808,6 +1816,209 @@ def _tab_screen(p: dict[str, Any]) -> None:
                 st.caption("No resolved claims yet.")
 
 
+# --- Draft Day tab ----------------------------------------------------------
+
+
+@st.cache_data(show_spinner="Building the draft board…")
+def _draft_board() -> dict[str, Any]:
+    """The board, with team environment attached.
+
+    `board.build` deliberately stops before the environment join so its own
+    tests do not depend on Vegas lines being reachable. The app wants both, and
+    `context_flags` cannot run without `env_swing`, so the two are composed here
+    rather than widening the module's contract.
+    """
+    out = bd.build()
+    if out["players"].height:
+        out["players"] = bd.attach_environment(out["players"])
+    return out
+
+
+@st.cache_data(show_spinner="Reading your picks…")
+def _my_picks() -> pl.DataFrame:
+    return bd.picks()
+
+
+def _tab_draft_day(p: dict[str, Any]) -> None:
+    dark = p["dark"]
+    data = _draft_board()
+
+    for warning in data.get("warnings", []):
+        st.warning(warning)
+
+    players = data["players"]
+    if not players.height:
+        st.info(
+            "No board yet. This tab needs an ADP board for the season and a "
+            "league to price it against — run with `FF_EDGE_LEAGUE_ID` set.",
+            icon="🗒️",
+        )
+        return
+
+    profile = data["profile"]
+    st.subheader("Draft day")
+    st.caption(
+        f"{profile.label} · priced off the {profile.adp_scoring} board · "
+        f"{players.height} draftable players"
+    )
+
+    # --- your picks ---------------------------------------------------------
+    picks = _my_picks()
+    if picks.height:
+        usable = picks.filter(pl.col("usable"))
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Picks owned", picks.height)
+        c2.metric("Usable", usable.height)
+        c3.metric(
+            "First pick",
+            int(usable.get_column("pick_no")[0]) if usable.height else "—",
+        )
+        st.caption(
+            "A keeper is slotted onto a specific pick and spends it, so owned "
+            "and usable are different numbers. Picks acquired in a trade sit at "
+            "the *original* owner's draft slot, not yours."
+        )
+        table(
+            picks.select("round", "pick_no", "from_owner", "keeper", "usable"),
+            pretty=False,
+        )
+    else:
+        st.caption("No pick list — needs a league with a draft order set.")
+
+    st.divider()
+
+    # --- the board ----------------------------------------------------------
+    st.markdown("#### The board")
+    st.info(
+        "**`adj_adp` is where he actually goes once the keepers are off the "
+        "board.** Public ADP is priced in leagues where nobody is kept, and "
+        "every keeper here sits inside the top 150 — so each one is a player "
+        "the market expects to be drafted who will not be, and everyone behind "
+        "him moves up. Any mock that ignores keepers shows players roughly "
+        "fifteen picks late.\n\n"
+        "**Compare `exp_pick` against your own picks, not `adj_adp`.** A keeper "
+        "does not only leave the pool, he also spends a pick: this draft has "
+        "150 picks but fewer selections. `adj_adp` counts selections, "
+        "`exp_pick` counts picks, and using the first against a pick number "
+        "would count the keeper adjustment twice.",
+        icon="🎯",
+    )
+
+    board_cols = [
+        c for c in (
+            "board_rank", "name", "position", "team", "adp", "adj_adp",
+            "exp_pick", "par", "tier", "env_swing",
+        ) if c in players.columns
+    ]
+    positions = st.multiselect(
+        "Positions",
+        list(FANTASY_POSITIONS),
+        default=list(FANTASY_POSITIONS),
+        key="draft_board_positions",
+    )
+    view = players.filter(pl.col("position").is_in(positions or list(FANTASY_POSITIONS)))
+    table(view.select(board_cols).head(60))
+    chart_note(
+        ["par", "tier", "adp"],
+        "<strong style='color:#c3c2b7'>adj_adp</strong> — ADP with kept players "
+        "removed from the pool.<br>"
+        "<strong style='color:#c3c2b7'>exp_pick</strong> — the actual pick "
+        "number that selection lands on.",
+    )
+
+    st.divider()
+
+    # --- availability at a chosen pick --------------------------------------
+    st.markdown("#### Who is likely to be there when you are on the clock")
+    st.caption(
+        "Best PAR among players who plausibly last, using the dispersion FFC "
+        "publishes alongside ADP. Two players at the same price with different "
+        "dispersion are completely different planning problems — the one with a "
+        "tight distribution is the one you cannot wait on."
+    )
+
+    options = (
+        _my_picks().filter(pl.col("usable")).get_column("pick_no").to_list()
+        if picks.height
+        else []
+    )
+    left, right = st.columns([1, 1])
+    with left:
+        pick_no = (
+            st.selectbox("Your pick", options, key="draft_pick_no")
+            if options
+            else st.number_input("Pick number", 1, 200, 24, key="draft_pick_manual")
+        )
+    with right:
+        floor = st.slider(
+            "Minimum chance he lasts", 0.05, 0.95, 0.35, 0.05, key="draft_floor"
+        )
+
+    got = bd.targets(players, int(pick_no), min_available=float(floor), top=15)
+    if got.height:
+        table(got, pretty=False)
+    else:
+        st.caption(
+            "Nobody clears that floor at this pick — either everyone worth "
+            "taking is gone by then, or the dispersion column did not survive "
+            "the board build."
+        )
+
+    st.divider()
+
+    # --- context flags ------------------------------------------------------
+    st.markdown("#### Where the offence outweighs the board")
+    st.info(
+        "Team skill-position points move **45.3 per point of implied team "
+        "total**, measured over 128 team-seasons. These are the pairs where the "
+        "board's own edge is smaller than the gap between the two offences — "
+        "the picks where the ranking is not really the deciding input.\n\n"
+        "**Read this as the size of the argument, not a correction to "
+        "subtract.** The expected-points curve is rank-based and therefore "
+        "team-blind, so this adds information it genuinely does not have. But "
+        "some of the discount is already in the ADP level, and `env_swing` "
+        "cannot know how much, so it is an upper bound.",
+        icon="🏟️",
+    )
+    flags = bd.context_flags(players)
+    if flags.height:
+        table(flags, pretty=False)
+    else:
+        st.caption("No pairs where environment outweighs the board edge.")
+
+    st.divider()
+
+    # --- keeper accounting --------------------------------------------------
+    with st.expander("Keeper accounting — demand, and what is already off the board"):
+        st.caption(
+            "Replacement in a keeper league is league demand *less what is "
+            "kept*, over the players still available. `undeclared_teams` is "
+            "carried because an undeclared team is unfilled demand hiding in "
+            "the numbers."
+        )
+        table(data["summary"], pretty=False)
+        if data["kept"].height:
+            table(data["kept"].sort(["position", "player_name"]), pretty=False)
+        if data["unmatched"].height:
+            st.warning(
+                "These keepers did not match a row on the ADP board. Most are "
+                "benign — a keeper too deep to be in the top 200 never appears "
+                "— but a match failure would leave a kept player on your board."
+            )
+            table(data["unmatched"], pretty=False)
+
+    st.divider()
+
+    # --- tie-breaks: the promotion screen and the claims ledger -------------
+    st.markdown("#### Breaking a tie inside a tier")
+    st.caption(
+        "The board cannot separate players inside a tier — that is what a tier "
+        "means. These two do, on information the market has not priced yet: a "
+        "role that is visibly growing, and claims about it that resolve."
+    )
+    _screen_sections(dark)
+
+
 def _placeholder(name: str, phase: str) -> None:
     st.subheader(name)
     st.info(f"Not built yet — {phase}.", icon="🚧")
@@ -1817,15 +2028,18 @@ def main() -> None:
     st.title("ff-edge")
     p = _sidebar()
 
-    landscape, players, screen, strategy, board, reference = st.tabs(
-        ["Landscape", "Players", "Screen", "Strategy", "Board", "Glossary"]
+    # Draft Day leads because it is the only tab with a deadline on it. The
+    # Board tab is `valuation.py` — quality against price — and is deliberately
+    # not the draft board, which lives under Draft Day. See DASHBOARD_SPEC.md.
+    draft_day, landscape, players, strategy, board, reference = st.tabs(
+        ["Draft Day", "Landscape", "Players", "Strategy", "Board", "Glossary"]
     )
+    with draft_day:
+        _tab_draft_day(p)
     with landscape:
         _tab_landscape(p)
     with players:
         _tab_players(p)
-    with screen:
-        _tab_screen(p)
     with strategy:
         _tab_strategy(p)
     with board:
