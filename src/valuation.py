@@ -38,7 +38,9 @@ import polars as pl
 from src import archetypes as ar
 from src import breakout as bo
 from src import features as ft
-from src.config import CURRENT_SEASON, LEAGUE_ADP_SCORING, LEAGUE_ADP_TEAMS, SEASON
+from src import profiles as pf
+from src.config import CURRENT_SEASON, SEASON
+from src.profiles import LeagueProfile
 
 # The positions this module is for. Quarterbacks are excluded by default: one
 # starts, the position is shallow, and the quality metrics that make this work
@@ -79,10 +81,11 @@ def board(
     positions: tuple[str, ...] = SKILL_POSITIONS,
     min_games: int = 8,
     min_routes: int = 100,
-    scoring: str = LEAGUE_ADP_SCORING,
-    teams: int = LEAGUE_ADP_TEAMS,
+    scoring: str | None = None,
+    teams: int | None = None,
     df: pl.DataFrame | None = None,
     clusters: pl.DataFrame | None = None,
+    profile: LeagueProfile | None = None,
 ) -> pl.DataFrame:
     """Every drafted skill player, with quality, opportunity, path and price.
 
@@ -91,10 +94,21 @@ def board(
     The default drops players whose efficiency could not be estimated, which is
     the right trade even though it hides a few genuine deep-bench fliers.
 
+    **The price side has to come from the profile's market**, and defaulting it
+    to half-PPR was wrong here for the same reason it was wrong in
+    `expected.adp_curve`: `market_pct` is a percentile of *draft price*, so
+    reading it off a market the league does not play in makes the subtraction
+    against quality compare two different drafts. In a superflex league the 1QB
+    board misprices by a round or more before the comparison even starts.
+
     Returns: gsis_id, name, position, team, adp, adp_pos_rank, quality_score,
     quality_pct, opportunity_score, opportunity_pct, market_pct, value_gap,
     path_score, verdict, plus the underlying quality and situation columns.
     """
+    profile = profile or pf.resolve()
+    scoring = scoring or profile.adp_scoring
+    teams = teams or profile.adp_teams
+
     base = df if df is not None else ft.build()
     if not base.height:
         return pl.DataFrame()
@@ -170,6 +184,15 @@ def board(
     # Path to volume: room he has left to grow, plus opportunity his team is
     # about to hand out, minus the teammate standing in front of him. Each term
     # is a percentile where 100 is the favourable end, so they average cleanly.
+    #
+    # **Known limitation, measured rather than assumed.** For a team alpha the
+    # first and third terms cancel: he has no room left to grow *and* nobody
+    # standing in front of him, and both are true at once. So `path_score`
+    # separates alphas from the field by 0.3 points on a 0-100 scale while
+    # `opportunity_pct` separates them by 33. The composite is close to silent
+    # on room, and `test_path_score_does_not_claim_to_measure_room` pins that so
+    # a reweighting has to be deliberate. Read `opportunity_pct` directly when
+    # room to grow is the question.
     path_terms = [
         (100 - pl.col("opportunity_pct")),  # room to grow
     ]

@@ -1830,7 +1830,7 @@ def _draft_board() -> dict[str, Any]:
     """
     out = bd.build()
     if out["players"].height:
-        out["players"] = bd.attach_environment(out["players"])
+        out["players"] = bd.attach_quality(bd.attach_environment(out["players"]))
     return out
 
 
@@ -1889,6 +1889,22 @@ def _tab_draft_day(p: dict[str, Any]) -> None:
 
     # --- the board ----------------------------------------------------------
     st.markdown("#### The board")
+    st.warning(
+        "**`par` is a function of price, not a rating of the player.** Expected "
+        "points come from a curve mapping *positional ADP rank* to what players "
+        "at that rank have historically scored, so within a position this board "
+        "reproduces the market's order exactly. Two receivers eleven picks apart "
+        "have different PAR for one reason: eleven picks. It answers *what is "
+        "this draft slot worth*, which is a real question, and it is silent on "
+        "*how good is this player*.\n\n"
+        "**`value_gap` is the second opinion, and it is not derived from ADP.** "
+        "Quality percentile within position, minus price percentile within "
+        "position. Positive means this project rates him above his cost. "
+        "Quarterbacks are blank because the metrics that carry it — yards per "
+        "route run, separation, yards after contact — have no QB analogue, so "
+        "a blank means *not measured*, never *bad*.",
+        icon="⚠️",
+    )
     st.info(
         "**`adj_adp` is where he actually goes once the keepers are off the "
         "board.** Public ADP is priced in leagues where nobody is kept, and "
@@ -1907,7 +1923,7 @@ def _tab_draft_day(p: dict[str, Any]) -> None:
     board_cols = [
         c for c in (
             "board_rank", "name", "position", "team", "adp", "adj_adp",
-            "exp_pick", "par", "tier", "env_swing",
+            "exp_pick", "par", "tier", "quality_pct", "value_gap", "env_swing",
         ) if c in players.columns
     ]
     positions = st.multiselect(
@@ -1988,24 +2004,81 @@ def _tab_draft_day(p: dict[str, Any]) -> None:
 
     st.divider()
 
-    # --- keeper accounting --------------------------------------------------
-    with st.expander("Keeper accounting — demand, and what is already off the board"):
-        st.caption(
-            "Replacement in a keeper league is league demand *less what is "
-            "kept*, over the players still available. `undeclared_teams` is "
-            "carried because an undeclared team is unfilled demand hiding in "
-            "the numbers."
+    # --- one position at a time --------------------------------------------
+    st.markdown("#### Quality against price, one position at a time")
+    st.caption(
+        "The board above orders across positions, which is what PAR is for. "
+        "This asks the other question — inside one position, who is rated above "
+        "what he costs. Up is better per opportunity, right is more expensive, "
+        "so the top-left is where this project disagrees with the market in "
+        "your favour."
+    )
+    scored = players.filter(
+        pl.col("quality_pct").is_not_null() & pl.col("market_pct").is_not_null()
+    )
+    if scored.height:
+        which = st.radio(
+            "Position",
+            [p for p in ("WR", "RB", "TE")
+             if scored.filter(pl.col("position") == p).height],
+            horizontal=True,
+            key="draft_quality_position",
         )
-        table(data["summary"], pretty=False)
-        if data["kept"].height:
-            table(data["kept"].sort(["position", "player_name"]), pretty=False)
-        if data["unmatched"].height:
-            st.warning(
-                "These keepers did not match a row on the ADP board. Most are "
-                "benign — a keeper too deep to be in the top 200 never appears "
-                "— but a match failure would leave a kept player on your board."
-            )
-            table(data["unmatched"], pretty=False)
+        sub = scored.filter(pl.col("position") == which)
+        pdf = sub.to_pandas()
+        base = alt.Chart(pdf)
+        pts = base.mark_circle(size=150, opacity=0.85).encode(
+            x=alt.X("market_pct:Q", title="Draft price percentile (within position)"),
+            y=alt.Y("quality_pct:Q", title="Quality percentile (within position)"),
+            color=alt.Color(
+                "value_gap:Q",
+                scale=alt.Scale(scheme="redyellowblue"),
+                legend=alt.Legend(title="value gap"),
+            ),
+            tooltip=["name", "team", "adp", "par", "tier", "quality_pct",
+                     "market_pct", "value_gap"],
+        )
+        # The diagonal is agreement: quality percentile equal to price
+        # percentile. Distance from it is the whole message of the chart.
+        fair = (
+            alt.Chart(pl.DataFrame({"x": [0, 100], "y": [0, 100]}).to_pandas())
+            .mark_line(strokeDash=[4, 4], color="#898781")
+            .encode(x="x:Q", y="y:Q")
+        )
+        labels = base.mark_text(align="left", dx=8, fontSize=10).encode(
+            x="market_pct:Q", y="quality_pct:Q", text="name:N",
+            opacity=alt.condition(
+                "abs(datum.value_gap) > 25", alt.value(0.9), alt.value(0.0)
+            ),
+        )
+        st.altair_chart(
+            (fair + pts + labels).properties(height=520).interactive(),
+            use_container_width=True,
+        )
+        chart_note(
+            ["quality_pct", "market_pct", "value_gap"],
+            "The dashed line is agreement. Only players more than 25 percentile "
+            "points from it are labelled.",
+        )
+        data_expander(
+            sub.select("name", "team", "adp", "par", "tier", "quality_pct",
+                       "market_pct", "value_gap", "path_score")
+            .sort("value_gap", descending=True, nulls_last=True),
+            "Show the numbers",
+        )
+    else:
+        st.caption(
+            "No quality scores available — needs the feature table built "
+            "(`uv run python -m src.bootstrap --light`)."
+        )
+
+    if data["unmatched"].height:
+        st.warning(
+            "These keepers did not match a row on the ADP board. Most are "
+            "benign — a keeper too deep to be in the top 200 never appears — "
+            "but a match failure would leave a kept player on your board."
+        )
+        table(data["unmatched"], pretty=False)
 
     st.divider()
 

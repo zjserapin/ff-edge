@@ -164,11 +164,25 @@ def test_comparables_are_same_position_and_ranked(
     assert distances == sorted(distances)
 
 
-def test_path_score_rewards_room_to_grow(board: pl.DataFrame) -> None:
-    """A team's alpha with a huge share should have less room than a backup.
+def test_room_to_grow_is_smaller_for_a_team_alpha(board: pl.DataFrame) -> None:
+    """A team's alpha already has the volume, so he has less of it left to win.
 
-    Guards the sign on the situation terms — a path score that rewarded already
-    having the volume would recommend exactly the players who are already priced.
+    Guards the sign on the term that carries the idea — a situation score that
+    rewarded already having the volume would recommend exactly the players who
+    are already priced.
+
+    **Asserted on `opportunity_pct`, not on `path_score`, and the difference is
+    the point.** `path_score` averages room-to-grow against a reversed
+    `teammate_top_share`, and both are true of an alpha at once: he has no room
+    left *and* nobody standing in front of him. The two terms cancel, so the
+    composite sits near 50 for everyone (alpha 50.7 vs other 50.4) and carries
+    almost no signal about room at all.
+
+    This test used to assert the composite and passed on a fluke: the direction
+    came from a single running back, while WR and TE already leaned the other
+    way. A change of ADP market swapped two players and flipped it. The
+    underlying invariant is real and large — roughly 33 percentile points — so
+    it is asserted where it actually lives.
     """
     if "is_team_alpha" not in board.columns:
         pytest.skip("alpha flag unavailable")
@@ -176,4 +190,37 @@ def test_path_score_rewards_room_to_grow(board: pl.DataFrame) -> None:
     others = board.filter(~pl.col("is_team_alpha").fill_null(False))
     if alphas.height < 5 or others.height < 5:
         pytest.skip("not enough of each group")
-    assert alphas.get_column("path_score").mean() < others.get_column("path_score").mean()
+
+    alpha_opp = alphas.get_column("opportunity_pct").mean()
+    other_opp = others.get_column("opportunity_pct").mean()
+    # A real margin, not a coin flip on two group means. The measured gap is
+    # ~33 points; anything under 10 means the alpha flag stopped meaning volume.
+    assert alpha_opp - other_opp > 10.0, (
+        f"team alphas should hold far more of the opportunity: "
+        f"{alpha_opp:.1f} vs {other_opp:.1f}"
+    )
+
+
+def test_path_score_does_not_claim_to_measure_room(board: pl.DataFrame) -> None:
+    """Pin the known limitation above so it cannot be forgotten or assumed away.
+
+    If `path_score` is ever reweighted so room-to-grow dominates, this test
+    fails and the docstring in `valuation.board` needs rewriting with it. That
+    is the intended outcome — the failure is the notification, not a bug.
+    """
+    if "is_team_alpha" not in board.columns:
+        pytest.skip("alpha flag unavailable")
+    alphas = board.filter(pl.col("is_team_alpha"))
+    others = board.filter(~pl.col("is_team_alpha").fill_null(False))
+    if alphas.height < 5 or others.height < 5:
+        pytest.skip("not enough of each group")
+
+    gap = abs(
+        alphas.get_column("path_score").mean()
+        - others.get_column("path_score").mean()
+    )
+    assert gap < 10.0, (
+        "path_score now separates alphas from the field. That may be an "
+        "improvement, but valuation.board's docstring and this test both "
+        "describe it as a composite where the terms cancel — update them."
+    )

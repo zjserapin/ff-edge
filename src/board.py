@@ -660,6 +660,68 @@ def attach_environment(
     )
 
 
+def attach_quality(
+    players: pl.DataFrame,
+    valued: pl.DataFrame | None = None,
+    profile: LeagueProfile | None = None,
+) -> pl.DataFrame:
+    """Add a second opinion that is not derived from ADP.
+
+    **Why the board needs one.** `par` is honest but it is a function of price:
+    `exp_points` maps a player's *positional ADP rank* to what players at that
+    rank have historically scored, so within a position the board reproduces the
+    market's ordering exactly. Two receivers eleven picks apart have different
+    PAR for one reason — eleven picks. That is the correct answer to "what is
+    this draft slot worth" and no answer at all to "how good is this player".
+
+    `quality_pct` is the independent read: a percentile, within position, of a
+    stability-weighted blend of per-opportunity metrics — weighted by how much
+    each one actually repeats year over year, so a metric that is mostly noise
+    contributes almost nothing. `value_gap` is that percentile minus the
+    percentile of his draft price, which makes it a **disagreement score**: it
+    says where this project's read differs from the market's, which is a reason
+    to look closer rather than a reason to be right.
+
+    Two limits that must stay visible, because both produce nulls rather than
+    errors:
+
+    - **Quarterbacks are not scored.** The quality metrics that carry this —
+      yards per route run, separation, yards after contact — have no
+      quarterback analogue. In a superflex league that is a hole exactly where
+      the league is deepest, so a null here means "not measured", never "bad".
+    - **Thin seasons are dropped.** Under 8 games or 100 routes, yards per route
+      run is a rumour rather than a measurement.
+
+    Returns `players` with `quality_pct`, `market_pct`, `value_gap` and
+    `path_score` added, left-joined so unscored players survive as nulls.
+    """
+    if not players.height:
+        return players
+
+    profile = profile or pf.resolve()
+    if valued is None:
+        from src import valuation as val  # local: valuation imports features
+
+        valued = val.board(profile=profile)
+
+    cols = ["quality_pct", "market_pct", "value_gap", "path_score"]
+    if not valued.height:
+        return players.with_columns(
+            [pl.lit(None, dtype=pl.Float64).alias(c) for c in cols]
+        )
+
+    keys = valued.select(
+        ids.normalize("name").alias("_norm"),
+        *[pl.col(c) for c in cols if c in valued.columns],
+    ).unique(subset=["_norm"], keep="first")
+
+    return (
+        players.with_columns(ids.normalize("name").alias("_norm"))
+        .join(keys, on="_norm", how="left")
+        .drop("_norm")
+    )
+
+
 def context_flags(players: pl.DataFrame, margin: float = 1.0) -> pl.DataFrame:
     """Players whose team environment outweighs their edge on the board.
 

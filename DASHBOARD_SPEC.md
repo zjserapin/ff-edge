@@ -255,4 +255,92 @@ Steps 1-2 have to land before 8/22. Steps 3-5 do not.
 
 ## Open items
 
-None. All three resolved 2026-08-08.
+None from round one. All three resolved 2026-08-08.
+
+---
+
+# Round two — after reviewing the built dashboard
+
+Notes taken 2026-08-08 on the live app. The theme underneath all of them:
+
+> **Rank players by metrics that provably repeat, priced against draft cost,
+> split by position.**
+
+That is a sharper thesis than "research archive + draft day", and it changes what
+each tab is *for*. Stability stops being a finding on a tab nobody reads and
+becomes the engine.
+
+## The finding that drives the rest: PAR is a price, not a rating
+
+`exp_points` maps a player's *positional ADP rank* to what players at that rank
+have historically scored. So within a position the board reproduces the market's
+order exactly, and PAR answers "what is this draft slot worth" — never "how good
+is this player".
+
+The case that made it visible:
+
+| | 2026 ADP | pos rank | PAR | 2025 actual | 2025 finish |
+|---|---|---|---|---|---|
+| Nabers | 60.2 | WR21 | **14.2** | 48.1 | WR81 *(4 games)* |
+| Waddle | 72.4 | WR25 | **0.0** | 148.1 | WR9 |
+
+Waddle outscored Nabers by 100 points and carries the worse PAR, purely because
+he is drafted twelve picks later. That is `board.py` working as designed, and it
+is the honest consequence of the measured null. **But the dashboard presented it
+as a player rating, which it is not.** Fixed with a warning callout, and with a
+second opinion beside it.
+
+## Decided in round two
+
+**Add `value_gap` beside PAR — a second opinion not derived from ADP.** Quality
+percentile within position minus price percentile within position, from
+`valuation.board`, weighted by how much each metric repeats. Positive means this
+project rates him above his cost. Keep PAR; the interesting column is the
+disagreement.
+
+**Per-position sectors.** The cross-position board stays (that is PAR's job), and
+a one-position-at-a-time quality-vs-price view sits below it.
+
+**Keeper accounting expander: deleted.** Keepers were already filtered off the
+board, so it was redundant. The unmatched-keeper warning stays — that one is a
+real safety check.
+
+**Promotion screen weekly trend: data layer, filtering, and the plot.** Add
+receiver metrics to `weekly_trust` (routes, air yards, red-zone targets), stop
+offering carry-share metrics to pass-catchers, and retire the current line plot,
+which does not show what it needs to show.
+
+**Landscape: all four.** Bigger and interactive; tier bands on the dropoff chart;
+concentration broken out by position and season; and the scarcity layer fed into
+the rankings rather than left as a separate view.
+
+**Strategy tab: deferred to 2027.** Only useful as a live co-pilot — "take the QB
+now or wait a round" — which needs live rankings, roster state and league draft
+rates. Not before 8/22.
+
+**Players tab: only stability survives as a *feature*.** The rest stays as the
+record (agreed in round one), but the sticky-metric weighting is what gets
+promoted into the rankings.
+
+## Two limits that must stay visible
+
+**Quarterbacks are not quality-scored.** `SKILL_POSITIONS` is WR/RB/TE, because
+yards per route run, separation and yards after contact have no QB analogue. All
+23 QBs on the board come back null. In a superflex league that is a hole exactly
+where the league is deepest, so the UI must read a blank as *not measured*,
+never *bad*.
+
+**Vegas player props are not available free.** nflverse ships *game* lines only.
+`preseason_environment` already turns those into implied team totals, which is
+the free proxy and is what `env_swing` is built on. Yardage and TD over-unders
+are a paid product; the alternative is scraping sportsbooks, which is fragile and
+ToS-dubious.
+
+## Round-two build order
+
+1. ~~`value_gap` on the draft board + per-position quality-vs-price view~~ done
+2. ~~Delete keeper accounting~~ done
+3. Promotion screen: receiver metrics in `weekly_trust`, fix filtering, retire
+   the line plot
+4. Landscape: sizing and interactivity, then tier bands, then concentration
+5. Feed the scarcity layer into rankings *(largest, most speculative)*
