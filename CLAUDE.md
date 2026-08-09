@@ -69,9 +69,23 @@ orphans the entire cache without raising.
 the opposite of betting convention. Read `spread` from
 `expected.team_environment`, never `spread_line` raw.
 
-**Team codes disagree across sources.** FFC says `LAR`, nflverse says `LA`.
-Both sides of any team join go through `ids.normalize_team`. The failure mode
-is a null row, not an exception.
+**Team codes disagree across sources, and nflverse disagrees with itself.** FFC
+says `LAR` where nflverse says `LA`. Worse, the **2026 roster feed alone spells
+Arizona `AZ`** — the 2025 rosters, weekly stats, schedules and draft picks all
+say `ARI`. Both are mapped in `ids._PFR_TEAMS`.
+
+Run **both sides** through `ids.normalize_team`, **every time**, and note that
+"both sides" includes a bare equality check, not just a `join`. The live bug was
+`rookies.py` deciding whether a player changed teams with
+`new_team != team` — roster on one side, weekly stats on the other. Every
+Cardinal who stayed read as *gone*, so the whole team's production landed in the
+vacated pool: Arizona's vacated target share came out 1.00, first in the league,
+against a corrected 0.209 that is *below* the league mean. The analysis pointed
+at the opposite of the truth.
+
+The failure mode is a null row or a silently inverted flag, never an exception.
+A test that normalizes one side and compares against a raw feed is testing half
+the join and will pass right up until the day a feed changes.
 
 **A traded pick's `roster_id` is whose pick it *originally* was**, not who holds
 it now. Reading it the other way puts picks in entirely the wrong rounds.
