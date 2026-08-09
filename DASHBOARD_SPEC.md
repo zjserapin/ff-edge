@@ -492,3 +492,36 @@ computes `exp_pick` for exactly this comparison; `survival` simply is not using
 it. The fix is to let `survival` take a column argument and pass `exp_pick` from
 the board, which changes availability numbers on the draft-day tab and is worth
 doing before 8/22.
+
+## Item 5, built — and two bugs it uncovered
+
+**Cost of waiting shipped** as `board.cost_of_waiting`, on the Draft Day tab
+under the board. Expected PAR of the best player of each position still
+available at each pick you own, and the difference between adjacent picks.
+
+**The survival bug is fixed.** `adp.survival` now takes an `adp_col`, and
+`board.targets` and `cost_of_waiting` both pass `exp_pick`. The default stays
+`adp` because a bare FFC board has no keepers to correct for.
+
+Fixing it **changed the answer**, which is the argument for having fixed it
+before building on top. On raw ADP the quarterback wait looked cheap early; on
+the keeper-adjusted line, waiting from pick 4 to 17 costs **20.3 points at
+quarterback** — the largest single number on the grid, and exactly what a
+superflex league should produce. The standing advice is unchanged in shape but
+sharper: tight end is free to wait on (0.3 across all six picks), running back
+is cheap until 24 and costs 19.5 after it.
+
+**A second, unrelated bug surfaced from a failing test.** nflverse's *2026
+roster feed alone* spells Arizona `AZ`; every other table it publishes — 2025
+rosters, weekly stats, schedules, draft picks — says `ARI`. `rookies.py` decided
+whether a player left his team by comparing those two codes directly, so **every
+Cardinal who stayed read as gone** and the entire team's production landed in the
+vacated pool. Arizona's vacated target share was 1.00, which would have ranked it
+first in the league; corrected it is 0.209, *below* the league mean of 0.249. The
+analysis was pointing at the opposite of the truth.
+
+`AZ → ARI` now lives in `ids._PFR_TEAMS`, and both sides of that comparison are
+normalized. The test that caught it was itself only testing half the join —
+mapped codes against a *raw* roster — and passed for as long as nflverse agreed
+with itself. It now normalizes both sides, which is the rule the function exists
+to enforce.

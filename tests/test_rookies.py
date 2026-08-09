@@ -44,7 +44,18 @@ def test_team_codes_are_normalized() -> None:
     )
     assert not (mapped & {"GNB", "KAN", "LVR", "NOR", "NWE", "SFO", "TAM", "LAR"})
 
-    roster_teams = set(nv.rosters(2026).get_column("team").unique().to_list())
+    # Both sides normalized, which is the rule this function exists to enforce.
+    # The 2026 roster feed is itself non-standard — it spells Arizona `AZ` where
+    # every other nflverse table says `ARI` — so comparing mapped codes against
+    # a *raw* roster was testing half the join and passed only for as long as
+    # nflverse happened to agree with itself.
+    roster_teams = set(
+        nv.rosters(2026)
+        .select(ids.normalize_team("team"))
+        .get_column("team")
+        .unique()
+        .to_list()
+    )
     assert mapped <= roster_teams, f"still unmatched: {sorted(mapped - roster_teams)}"
 
 

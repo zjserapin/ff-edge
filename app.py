@@ -2180,6 +2180,50 @@ def _tab_draft_day(p: dict[str, Any]) -> None:
 
     st.divider()
 
+    # --- what it costs to wait ---------------------------------------------
+    st.markdown("#### What it costs to wait")
+    st.info(
+        "**The board says what a player is worth. This says what waiting costs.** "
+        "For each pick you own, the expected PAR of the best player of that "
+        "position *still on the board* — so the difference between two columns "
+        "is what falls away if you spend this pick elsewhere and come back "
+        "next round.\n\n"
+        "Read it beside PAR, not instead of it. A position can be expensive to "
+        "wait on and still be worth less than another; a big number here is an "
+        "opportunity cost, not an instruction.",
+        icon="⏳",
+    )
+    if picks.height:
+        wait_picks = (
+            picks.filter(pl.col("usable")).get_column("pick_no").to_list()[:6]
+        )
+        waiting = bd.cost_of_waiting(players, wait_picks)
+        if waiting.height:
+            st.markdown("**Best available, by pick**")
+            table(
+                waiting.pivot(on="pick_no", index="position", values="best_par"),
+                pretty=False,
+            )
+            st.markdown("**Cost of waiting to your next pick**")
+            table(
+                waiting.pivot(
+                    on="pick_no", index="position", values="cost_of_waiting"
+                ),
+                pretty=False,
+            )
+            chart_note(
+                ["par"],
+                "Availability is measured on the keeper-adjusted pick number, "
+                "not raw ADP — in a keeper league players go earlier than "
+                "public ADP says, and comparing the two overstates who is left.",
+            )
+        else:
+            st.caption("Needs the dispersion column from the FFC board.")
+    else:
+        st.caption("No pick list — needs a league with a draft order set.")
+
+    st.divider()
+
     # --- context flags ------------------------------------------------------
     st.markdown("#### Where the offence outweighs the board")
     st.info(

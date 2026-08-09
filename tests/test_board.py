@@ -13,6 +13,7 @@ from __future__ import annotations
 import polars as pl
 import pytest
 
+from src import adp
 from src import board as bd
 
 
@@ -277,3 +278,124 @@ def test_context_flags_catch_a_small_edge_against_a_big_gap(built) -> None:
     assert flags.height
     # Every flagged pair must genuinely have context outweighing the board.
     assert (flags.get_column("env_edge") > flags.get_column("par_edge")).all()
+
+
+# --- Survival against the right number line ---------------------------------
+
+
+# Keepers priced early but slotted late, which is the real league's shape and
+# the only shape where the two number lines actually diverge. With one keeper
+# ahead of a player and his slot also ahead, removal (-1) and the consumed pick
+# (+1) cancel exactly — the gap opens only when the keepers priced ahead of you
+# outnumber the keeper slots spent before your pick. In the Shiva Bowl thirteen
+# keepers sit ahead of pick 24 by ADP while only three slots are consumed.
+_KEEPER_SLOTS = [100, 101, 102, 103]
+
+
+def _synthetic_board() -> pl.DataFrame:
+    """Four keepers priced ahead of the target, their picks spent much later."""
+    return pl.DataFrame(
+        {
+            "name": ["k1", "k2", "k3", "k4", "target", "deep"],
+            "position": ["RB"] * 6,
+            "adp": [1.0, 2.0, 3.0, 4.0, 20.0, 60.0],
+            "stdev": [2.0, 2.0, 2.0, 2.0, 6.0, 12.0],
+            "par": [70.0, 65.0, 60.0, 55.0, 40.0, 10.0],
+            "tier": [1, 1, 1, 2, 2, 5],
+            "kept": [True, True, True, True, False, False],
+        }
+    )
+
+
+def test_survival_reads_the_column_it_is_given() -> None:
+    """The two number lines give different answers, and that is the whole point."""
+    board = bd.keeper_adjusted_adp(_synthetic_board(), slots=_KEEPER_SLOTS, teams=10)
+    raw = adp.survival(board, 24, adp_col="adp")
+    adjusted = adp.survival(board, 24, adp_col="exp_pick")
+    col = "p_available_at_24"
+    for a, b in zip(raw.get_column(col), adjusted.get_column(col)):
+        assert b <= a, "keepers move players earlier, so survival cannot rise"
+
+
+def test_survival_overstates_availability_on_raw_adp_in_a_keeper_league() -> None:
+    """The bug this parameter exists for, as an assertion.
+
+    A keeper is off the board and consumes a pick, so everyone behind him is
+    selected earlier than public ADP says. Measuring survival against raw ADP
+    reports players as available who will already be gone.
+    """
+    board = bd.keeper_adjusted_adp(_synthetic_board(), slots=_KEEPER_SLOTS, teams=10)
+    col = "p_available_at_18"
+    raw = adp.survival(board, 18, adp_col="adp").filter(pl.col("name") == "target")
+    adjusted = adp.survival(board, 18, adp_col="exp_pick").filter(
+        pl.col("name") == "target"
+    )
+    assert raw.get_column(col)[0] > adjusted.get_column(col)[0]
+
+
+def test_survival_ignores_a_column_it_does_not_have() -> None:
+    """A board with no keeper adjustment must not raise, it must fall back."""
+    plain = _synthetic_board()
+    assert "p_available_at_10" not in adp.survival(plain, 10, adp_col="exp_pick").columns
+    assert "p_available_at_10" in adp.survival(plain, 10).columns
+
+
+def test_targets_prefers_the_keeper_adjusted_pick_number(built) -> None:
+    """On a live board `targets` must be measuring against exp_pick."""
+    players = built["players"]
+    if "exp_pick" not in players.columns:
+        pytest.skip("board has no keeper adjustment")
+    got = bd.targets(players, 24, min_available=0.35)
+    assert got.height
+    assert "exp_pick" in got.columns, "the column it judged on must be shown"
+
+
+# --- Cost of waiting --------------------------------------------------------
+
+
+def test_cost_of_waiting_falls_off_as_picks_get_later(built) -> None:
+    """The best player available cannot improve by waiting.
+
+    Every player's survival probability falls monotonically with the pick
+    number, so the expectation built from them has to fall too. A rise would
+    mean the walk lost track of who was already gone.
+    """
+    players = built["players"]
+    got = bd.cost_of_waiting(players, [4, 17, 24, 37, 44])
+    if not got.height:
+        pytest.skip("no dispersion on this board")
+    for position in got.get_column("position").unique().to_list():
+        vals = (
+            got.filter(pl.col("position") == position)
+            .sort("pick_no")
+            .get_column("best_par")
+            .to_list()
+        )
+        assert vals == sorted(vals, reverse=True), f"{position} improves by waiting"
+
+
+def test_cost_of_waiting_is_never_negative(built) -> None:
+    got = bd.cost_of_waiting(built["players"], [4, 24, 44])
+    if not got.height:
+        pytest.skip("no dispersion on this board")
+    costs = got.get_column("cost_of_waiting").drop_nulls().to_list()
+    assert costs, "some cost must be computed"
+    assert all(c >= 0 for c in costs), costs
+
+
+def test_cost_of_waiting_has_no_cost_on_the_last_pick(built) -> None:
+    """There is nothing after your last pick to wait for, so it is null."""
+    picks = [4, 24, 44]
+    got = bd.cost_of_waiting(built["players"], picks)
+    if not got.height:
+        pytest.skip("no dispersion on this board")
+    last = got.filter(pl.col("pick_no") == max(picks))
+    assert last.height
+    assert last.get_column("cost_of_waiting").null_count() == last.height
+
+
+def test_cost_of_waiting_is_empty_without_picks_or_dispersion(built) -> None:
+    assert not bd.cost_of_waiting(built["players"], []).height
+    assert not bd.cost_of_waiting(pl.DataFrame(), [4, 24]).height
+    no_disp = built["players"].drop("stdev") if "stdev" in built["players"].columns else built["players"]
+    assert not bd.cost_of_waiting(no_disp, [4, 24]).height

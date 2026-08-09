@@ -158,6 +158,13 @@ _PFR_TEAMS: dict[str, str] = {
     "SD": "LAC",
     "SDG": "LAC",
     "STL": "LA",
+    # Arizona, in the 2026 roster feed only. Every other nflverse table — the
+    # 2025 rosters, weekly stats, schedules, draft picks — says ARI; rosters for
+    # 2026 alone says AZ. Left unmapped it drops one team out of any join keyed
+    # off the current roster, and Arizona is not a team this project can afford
+    # to lose quietly: it is the lowest-priced offence in the league and the
+    # subject of the sharpest context flag on the board.
+    "AZ": "ARI",
 }
 
 

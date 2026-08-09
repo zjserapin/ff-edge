@@ -584,16 +584,118 @@ def targets(
     `draftable`. Returns empty rather than guessing if it is missing, since a
     survival curve invented from a default dispersion would look exactly as
     confident as a real one.
+
+    **Survival is measured against `exp_pick`, not raw ADP, whenever the board
+    carries it.** `pick_no` is a real pick in a draft where keepers have already
+    consumed slots and left the pool; public ADP is priced in redraft leagues
+    where neither is true. Comparing the two directly reports players as
+    available who will be gone — the error runs to 45x on the players it matters
+    for. Falls back to `adp` for a board with no keeper adjustment, which is the
+    correct baseline rather than a degraded one.
     """
     if not players.height or "stdev" not in players.columns:
         return pl.DataFrame()
     col = f"p_available_at_{pick_no}"
+    adp_col = "exp_pick" if "exp_pick" in players.columns else "adp"
+    shown = ["name", "position", "adp"]
+    if adp_col == "exp_pick":
+        shown.append("exp_pick")
+    shown += ["par", "tier", col]
+
     return (
-        adp_mod.survival(players, pick_no)
+        adp_mod.survival(players, pick_no, adp_col=adp_col)
         .filter(pl.col(col) >= min_available)
         .sort("par", descending=True)
         .head(top)
-        .select("name", "position", "adp", "par", "tier", col)
+        .select(shown)
+    )
+
+
+def cost_of_waiting(
+    players: pl.DataFrame,
+    picks: list[int],
+    positions: tuple[str, ...] = FANTASY_POSITIONS,
+) -> pl.DataFrame:
+    """What it costs to wait a round, per position, at your own picks.
+
+    The board says what a player is worth. It cannot say what waiting costs,
+    and that is the question actually being asked on the clock — take the
+    quarterback now or take him next round. Answering it needs three things
+    nothing else here combines: the *shape* of the positional curve rather than
+    its level, the draft-slot dispersion FFC ships beside ADP, and your real
+    pick list.
+
+    For each pick, the expected PAR of the **best player of that position still
+    on the board**. Walking a position from the top, a player supplies the
+    answer when he is still there and everyone above him is not:
+
+        E[best] = sum_i  par_i * P(i available) * prod_{j<i} P(j gone)
+
+    which is exact under the independence the survival model already assumes,
+    rather than a simulation of it.
+
+    **Availability is measured on `exp_pick` where the board carries it**, for
+    the same reason `targets` is: a raw ADP against a real pick number overstates
+    who is left in a keeper league.
+
+    Note what the output is *not*. A large drop is not an instruction to draft
+    that position — a position can be expensive to wait on and still be worth
+    less than another. It is the opportunity cost of the wait, to be read next
+    to PAR, not instead of it.
+
+    Returns: position, pick_no, best_par, cost_of_waiting — where the cost on
+    each row is what falls away between that pick and the next one you own, and
+    is null on the last pick because there is nothing after it to wait for.
+    """
+    if not players.height or not picks or "stdev" not in players.columns:
+        return pl.DataFrame()
+
+    adp_col = "exp_pick" if "exp_pick" in players.columns else "adp"
+    ordered = sorted(picks)
+    rows: list[dict[str, object]] = []
+
+    for position in positions:
+        sub = (
+            players.filter(
+                (pl.col("position") == position)
+                & pl.col("par").is_not_null()
+                & pl.col(adp_col).is_not_null()
+            )
+            .sort("par", descending=True)
+        )
+        if not sub.height:
+            continue
+
+        for pick_no in ordered:
+            surv = adp_mod.survival(sub, pick_no, adp_col=adp_col)
+            col = f"p_available_at_{pick_no}"
+            still_gone = 1.0
+            expected = 0.0
+            for par, p_here in zip(
+                surv.get_column("par"), surv.get_column(col)
+            ):
+                p = float(p_here or 0.0)
+                expected += float(par) * p * still_gone
+                still_gone *= 1.0 - p
+            rows.append(
+                {
+                    "position": position,
+                    "pick_no": pick_no,
+                    "best_par": round(expected, 1),
+                }
+            )
+
+    if not rows:
+        return pl.DataFrame()
+
+    return (
+        pl.DataFrame(rows)
+        .sort(["position", "pick_no"])
+        .with_columns(
+            (
+                pl.col("best_par") - pl.col("best_par").shift(-1).over("position")
+            ).round(1).alias("cost_of_waiting")
+        )
     )
 
 

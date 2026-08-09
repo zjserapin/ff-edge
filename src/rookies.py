@@ -193,10 +193,26 @@ def vacated_opportunity(
     roster = nv.rosters(season, force=force)
     if not roster.height:
         return pl.DataFrame()
-    staying = roster.select(pl.col("gsis_id").alias("player_id"), pl.col("team").alias("new_team")).drop_nulls()
+    # Normalized before the comparison, not just before a join key. `gone` is
+    # decided by comparing two team codes from two feeds, which is a join in
+    # everything but name — and the 2026 roster is the one nflverse table that
+    # spells Arizona `AZ` while weekly stats spell it `ARI`. Unnormalized, every
+    # Cardinal who stayed reads as having left, and the whole team's production
+    # lands in the vacated pool that rookie opportunity is scored against.
+    staying = (
+        roster.select(
+            pl.col("gsis_id").alias("player_id"),
+            ids.normalize_team("team").alias("new_team"),
+        )
+        .drop_nulls()
+    )
 
-    tagged = produced.join(staying, on="player_id", how="left").with_columns(
-        (pl.col("new_team") != pl.col("team")).fill_null(True).alias("gone")
+    tagged = (
+        produced.with_columns(ids.normalize_team("team"))
+        .join(staying, on="player_id", how="left")
+        .with_columns(
+            (pl.col("new_team") != pl.col("team")).fill_null(True).alias("gone")
+        )
     )
 
     return (

@@ -166,7 +166,9 @@ def slot_scale(stdev: Any) -> np.ndarray:
     return np.maximum(np.nan_to_num(sd, nan=0.0), _MIN_SLOT_SD)
 
 
-def survival(adp_df: pl.DataFrame, pick_no: int) -> pl.DataFrame:
+def survival(
+    adp_df: pl.DataFrame, pick_no: int, adp_col: str = "adp"
+) -> pl.DataFrame:
     """P(player is still on the board at `pick_no`).
 
     Treats a player's draft slot as normal around their ADP with the observed
@@ -180,8 +182,19 @@ def survival(adp_df: pl.DataFrame, pick_no: int) -> pl.DataFrame:
 
     stdev is floored by `slot_scale`, which the draft simulator samples from too
     so both agree about the distribution.
+
+    **`adp_col` exists because `pick_no` and public ADP are not always on the
+    same number line.** Public ADP is priced in redraft leagues where nobody is
+    kept. In a keeper league the keepers are off the board, so everyone behind
+    them goes *earlier* than their ADP says, and comparing a raw ADP against a
+    real pick number reports players as available who will already be gone —
+    James Cook reads 13.7% available at pick 24 on raw ADP against 0.3% on the
+    keeper-adjusted one. Pass `board.keeper_adjusted_adp`'s `exp_pick`, which is
+    computed in pick numbers for exactly this comparison. The default stays
+    `adp` because a bare FFC board has nothing better and no keepers to correct
+    for.
     """
-    if adp_df.height == 0:
+    if adp_df.height == 0 or adp_col not in adp_df.columns:
         return adp_df
 
     col = f"p_available_at_{pick_no}"
@@ -194,7 +207,7 @@ def survival(adp_df: pl.DataFrame, pick_no: int) -> pl.DataFrame:
         return round(1.0 - 0.5 * (1.0 + math.erf(z / math.sqrt(2.0))), 4)
 
     return adp_df.with_columns(
-        pl.struct(["adp", "stdev"])
-        .map_elements(lambda r: _p(r["adp"], r["stdev"]), return_dtype=pl.Float64)
+        pl.struct([adp_col, "stdev"])
+        .map_elements(lambda r: _p(r[adp_col], r["stdev"]), return_dtype=pl.Float64)
         .alias(col)
     )
