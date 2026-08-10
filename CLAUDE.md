@@ -96,6 +96,12 @@ franchises. Key team sheets off the season schedule instead.
 **`rank(descending=True)` gives rank 1 to the *largest* value.** Check the
 direction every time; ADP rank and points rank run opposite ways.
 
+**`sort(descending=True)` puts nulls FIRST.** Polars defaults `nulls_last=False`,
+so a "best N" query returns the N rows that could not be scored — deep players
+with no ADP-curve match, every time. Pass `nulls_last=True` on any descending
+sort meant to surface a top. `expected.tiers` drops null values before sorting,
+which is why the real board is unaffected and an ad-hoc query is not.
+
 **Both `ff_opportunity` pbp tables carry weeks 19-22 with no `season_type`.**
 Filter weeks explicitly.
 

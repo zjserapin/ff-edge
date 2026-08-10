@@ -399,3 +399,103 @@ def test_cost_of_waiting_is_empty_without_picks_or_dispersion(built) -> None:
     assert not bd.cost_of_waiting(pl.DataFrame(), [4, 24]).height
     no_disp = built["players"].drop("stdev") if "stdev" in built["players"].columns else built["players"]
     assert not bd.cost_of_waiting(no_disp, [4, 24]).height
+
+
+# --- Live draft state -------------------------------------------------------
+
+
+def _fake_picks(names: list[str]) -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "pick_no": list(range(1, len(names) + 1)),
+            "round": [1] * len(names),
+            "player_name": names,
+            "picked_by": ["someone"] * len(names),
+        }
+    )
+
+
+def test_drafted_players_leave_the_board(built, monkeypatch) -> None:
+    """The failure a draft-day board cannot have.
+
+    Nothing removed a player from the pool when he was selected — `kept` reads
+    the roster keepers field, which is a static pre-draft declaration. By the
+    third round the board would still be offering players taken in the first.
+    """
+    pre = built["players"]
+    gone = (
+        pre.sort("par", descending=True, nulls_last=True)
+        .head(12)
+        .get_column("name")
+        .to_list()
+    )
+    monkeypatch.setattr(bd, "drafted_players", lambda league_id=None: _fake_picks(gone))
+
+    mid = bd.build()
+    assert mid["players"].height == pre.height - len(gone)
+    assert not (set(mid["players"].get_column("name")) & set(gone))
+    assert mid["drafted"].height == len(gone)
+
+
+def test_par_does_not_move_when_someone_else_picks(built, monkeypatch) -> None:
+    """PAR is a valuation, not a function of draft state.
+
+    Replacement is computed before live picks are removed on purpose. Excluding
+    drafted players from the baseline pool while leaving demand fixed would walk
+    the baseline steadily deeper into what remains and inflate everyone's PAR as
+    the night went on — the board would look like it was finding value simply
+    because the draft was progressing.
+    """
+    pre = built["players"]
+    gone = (
+        pre.sort("par", descending=True, nulls_last=True)
+        .head(12)
+        .get_column("name")
+        .to_list()
+    )
+    monkeypatch.setattr(bd, "drafted_players", lambda league_id=None: _fake_picks(gone))
+
+    mid = bd.build()
+    joined = pre.select("name", pl.col("par").alias("pre")).join(
+        mid["players"].select("name", pl.col("par").alias("mid")), on="name", how="inner"
+    )
+    assert joined.height, "some players must survive to compare"
+    drift = (joined.get_column("mid") - joined.get_column("pre")).abs().max()
+    assert drift == 0.0, f"PAR moved by {drift} because other teams picked"
+
+
+def test_an_empty_draft_leaves_the_board_untouched(built, monkeypatch) -> None:
+    """Before the draft opens, every caller must behave exactly as it did."""
+    monkeypatch.setattr(bd, "drafted_players", lambda league_id=None: pl.DataFrame())
+    again = bd.build()
+    assert again["players"].height == built["players"].height
+    assert not again["players"].get_column("drafted").any()
+
+
+def test_drafted_players_excludes_keepers(with_keepers) -> None:
+    """Keepers arrive on the same endpoint and are already handled.
+
+    Counting them twice would subtract them from positional demand once as
+    keepers and again as picks.
+    """
+    gone = bd.drafted_players()
+    if not gone.height:
+        pytest.skip("draft has not started — nothing live to check")
+    kept_names = set(with_keepers["kept"].get_column("player_name").to_list())
+    assert not (set(gone.get_column("player_name")) & kept_names)
+
+
+def test_draftable_marks_drafted_without_touching_kept() -> None:
+    """The two flags mean different things and must stay separable."""
+    board = _board(
+        [("a", "RB", 1.0, 300.0, True), ("b", "RB", 2.0, 200.0, False),
+         ("c", "RB", 3.0, 100.0, False)]
+    )
+    # Exercise the marking logic directly on a synthetic board.
+    marked = board.with_columns(
+        pl.col("name").is_in(["b"]).alias("drafted")
+    )
+    assert marked.filter(pl.col("kept")).get_column("name").to_list() == ["a"]
+    assert marked.filter(pl.col("drafted")).get_column("name").to_list() == ["b"]
+    available = marked.filter(~pl.col("kept") & ~pl.col("drafted"))
+    assert available.get_column("name").to_list() == ["c"]

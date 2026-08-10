@@ -2017,7 +2017,11 @@ def _screen_sections(dark: bool) -> None:
 # --- Draft Day tab ----------------------------------------------------------
 
 
-@st.cache_data(show_spinner="Building the draft board…")
+# 60s, not the default forever. During the draft the board has to notice that
+# players are coming off it, and `st.cache_data` with no ttl would serve the
+# pre-draft pool all night. Short enough to keep up with a snake draft's pace,
+# long enough that clicking between picks does not refetch Sleeper each time.
+@st.cache_data(ttl=60, show_spinner="Building the draft board…")
 def _draft_board() -> dict[str, Any]:
     """The board, with team environment attached.
 
@@ -2032,7 +2036,7 @@ def _draft_board() -> dict[str, Any]:
     return out
 
 
-@st.cache_data(show_spinner="Reading your picks…")
+@st.cache_data(ttl=60, show_spinner="Reading your picks…")
 def _my_picks() -> pl.DataFrame:
     return bd.picks()
 
@@ -2055,10 +2059,30 @@ def _tab_draft_day(p: dict[str, Any]) -> None:
 
     profile = data["profile"]
     st.subheader("Draft day")
-    st.caption(
-        f"{profile.label} · priced off the {profile.adp_scoring} board · "
-        f"{players.height} draftable players"
-    )
+
+    head, refresh = st.columns([5, 1])
+    gone = data.get("drafted", pl.DataFrame())
+    with head:
+        st.caption(
+            f"{profile.label} · priced off the {profile.adp_scoring} board · "
+            f"**{players.height} still available**"
+            + (f" · {gone.height} drafted so far" if gone.height else "")
+        )
+    with refresh:
+        # The board refreshes itself every 60s, but "did it see the last pick"
+        # is not a question anyone should have to wonder about on the clock.
+        if st.button("↻ Refresh", width="stretch", key="draft_refresh"):
+            _draft_board.clear()
+            _my_picks.clear()
+            st.rerun()
+
+    if gone.height:
+        st.success(
+            f"Live — {gone.height} picks are off the board, most recently "
+            f"**{gone.sort('pick_no').get_column('player_name')[-1]}** at pick "
+            f"{int(gone.sort('pick_no').get_column('pick_no')[-1])}.",
+            icon="🟢",
+        )
 
     # --- your picks ---------------------------------------------------------
     picks = _my_picks()

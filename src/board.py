@@ -179,6 +179,7 @@ def draftable(
     teams: int | None = None,
     curve: pl.DataFrame | None = None,
     profile: LeagueProfile | None = None,
+    drafted: pl.DataFrame | None = None,
 ) -> pl.DataFrame:
     """This season's ADP board with keepers removed and expectations attached.
 
@@ -226,7 +227,77 @@ def draftable(
             pl.lit(False).alias("kept"),
         )
 
+    # Live picks, kept separate from keepers rather than folded into `kept`.
+    # They mean different things: a keeper reduces the demand the draft has to
+    # fill, while a player taken on the clock consumes demand that was always
+    # going to be filled. Merging them would quietly move replacement level
+    # every time somebody picked.
+    if drafted is not None and drafted.height:
+        gone = (
+            drafted.select(ids.normalize("player_name").alias("_norm"), "pick_no")
+            .unique(subset=["_norm"], keep="first")
+            .rename({"pick_no": "drafted_at"})
+        )
+        board = board.join(gone, on="_norm", how="left").with_columns(
+            pl.col("drafted_at").is_not_null().alias("drafted")
+        )
+    else:
+        board = board.with_columns(
+            pl.lit(None, dtype=pl.Int64).alias("drafted_at"),
+            pl.lit(False).alias("drafted"),
+        )
+
     return board.drop("_norm").sort("adp")
+
+
+def drafted_players(league_id: str | None = None) -> pl.DataFrame:
+    """Everyone already selected, read live while the draft runs.
+
+    **The board is otherwise frozen at its pre-draft state.** `kept_players`
+    reads the roster `keepers` field, which is a static declaration made weeks
+    earlier and never changes once the draft starts. Nothing else removed a
+    player from the pool, so by the third round the board would still be
+    offering players taken in the first — useful for one pick and misleading
+    for the rest of the night.
+
+    Sleeper publishes every pick as it happens on the same endpoint the keeper
+    placements come from, distinguished by `is_keeper`. Keepers are excluded
+    here because `kept_players` already accounts for them and counting a player
+    twice would double-subtract him from positional demand.
+
+    Names come from the pick metadata rather than the player file, matching how
+    `picks` reads the same rows, because the metadata is present on every pick
+    and needs no second request on the clock.
+
+    Returns: pick_no, round, player_name, picked_by — empty before the draft
+    opens, which makes every caller's pre-draft behaviour unchanged.
+    """
+    league_id = league_id or sc.resolve_league_id(None)
+    if not league_id:
+        return pl.DataFrame()
+
+    draft = (sleeper._get(f"league/{league_id}/drafts") or [{}])[0]
+    draft_id = draft.get("draft_id")
+    if not draft_id:
+        return pl.DataFrame()
+
+    rows = []
+    for p in (sleeper._get(f"draft/{draft_id}/picks") or []):
+        if p.get("is_keeper"):
+            continue
+        md = p.get("metadata") or {}
+        name = f"{md.get('first_name', '')} {md.get('last_name', '')}".strip()
+        if not name:
+            continue
+        rows.append(
+            {
+                "pick_no": p.get("pick_no"),
+                "round": p.get("round"),
+                "player_name": name,
+                "picked_by": p.get("picked_by"),
+            }
+        )
+    return pl.DataFrame(rows).sort("pick_no") if rows else pl.DataFrame()
 
 
 def keeper_slots(league_id: str | None = None, rounds: int = 15) -> list[int]:
@@ -429,7 +500,8 @@ def build(
 
     kept = kept_players(league_id, profile=profile)
     summary = keeper_summary(kept, league_id, profile=profile)
-    pool = draftable(kept, season=season, profile=profile)
+    gone = drafted_players(league_id) if profile.sleeper_backed else pl.DataFrame()
+    pool = draftable(kept, season=season, profile=profile, drafted=gone)
     if not pool.height:
         warnings.append(
             f"No {profile.adp_scoring} ADP board for {season} at "
@@ -438,7 +510,7 @@ def build(
             "drafts, so a thin market reads as an empty one."
         )
         return {
-            "profile": profile, "warnings": warnings,
+            "profile": profile, "warnings": warnings, "drafted": gone,
             "kept": kept, "summary": summary, "unmatched": pl.DataFrame(),
             "replacement": pl.DataFrame(), "players": pl.DataFrame(),
         }
@@ -447,9 +519,15 @@ def build(
         pool, slots=keeper_slots(league_id) if profile.keepers else None,
         teams=profile.teams,
     )
+    # Replacement is computed *before* live picks are removed, deliberately.
+    # PAR is a valuation, and a valuation should not move because a leaguemate
+    # picked: excluding drafted players from the baseline pool while leaving
+    # demand fixed would point the baseline steadily deeper into what remains
+    # and inflate everyone's PAR as the night went on. Drafted players leave the
+    # board below; they stay in the pool that sets the baseline.
     repl = replacement(pool, summary, use_draft_demand=use_draft_demand)
     players = (
-        pool.filter(~pl.col("kept"))
+        pool.filter(~pl.col("kept") & ~pl.col("drafted"))
         .join(repl.select("position", "replacement_points"), on="position", how="left")
         .with_columns(
             (pl.col("exp_points") - pl.col("replacement_points")).round(1).alias("par")
@@ -465,6 +543,7 @@ def build(
     return {
         "profile": profile,
         "warnings": warnings,
+        "drafted": gone,
         "kept": kept,
         "summary": summary,
         "unmatched": keeper_match_report(kept, pool),
