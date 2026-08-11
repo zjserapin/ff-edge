@@ -59,6 +59,7 @@ normalizes what comes back.
 | `src/sleeper.py` | Read-only Sleeper client, including the `previous_league_id` walk. |
 | `src/adp.py` | FFC ADP, daily snapshots, and pick-survival probability. |
 | `src/ids.py` | The join layer. All cross-source ID and name matching lives here. |
+| `src/props.py` | FanDuel player prop lines — season-long today, weekly in-season. |
 | `src/news.py` | Free news ingestion: Google News RSS, depth charts, Sleeper trending. |
 | `src/llm.py` | The one place a model API is touched. Anthropic ↔ Bedrock swap is config-only. |
 | `src/bootstrap.py` | One command to hydrate the cache. Never dies on one bad source. |

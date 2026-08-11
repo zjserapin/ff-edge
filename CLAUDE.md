@@ -105,6 +105,22 @@ which is why the real board is unaffected and an ad-hoc query is not.
 **Both `ff_opportunity` pbp tables carry weeks 19-22 with no `season_type`.**
 Filter weeks explicitly.
 
+**FanDuel prop markets carry `handicap: 0` and hide the line in the runner
+name.** `"Bijan Robinson Over 1150.5"` is where the number lives. Reading
+`handicap` yields a full, well-typed board on which every line is 0.0. Two more
+in the same feed: all 97 season-long *yardage* markets are priced -114/-114, so
+de-vigging them returns exactly 0.500 — the absence of a signal, not a
+probability — and `marketType` is a **bucket, not a position** (Bowers, Kittle
+and Loveland are all filed under `WIDE_RECEIVERS`).
+
+**Generational suffixes collapse father onto son.** `ids.normalize` strips
+`Jr./Sr.`, so Michael Pittman Jr. (WR, 2020) and Michael Pittman Sr. (RB, 1998,
+no `gsis_id`) share one key. Combined with defenders who share a name — Lamar
+Jackson the CB, Justin Jefferson the rookie LB — a name-only join fanned 145
+prop rows out to 151 without raising. `props.resolve_players` resolves one
+identity per *player* rather than per row, which is what makes the row count
+preserved structurally instead of by luck.
+
 More play-level traps (two-point plays inflating red-zone share, `play_id` type
 mismatch between ff_opportunity and FTN, null receivers on 4% of pass plays) are
 documented in the `src/context.py` module docstring. Read it before doing

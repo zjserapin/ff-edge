@@ -231,6 +231,27 @@ SUPERFLEX_ADP_SCORING = "2qb"
 # before it fills in. Check rather than assume when a season looks empty.
 ADP_MISSING_YEARS: list[int] = []
 
+# --- Sportsbook props (FanDuel) ---------------------------------------------
+
+# FanDuel's sportsbook API is genuinely public — no account, no cookie. The `_ak`
+# key ships in their own public JS bundle and is a client identifier, not a
+# credential, which is why it can live in this file when a league id cannot.
+#
+# DraftKings is deliberately absent. Every DK API path 403s behind Akamai bot
+# management regardless of headers (verified 2026-08-10 with full browser
+# headers, sec-ch-ua and fetch-metadata included); the block keys on TLS
+# fingerprint, not on anything a request can set. Adding DK means a headless
+# browser or a TLS-impersonating client, and neither survives as a daily job.
+FANDUEL_BASE = "https://sbapi.{region}.sportsbook.fanduel.com/api"
+FANDUEL_KEY = "FhMFpcPWXMeyZxOx"
+
+# Any state where FanDuel operates serves the same board. Checked nj/pa/mi/az/co
+# /tn — all 145 season-long markets; `va` lagged at 142, so it is not the default.
+FANDUEL_REGION = os.environ.get("FF_EDGE_FANDUEL_REGION", "nj")
+
+# FanDuel's own id for the NFL, carried as `eventTypeId` throughout their payloads.
+FANDUEL_NFL_EVENT_TYPE = 6423
+
 # --- Claims ledger / LLM -----------------------------------------------------
 
 # Provider swap happens here and in src/llm.py only — logic files never touch a
