@@ -536,6 +536,11 @@ def build(
     # Tiers are cut on PAR, not raw points: the board's job is cross-position
     # ordering, and a tier should mean "these are interchangeable *picks*".
     players = ex.tiers(players, value_col="par", gap=gap)
+    # Tiers cut on a fixed 7-point gap; this cuts on the curve's own uncertainty.
+    # They are different questions — "is this the same asset" against "can we
+    # even tell these two apart" — and the board needs both, because a tier break
+    # that falls inside the standard error is a break the data did not earn.
+    players = indistinguishable(players, value_col="par")
     players = players.with_columns(
         pl.col("par").rank("ordinal", descending=True).cast(pl.Int32).alias("board_rank")
     ).sort("par", descending=True)
@@ -866,12 +871,17 @@ def attach_quality(
     Two limits that must stay visible, because both produce nulls rather than
     errors:
 
-    - **Quarterbacks are not scored.** The quality metrics that carry this —
-      yards per route run, separation, yards after contact — have no
-      quarterback analogue. In a superflex league that is a hole exactly where
-      the league is deepest, so a null here means "not measured", never "bad".
-    - **Thin seasons are dropped.** Under 8 games or 100 routes, yards per route
-      run is a rumour rather than a measurement.
+    - **Quarterbacks are scored, but more thinly than everyone else.** They were
+      excluded until 2026-08-10; see `valuation.VALUED_POSITIONS` for the
+      measurement that switched them on and the two caveats that travel with any
+      QB number — three quality features rather than eight or ten, weighted into
+      what is largely a rushing read, and a recent window that does not clear
+      zero on its own. `path_score` is null at QB by design: its terms are about
+      earning targets, which is not a quarterback's route to volume.
+    - **Thin seasons are dropped.** Under 8 games, or under the position's volume
+      floor (100 routes; 150 pass attempts at QB), a per-opportunity metric is a
+      rumour rather than a measurement. A null here means "not measured", never
+      "bad".
 
     Returns `players` with `quality_pct`, `market_pct`, `value_gap` and
     `path_score` added, left-joined so unscored players survive as nulls.
@@ -900,6 +910,120 @@ def attach_quality(
         players.with_columns(ids.normalize("name").alias("_norm"))
         .join(keys, on="_norm", how="left")
         .drop("_norm")
+    )
+
+
+def indistinguishable(players: pl.DataFrame, value_col: str = "par") -> pl.DataFrame:
+    """Group players the expected-points curve cannot actually tell apart.
+
+    **The problem this exists for.** `par` is printed to a tenth of a point and
+    the curve it comes from carries a standard error of 6 to 13. At the top of a
+    position those two facts collide: Puka Nacua and Jaxon Smith-Njigba differ by
+    10.8 points of PAR against standard errors of 10.8 and 9.0, so the board
+    displays an ordering it has no evidence for. Smith-Njigba was the WR1 in 2025
+    and outscored Nacua by 30 points; he sits lower here purely because he is
+    drafted 2.4 picks later.
+
+    Two players are called indistinguishable when the gap between them is inside
+    the pooled standard error of the pair, `sqrt(se_a**2 + se_b**2)`.
+
+    **Compared against the group leader, not the previous player** — the same
+    choice `expected.tiers` makes and for the same reason. Single-linkage down a
+    shallow slope chains every player at the position into one group: each is
+    within a standard error of the man above him, and forty of them are not
+    thereby interchangeable. Comparing against the leader asks "is this the same
+    asset as the best one in the group", which is the question a drafter has.
+
+    Adds `indist_group` (1-based within position) and `indist_n` (how many
+    players share the group). A player alone in his group has `indist_n == 1`,
+    which is the board saying it can genuinely separate him from his neighbours.
+    """
+    if not players.height or value_col not in players.columns:
+        return players
+    if "se" not in players.columns:
+        return players.with_columns(
+            pl.lit(None, dtype=pl.Int32).alias("indist_group"),
+            pl.lit(None, dtype=pl.UInt32).alias("indist_n"),
+        )
+
+    parts: list[pl.DataFrame] = []
+    for position in players.get_column("position").unique().sort().to_list():
+        sub = players.filter(pl.col("position") == position).sort(
+            value_col, descending=True, nulls_last=True
+        )
+        values = sub.get_column(value_col).to_list()
+        errors = sub.get_column("se").to_list()
+
+        groups: list[int | None] = []
+        group = 1
+        lead_value: float | None = None
+        lead_error: float = 0.0
+        for value, error in zip(values, errors):
+            if value is None:
+                # Unscored players form no group — a null PAR is not evidence of
+                # similarity to anything.
+                groups.append(None)
+                continue
+            error = float(error) if error is not None else 0.0
+            if lead_value is None:
+                lead_value, lead_error = float(value), error
+                groups.append(group)
+                continue
+            pooled = float(np.hypot(lead_error, error))
+            if lead_value - float(value) > pooled:
+                group += 1
+                lead_value, lead_error = float(value), error
+            groups.append(group)
+
+        parts.append(sub.with_columns(pl.Series("indist_group", groups, dtype=pl.Int32)))
+
+    if not parts:
+        return players
+    out = pl.concat(parts, how="diagonal_relaxed")
+    return out.with_columns(
+        pl.len().over(["position", "indist_group"]).cast(pl.UInt32).alias("indist_n")
+    )
+
+
+def tier_map(players: pl.DataFrame, limit: int = 6) -> pl.DataFrame:
+    """How many of each asset are left, by position and tier.
+
+    The board sorted by PAR answers "who is next". On the clock the more useful
+    question is "how many more of this are there" — reaching for the last player
+    in a tier is worth something, reaching for the fourth of nine is not. This is
+    the same tier assignment already on the board, counted rather than listed.
+
+    Counts only players still available: `build` removes kept and drafted players
+    before this runs, so the numbers fall as the draft goes and a tier that empties
+    disappears rather than lingering at zero.
+
+    Returns: position, tier, n_left, par_top, par_bottom, best_available — sorted
+    by position then tier, capped at `limit` tiers per position because tier 9 at
+    running back is not a draft-day input.
+    """
+    if not players.height or "tier" not in players.columns:
+        return pl.DataFrame()
+
+    ranked = (
+        players.filter(pl.col("par").is_not_null())
+        .sort("par", descending=True, nulls_last=True)
+        .group_by(["position", "tier"])
+        .agg(
+            pl.len().alias("n_left"),
+            pl.col("par").max().alias("par_top"),
+            pl.col("par").min().alias("par_bottom"),
+            pl.col("name").first().alias("best_available"),
+        )
+        .sort(["position", "tier"])
+    )
+    if not ranked.height:
+        return pl.DataFrame()
+    return (
+        ranked.with_columns(
+            pl.col("tier").rank("ordinal").over("position").alias("_ord")
+        )
+        .filter(pl.col("_ord") <= limit)
+        .drop("_ord")
     )
 
 

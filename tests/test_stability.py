@@ -140,3 +140,53 @@ def test_weighting_beats_the_flat_mean_on_next_season() -> None:
         "stability weighting no longer beats the flat mean — revisit `_weighted`"
     )
     assert not np.isnan(rank_corr("weighted"))
+
+
+# --- sticky feature selection -----------------------------------------------
+
+
+def _stability_table() -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "position": ["WR"] * 5 + ["RB"],
+            "axis": ["outcome", "opportunity", "quality", "opportunity", "quality", "quality"],
+            "metric": ["ppg", "target_share", "adot", "route_share", "yprr", "ypc"],
+            "r_yoy": [0.90, 0.66, 0.64, 0.30, 0.50, 0.55],
+            "n_pairs": [500] * 6,
+            "verdict": ["sticky", "sticky", "sticky", "usable", "sticky", "sticky"],
+        }
+    )
+
+
+def test_sticky_features_excludes_outcome_columns() -> None:
+    """`ppg` against draft price is close to price against itself.
+
+    Draft price is built almost entirely on last season's production, so an
+    outcome column on the y-axis draws a tight diagonal that looks like a finding
+    and is a tautology. It has the highest persistence in the table, so it would
+    lead the panel if it were not filtered.
+    """
+    got = st.sticky_features(_stability_table(), "WR")
+    assert "ppg" not in got.get_column("metric").to_list()
+    assert got.get_column("axis").unique().to_list() != ["outcome"]
+
+    kept = st.sticky_features(_stability_table(), "WR", include_outcomes=True)
+    assert "ppg" in kept.get_column("metric").to_list()
+
+
+def test_sticky_features_drops_anything_below_the_sticky_verdict() -> None:
+    got = st.sticky_features(_stability_table(), "WR")
+    assert "route_share" not in got.get_column("metric").to_list()
+
+
+def test_sticky_features_orders_by_persistence_and_caps() -> None:
+    got = st.sticky_features(_stability_table(), "WR", top_n=2)
+    assert got.get_column("metric").to_list() == ["target_share", "adot"]
+    assert got.get_column("r_yoy").to_list() == sorted(
+        got.get_column("r_yoy").to_list(), reverse=True
+    )
+
+
+def test_sticky_features_is_per_position() -> None:
+    got = st.sticky_features(_stability_table(), "RB")
+    assert got.get_column("metric").to_list() == ["ypc"]

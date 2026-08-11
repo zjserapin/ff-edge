@@ -292,3 +292,87 @@ def test_role_shift_counts_weeks_played_not_calendar_weeks() -> None:
 
 def test_role_shift_is_empty_for_an_unknown_player() -> None:
     assert not pr.role_shift(_synthetic_weeks([0.3] * 8), "nobody", "WR").height
+
+
+# --- roster context ---------------------------------------------------------
+
+
+def test_roster_context_normalizes_team_codes_on_both_sides() -> None:
+    """The Arizona trap, in the one place a bare `!=` still compares two feeds.
+
+    `roster_context` decides "did he change teams" by comparing a team code from
+    the weekly stats against one from the ADP board. Those feeds disagree — the
+    2026 roster feed spells Arizona `AZ` where the stats say `ARI`, and FFC says
+    `LAR` where nflverse says `LA`. Normalizing only one side reports players who
+    never moved as having moved, which is exactly how the vacated-opportunity
+    analysis came to point at the opposite of the truth.
+
+    Built from synthetic frames so the assertion does not depend on which feed
+    spelling happens to be live today.
+    """
+    feats = pl.DataFrame(
+        {
+            "season": [2025, 2025, 2025],
+            "player_id": ["1", "2", "3"],
+            "player_name": ["Stayed Cardinal", "Stayed Ram", "Actually Moved"],
+            "position": ["WR", "WR", "WR"],
+            "team": ["ARI", "LA", "MIA"],
+            "games": [15, 15, 15],
+        }
+    )
+    board = pl.DataFrame(
+        {
+            # The other feed's spelling for the same two teams.
+            "name": ["Stayed Cardinal", "Stayed Ram", "Actually Moved"],
+            "team": ["AZ", "LAR", "DEN"],
+        }
+    )
+    got = pr.roster_context(
+        ["Stayed Cardinal", "Stayed Ram", "Actually Moved"],
+        df=feats,
+        board=board,
+        season=2025,
+    )
+    moved = {r["player_name"]: r["changed_team"] for r in got.iter_rows(named=True)}
+    assert moved["Stayed Cardinal"] is False, "AZ vs ARI read as a team change"
+    assert moved["Stayed Ram"] is False, "LAR vs LA read as a team change"
+    assert moved["Actually Moved"] is True
+
+
+def test_roster_context_flags_a_season_fragment() -> None:
+    """Four games of rate stats is arithmetic, not evidence."""
+    feats = pl.DataFrame(
+        {
+            "season": [2025, 2025],
+            "player_id": ["1", "2"],
+            "player_name": ["Fragment", "Full Season"],
+            "position": ["WR", "WR"],
+            "team": ["NYG", "NYG"],
+            "games": [4, 16],
+        }
+    )
+    got = pr.roster_context(
+        ["Fragment", "Full Season"], df=feats, board=pl.DataFrame(), season=2025
+    )
+    thin = {r["player_name"]: r["thin_season"] for r in got.iter_rows(named=True)}
+    assert thin["Fragment"] is True
+    assert thin["Full Season"] is False
+
+
+def test_roster_context_degrades_without_a_board() -> None:
+    """No ADP board means the move question cannot be asked — null, not False.
+
+    False would assert he stayed, which is a claim this has no basis for.
+    """
+    feats = pl.DataFrame(
+        {
+            "season": [2025],
+            "player_id": ["1"],
+            "player_name": ["Someone"],
+            "position": ["WR"],
+            "team": ["NYG"],
+            "games": [12],
+        }
+    )
+    got = pr.roster_context(["Someone"], df=feats, board=pl.DataFrame(), season=2025)
+    assert got.get_column("changed_team").is_null().all()

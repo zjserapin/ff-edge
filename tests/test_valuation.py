@@ -112,15 +112,64 @@ def test_quality_excludes_fantasy_points() -> None:
         assert not (set(ft.quality_features(position)) & banned)
 
 
-def test_board_covers_only_skill_positions(board: pl.DataFrame) -> None:
-    assert set(board.get_column("position").unique().to_list()) <= set(val.SKILL_POSITIONS)
-    assert "QB" not in board.get_column("position").to_list()
+def test_board_covers_the_valued_positions(board: pl.DataFrame) -> None:
+    """Quarterbacks are scored as of 2026-08-10, and their absence was a bug.
+
+    This asserted `"QB" not in ...` for as long as the board excluded them. The
+    exclusion was justified on the receiving metrics having no QB analogue, which
+    is true of those metrics and false of the position — `archetypes.scores` has
+    always produced a QB quality score and this module discarded it. In a
+    superflex league that blanked the board at the position the format makes
+    scarce. The assertion is inverted here on purpose so the old behaviour cannot
+    come back unnoticed.
+    """
+    seen = set(board.get_column("position").unique().to_list())
+    assert seen <= set(val.VALUED_POSITIONS)
+    assert "QB" in seen, "quarterbacks are scored — see MIN_VOLUME and VALUED_POSITIONS"
 
 
-def test_low_route_players_are_excluded(board: pl.DataFrame) -> None:
-    """Yards per route on 40 routes is a rumour, not a measurement."""
-    if "routes" in board.columns:
-        assert board.get_column("routes").min() >= 100
+def test_volume_floor_is_applied_per_position(board: pl.DataFrame) -> None:
+    """Each position gated on its own denominator, checked on its own denominator.
+
+    The trap this pins: **a quarterback's `routes` value is dropbacks**, so a
+    single `routes >= 100` check passes every quarterback while measuring nothing
+    about him. Taysom Hill cleared that check on 6 pass attempts and scored at
+    the 25th quality percentile. Testing the floor the same way it is written
+    would reproduce the bug rather than catch it, so each position is checked
+    against the column that actually gates it.
+    """
+    for position, (volume_col, floor) in val.MIN_VOLUME.items():
+        sub = board.filter(pl.col("position") == position)
+        if not sub.height or volume_col not in sub.columns:
+            continue
+        low = sub.filter(pl.col(volume_col).fill_null(0) < floor)
+        assert not low.height, (
+            f"{position} rows below the {volume_col} floor of {floor:g}: "
+            f"{low.get_column('name').to_list()[:5]}"
+        )
+
+
+def test_quarterbacks_have_no_path_score_and_are_not_filtered_by_it(
+    board: pl.DataFrame,
+) -> None:
+    """A null `path_score` must not silently delete QBs from the undervalued list.
+
+    `path_score` is null at QB by construction — its terms are about earning
+    targets, which is not a quarterback's route to volume. A null fails `>=`
+    silently in polars, so without the bypass in `undervalued` every underpriced
+    quarterback would vanish for a reason unrelated to his price.
+    """
+    qbs = board.filter(pl.col("position") == "QB")
+    if not qbs.height:
+        pytest.skip("no quarterbacks on the board")
+    assert qbs.get_column("path_score").is_null().all()
+
+    cheap = board.filter(
+        (pl.col("position") == "QB") & (pl.col("verdict") == "undervalued")
+    )
+    if cheap.height:
+        surfaced = val.undervalued(board).filter(pl.col("position") == "QB")
+        assert surfaced.height, "undervalued QBs were dropped by the path filter"
 
 
 # --- the lists --------------------------------------------------------------

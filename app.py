@@ -590,7 +590,7 @@ def _tab_landscape(p: dict[str, Any]) -> None:
                     alt.Tooltip("games:Q", title="Games"),
                 ],
             )
-            .properties(height=430, width=330)
+            .properties(height=600, width=380)
         )
 
         layers = [curves]
@@ -610,7 +610,22 @@ def _tab_landscape(p: dict[str, Any]) -> None:
                     ],
                 )
             )
-            layers.append(rules)
+            # The rules alone made the reader count dashes to work out which band
+            # they were in. Numbering them is new information rather than a
+            # restatement, so it does not fall foul of the argument above.
+            tier_labels = (
+                base.transform_filter(alt.datum.mark == "break")
+                .mark_text(
+                    align="left", baseline="top", dx=3, dy=2,
+                    fontSize=10, color=ink["muted"],
+                )
+                .encode(
+                    x=alt.X("pos_rank:Q"),
+                    y=alt.value(0),
+                    text=alt.Text("tier:Q", format="d"),
+                )
+            )
+            layers += [rules, tier_labels]
 
         faceted = (
             alt.layer(*layers)
@@ -676,7 +691,7 @@ def _tab_landscape(p: dict[str, Any]) -> None:
                 alt.Tooltip("share:Q", title="Share", format=".0%"),
             ],
         )
-        .properties(height=320)
+        .properties(height=460)
     )
     st.altair_chart(theme.base_chart(bars, dark), width="stretch")
     chart_note(
@@ -730,7 +745,7 @@ def _tab_landscape(p: dict[str, Any]) -> None:
                 alt.Tooltip("pool_size:Q", title="Pool"),
             ],
         )
-        .properties(height=300, width=330)
+        .properties(height=480, width=380)
         .facet(column=alt.Column("position:N", title=None,
                                  sort=list(theme.position_colors())))
         .resolve_scale(y="independent")
@@ -794,7 +809,13 @@ def _scores(season: int, min_games: int) -> pl.DataFrame:
     return ar.scores(season, min_games=min_games, df=_features())
 
 
-def _tab_players(p: dict[str, Any]) -> None:
+def _tab_players(p: dict[str, Any], sections: bool = True) -> None:
+    """Comparable players, and optionally the four research sections beneath it.
+
+    `sections=False` renders only the comparables block. `_tab_research` composes
+    the four sections itself so each can sit in its own expander, and would
+    otherwise draw them twice.
+    """
     dark = p["dark"]
     feats = _features()
     if not feats.height:
@@ -854,6 +875,9 @@ def _tab_players(p: dict[str, Any]) -> None:
         )
         table(ft.coverage_report(feats).filter(pl.col("scope") == "ALL"))
 
+    if not sections:
+        return
+
     st.divider()
     # Stability comes before the backtest deliberately. It answers whether any of
     # these measurements repeat at all, which is the question that has to be
@@ -905,6 +929,25 @@ def _stability_section(dark: bool) -> None:
     if not table_df.height:
         st.info("Not enough paired seasons to measure stability.")
         return
+
+    # The loop this section used to leave open. These correlations are not a
+    # standalone finding that happens to live here — they are the weights inside
+    # the quality score the Board and Draft Day tabs are built on, and nothing on
+    # screen said so.
+    st.info(
+        "**These correlations are already in the rankings.** Each one is the "
+        "weight its metric carries inside `quality_score`, so a column that is "
+        "mostly noise contributes almost nothing to a player's quality "
+        "percentile — which is what `value_gap` on the **Board** and **Draft "
+        "Day** tabs is built from. Weighting by persistence rather than "
+        "averaging flat moved the score's rank correlation with *next* season's "
+        "points from **0.464 to 0.502** at receiver and 0.455 to 0.492 at tight "
+        "end. The weights use no outcome data — only whether a metric repeats — "
+        "so this is a check on construction, not a fitted result.\n\n"
+        "The **Board** tab plots these same metrics against draft price, one "
+        "position at a time.",
+        icon="🔗",
+    )
 
     st.success(
         "**Opportunity persists better than quality at every position** — the "
@@ -1568,6 +1611,117 @@ def _valuation() -> pl.DataFrame:
     return val.board(df=_features())
 
 
+def _sticky_against_price(
+    view: pl.DataFrame, position: str, dark: bool, top_n: int = 6
+) -> None:
+    """Each metric that actually repeats, plotted against what the market charges.
+
+    The panel exists to close a loop the app had left open. The stability finding
+    lived on the Players tab as research, and its *use* — the weights inside
+    `quality_score` — lived here with nothing connecting them. This puts the
+    metrics themselves on screen next to price, so "this repeats and is not
+    priced" is a thing you can see rather than a thing you have to take on trust.
+
+    The metric list is measured, not chosen: `stability.sticky_features` returns
+    what clears the sticky threshold at this position, ordered by persistence,
+    with the outcome columns excluded — plotting last season's points against
+    draft price is close to plotting price against itself.
+    """
+    stability = _stability()[0]
+    if not stability.height:
+        return
+    sticky = stab.sticky_features(stability, position, top_n=top_n)
+    if not sticky.height:
+        st.caption(
+            f"No {position} metric clears the stickiness threshold outside the "
+            "outcome columns, so there is nothing here that would not just be "
+            "restating draft price."
+        )
+        return
+
+    wanted = sticky.get_column("metric").to_list()
+    metrics = [m for m in wanted if m in view.columns]
+    if not metrics:
+        st.caption(
+            "The sticky metrics for this position are not on the valuation "
+            "board — nothing to plot against price."
+        )
+        return
+    # Said out loud rather than dropped. This panel silently rendered one of two
+    # QB metrics and two of six at RB, because the columns simply were not on the
+    # board — and a chart missing two thirds of its subject looks exactly like a
+    # chart that is finished.
+    absent = [m for m in wanted if m not in view.columns]
+
+    st.markdown("#### What repeats, against what it costs")
+    r_by_metric = {
+        r["metric"]: r["r_yoy"] for r in sticky.iter_rows(named=True)
+    }
+    st.caption(
+        f"The {len(metrics)} most persistent {position} metrics, each against "
+        "draft price. **A flat cloud is the interesting one** — a metric that "
+        "repeats year over year and does not rise with price is a signal the "
+        "market is not charging for. A tight upward diagonal means the market "
+        "already knows. Panel titles carry each metric's year-over-year "
+        "correlation."
+    )
+
+    long = (
+        view.select(["name", "team", "market_pct", *metrics])
+        .unpivot(
+            index=["name", "team", "market_pct"],
+            on=metrics,
+            variable_name="metric",
+            value_name="value",
+        )
+        .drop_nulls("value")
+    )
+    if not long.height:
+        return
+    long = long.with_columns(
+        pl.col("metric")
+        .replace_strict(
+            {
+                m: f"{glossary.TERMS[m].label if m in glossary.TERMS else m}"
+                f"  (r={r_by_metric.get(m, float('nan')):.2f})"
+                for m in metrics
+            },
+            default=pl.col("metric"),
+        )
+        .alias("panel")
+    )
+
+    # Deliberately one colour. Encoding `value` here looked informative and was
+    # not: the y-scales resolve independently per panel while a colour scale
+    # resolves globally, so aDOT's 5-20 range swamped target share's 0.05-0.35
+    # and every share panel rendered as the same pale blue. The message of this
+    # panel is the *shape* of each cloud, and shape needs no second channel.
+    panels = (
+        alt.Chart(long.to_pandas())
+        .mark_circle(size=70, opacity=0.75, color=theme.SEQUENTIAL_BLUE[3])
+        .encode(
+            x=alt.X("market_pct:Q", title="Draft price percentile"),
+            y=alt.Y("value:Q", title=None, scale=alt.Scale(zero=False)),
+            tooltip=[
+                alt.Tooltip("name:N", title="Player"),
+                alt.Tooltip("team:N", title="Team"),
+                alt.Tooltip("market_pct:Q", title="Price %ile", format=".0f"),
+                alt.Tooltip("value:Q", title="Value", format=".3f"),
+            ],
+        )
+        .properties(height=200, width=260)
+        .facet(facet=alt.Facet("panel:N", title=None), columns=3)
+        .resolve_scale(y="independent")
+    )
+    st.altair_chart(theme.base_chart(panels, dark), width="stretch")
+    if absent:
+        st.caption(
+            "Not shown — sticky at this position but not carried on the "
+            "valuation board: " + ", ".join(f"`{m}`" for m in absent) + "."
+        )
+    data_expander(sticky, "Show the persistence figures")
+
+
 def _tab_board(p: dict[str, Any]) -> None:
     dark = p["dark"]
     st.subheader("Who the market has wrong")
@@ -1610,22 +1764,58 @@ def _tab_board(p: dict[str, Any]) -> None:
         "paid for. Bottom-right is the reverse. Point size is how much room he "
         "has to grow into more volume."
     )
-    pos_pick = st.multiselect(
-        "Positions", list(val.SKILL_POSITIONS), default=list(val.SKILL_POSITIONS)
-    )
-    view = board.filter(pl.col("position").is_in(pos_pick or list(val.SKILL_POSITIONS)))
+    # One position at a time. A four-position scatter puts four separate
+    # percentile spaces on one pair of axes — a WR at the 80th and a TE at the
+    # 80th are ranked against different fields — and the reader has to remember
+    # which cloud is which before any of it means anything.
+    available = [
+        pos for pos in ("QB", "RB", "WR", "TE")
+        if board.filter(pl.col("position") == pos).height
+    ]
+    if not available:
+        return
+    which = st.segmented_control(
+        "Position",
+        available,
+        default=available[0],
+        key="board_position",
+    ) or available[0]
+    view = board.filter(pl.col("position") == which)
     if not view.height:
         return
+    if which == "QB":
+        st.caption(
+            "**Quarterback quality is a thinner measurement than the others.** "
+            "Three metrics rather than eight or ten, and the stability weighting "
+            "makes it largely a rushing read. Season-forward it correlates +0.367 "
+            "with next-season PPG (95% CI [+0.213, +0.493]), about RB's level. "
+            "`path_score` is blank by design — a starting quarterback already has "
+            "all the volume there is."
+        )
 
     scatter_pd = view.to_pandas()
+    # Colour carries `value_gap` rather than position now that only one position
+    # is on screen, and size falls back to a constant where `path_score` is null —
+    # at QB it always is, and an all-null size channel silently collapses every
+    # point to the minimum radius rather than failing.
+    has_path = view.get_column("path_score").is_not_null().any()
+    size_enc = (
+        alt.Size("path_score:Q", title="Room to grow", scale=alt.Scale(range=[40, 400]))
+        if has_path
+        else alt.value(140)
+    )
     points = (
         alt.Chart(scatter_pd)
         .mark_circle(opacity=0.85, stroke=theme.surface(dark), strokeWidth=1)
         .encode(
             x=alt.X("market_pct:Q", title="Draft price percentile (100 = most expensive)"),
             y=alt.Y("quality_pct:Q", title="Quality percentile (100 = best per opportunity)"),
-            size=alt.Size("path_score:Q", title="Room to grow", scale=alt.Scale(range=[40, 400])),
-            color=alt.Color("position:N", scale=theme.position_scale(dark), title="Position"),
+            size=size_enc,
+            color=alt.Color(
+                "value_gap:Q",
+                scale=alt.Scale(scheme="redyellowblue"),
+                title="Value gap",
+            ),
             tooltip=[
                 alt.Tooltip("name:N", title="Player"),
                 alt.Tooltip("team:N", title="Team"),
@@ -1659,6 +1849,8 @@ def _tab_board(p: dict[str, Any]) -> None:
             "hover for the rest."
         ),
     )
+
+    _sticky_against_price(view, which, dark)
 
     # --- the lists ---
     show = ["name", "position", "team", "adp", "quality_pct", "opportunity_pct",
@@ -1812,6 +2004,32 @@ def _screen_sections(dark: bool) -> None:
                 "not a projection for this one. A null tier means fewer than 8 "
                 "games — a season fragment is not graded."
             )
+
+            # What the usage metrics structurally cannot see. Both of these were
+            # raised against a real comparison: Nabers graded on four games, and
+            # Waddle graded on a target share he earned in Miami while being
+            # drafted in Denver. Neither is visible anywhere in a share column.
+            ctx = pm.roster_context(names, df=feats)
+            if ctx.height:
+                notes: list[str] = []
+                for row in ctx.iter_rows(named=True):
+                    marks = []
+                    if row.get("changed_team"):
+                        marks.append(
+                            f"**new team** — graded on {row['prior_team']} usage, "
+                            f"drafted in {row['draft_team']}"
+                        )
+                    if row.get("thin_season"):
+                        marks.append(
+                            f"**{row['games']} games** — rate stats off a fragment"
+                        )
+                    if marks:
+                        notes.append(f"- {row['player_name']}: " + "; ".join(marks))
+                if notes:
+                    st.warning(
+                        "**Context the screen cannot see.**\n\n" + "\n".join(notes),
+                        icon="🚩",
+                    )
             with st.expander("Criteria percentiles (RB efficiency shown as reference only)"):
                 crit_cols = [c for c in grades.columns if c.endswith("_pct") and c != "screen_pct"]
                 table(grades.select(["player_name", "position"] + crit_cols))
@@ -1833,10 +2051,6 @@ def _screen_sections(dark: bool) -> None:
             if row.height and wk.height:
                 pid = row.get_column("player_id")[0]
                 position = row.get_column("position")[0]
-                metrics = [
-                    m for m in pm.TRUST_METRICS.get(position, [])
-                    if m in wk.columns
-                ]
                 window = st.slider(
                     "Weeks in each window", 2, 6, 4, key="screen_trend_window"
                 )
@@ -1859,69 +2073,26 @@ def _screen_sections(dark: bool) -> None:
                         ),
                         pretty=False,
                     )
+                else:
+                    # Refusing is the feature. A four-week season asked for a
+                    # four-week window returns the same weeks twice and a delta of
+                    # exactly 0.000 on every marker, which reads as a confident
+                    # finding of "no change" and is an artifact of the windowing.
+                    st.info(
+                        f"**No role comparison for {who}** — too few weeks played "
+                        "to split his season into two windows that are not the "
+                        "same weeks twice. A season under four appearances is not "
+                        "compared rather than being compared badly.",
+                        icon="🚧",
+                    )
 
-                mine = (
-                    wk.filter(pl.col("player_id") == pid)
-                    .select(["week"] + metrics)
-                    .sort("week")
-                    .unpivot(
-                        index="week", on=metrics,
-                        variable_name="metric", value_name="share",
-                    )
-                    .drop_nulls("share")
-                    # Non-strict: a marker without a glossary entry keeps its
-                    # raw name rather than becoming null and vanishing off the
-                    # chart, which is the failure mode worth avoiding here.
-                    .with_columns(
-                        pl.col("metric").replace(
-                            {m: glossary.TERMS[m].label for m in metrics
-                             if m in glossary.TERMS}
-                        )
-                    )
-                )
-                if mine.height:
-                    blue = theme.SEQUENTIAL_BLUE[3]
-                    pdf = mine.to_pandas()
-                    pts = (
-                        alt.Chart(pdf)
-                        .mark_point(size=60, filled=True,
-                                    color=theme.ink(dark)["muted"])
-                        .encode(
-                            x=alt.X("week:Q", title="Week",
-                                    axis=alt.Axis(tickMinStep=1)),
-                            y=alt.Y("share:Q", title=None,
-                                    axis=alt.Axis(format=".0%")),
-                            tooltip=[
-                                alt.Tooltip("week:Q", title="Week"),
-                                alt.Tooltip("metric:N", title="Marker"),
-                                alt.Tooltip("share:Q", title="Share", format=".1%"),
-                            ],
-                        )
-                    )
-                    trend = (
-                        alt.Chart(pdf)
-                        .mark_line(strokeWidth=2, color=blue)
-                        .transform_window(
-                            roll="mean(share)", frame=[-3, 0], groupby=["metric"],
-                        )
-                        .encode(x="week:Q", y=alt.Y("roll:Q", title=None))
-                    )
-                    st.altair_chart(
-                        theme.base_chart(
-                            (pts + trend)
-                            .properties(height=190, width="container")
-                            .facet(row=alt.Row("metric:N", title=None), spacing=8),
-                            dark,
-                        ),
-                        width="stretch",
-                    )
-                    chart_note(
-                        metrics,
-                        extra="Points are single weeks; the line is a 4-week "
-                        "rolling mean. A week the team had no red-zone plays is "
-                        "a gap, not a zero.",
-                    )
-                    data_expander(mine)
+                # The weekly line plot that used to sit here was removed on
+                # 2026-08-10. It drew each marker's weekly share with a 4-week
+                # rolling mean, which asked the reader to find a level shift in
+                # twelve noisy points — a request they will grant whether or not
+                # one is there. `role_shift` above answers the same question by
+                # stating the two levels and the difference, with the counts each
+                # rests on, and is the only version that survives being wrong.
 
     st.divider()
     coh = _promotion_cohort()
@@ -2026,9 +2197,9 @@ def _draft_board() -> dict[str, Any]:
     """The board, with team environment attached.
 
     `board.build` deliberately stops before the environment join so its own
-    tests do not depend on Vegas lines being reachable. The app wants both, and
-    `context_flags` cannot run without `env_swing`, so the two are composed here
-    rather than widening the module's contract.
+    tests do not depend on Vegas lines being reachable. The app wants both — the
+    board shows `env_swing` as a column and `value_gap` as its second opinion —
+    so the two are composed here rather than widening the module's contract.
     """
     out = bd.build()
     if out["players"].height:
@@ -2107,45 +2278,160 @@ def _tab_draft_day(p: dict[str, Any]) -> None:
     else:
         st.caption("No pick list — needs a league with a draft order set.")
 
+    # --- who is already gone ------------------------------------------------
+    # Kept players are filtered out of `players` inside `board.build`, so the
+    # board is already correct. What was missing is *saying so*: a name that is
+    # simply absent is indistinguishable from a name the ADP feed never had, and
+    # those two need different reactions on draft night.
+    kept = data.get("kept", pl.DataFrame())
+    if kept.height:
+        st.caption(
+            f"**{kept.height} kept players are off the board below.** They are "
+            "removed from the pool, not hidden from it — every PAR and "
+            "replacement level here is already computed without them."
+        )
+        with st.expander(f"Who is kept ({kept.height})"):
+            kept_cols = [
+                c for c in ("player_name", "position", "team", "kept_by", "round")
+                if c in kept.columns
+            ]
+            table(kept.select(kept_cols) if kept_cols else kept, pretty=False)
+
+    # The unmatched report sits here rather than at the bottom of the tab, where
+    # it used to live 280 lines from anything about keepers. It is the one keeper
+    # failure that changes what you should do: a keeper who did not match is a
+    # player still sitting on the board who cannot actually be drafted.
+    if data["unmatched"].height:
+        st.warning(
+            f"**{data['unmatched'].height} keepers did not match a row on the "
+            "ADP board.** Most are benign — a keeper too deep to appear in the "
+            "top 200 never had a row to match — but a genuine match failure "
+            "leaves a kept player on your board as though he were available.",
+            icon="⚠️",
+        )
+        table(data["unmatched"], pretty=False)
+
+    st.divider()
+
+    # --- how many of each asset are left ------------------------------------
+    tiers_left = bd.tier_map(players)
+    if tiers_left.height:
+        st.markdown("#### How many of each asset are left")
+        st.caption(
+            "A tier is a group the board cannot separate, so the useful question "
+            "is not *who is next* but *how many more of this are there*. Reaching "
+            "for the last player in a tier buys something; reaching for the fourth "
+            "of nine does not. Counts fall as players come off the board.\n\n"
+            "**The last band shown is a cap, not the bottom of the position** — "
+            "only the top six tiers are drawn, because tier 9 at running back is "
+            "not a draft-day input."
+        )
+        chart_df = tiers_left.with_columns(
+            (pl.col("position") + " T" + pl.col("tier").cast(pl.Utf8)).alias("band")
+        ).to_pandas()
+        bars = (
+            alt.Chart(chart_df)
+            .mark_bar(cornerRadiusEnd=3)
+            .encode(
+                x=alt.X("n_left:Q", title="Players still available"),
+                y=alt.Y("band:N", title=None, sort=None),
+                color=alt.Color(
+                    "position:N", scale=theme.position_scale(dark), legend=None
+                ),
+                tooltip=[
+                    alt.Tooltip("position:N", title="Position"),
+                    alt.Tooltip("tier:Q", title="Tier"),
+                    alt.Tooltip("n_left:Q", title="Left"),
+                    alt.Tooltip("best_available:N", title="Best available"),
+                    alt.Tooltip("par_top:Q", title="PAR top", format=".1f"),
+                    alt.Tooltip("par_bottom:Q", title="PAR bottom", format=".1f"),
+                ],
+            )
+            .properties(height=max(240, 22 * len(chart_df)))
+        )
+        st.altair_chart(theme.base_chart(bars, dark), width="stretch")
+        data_expander(tiers_left, "Show the tier table")
+
     st.divider()
 
     # --- the board ----------------------------------------------------------
     st.markdown("#### The board")
-    st.warning(
-        "**`par` is a function of price, not a rating of the player.** Expected "
-        "points come from a curve mapping *positional ADP rank* to what players "
-        "at that rank have historically scored, so within a position this board "
-        "reproduces the market's order exactly. Two receivers eleven picks apart "
-        "have different PAR for one reason: eleven picks. It answers *what is "
-        "this draft slot worth*, which is a real question, and it is silent on "
-        "*how good is this player*.\n\n"
-        "**`value_gap` is the second opinion, and it is not derived from ADP.** "
-        "Quality percentile within position, minus price percentile within "
-        "position. Positive means this project rates him above his cost. "
-        "Quarterbacks are blank because the metrics that carry it — yards per "
-        "route run, separation, yards after contact — have no QB analogue, so "
-        "a blank means *not measured*, never *bad*.",
-        icon="⚠️",
+    st.caption(
+        "**`par` rates the draft slot, not the player** — within a position it "
+        "reproduces ADP's order exactly. Read `value_gap` for the opinion that "
+        "is not derived from price. Gaps smaller than `se` are not real; the "
+        "`same` column groups players the curve cannot tell apart."
     )
-    st.info(
-        "**`adj_adp` is where he actually goes once the keepers are off the "
-        "board.** Public ADP is priced in leagues where nobody is kept, and "
-        "every keeper here sits inside the top 150 — so each one is a player "
-        "the market expects to be drafted who will not be, and everyone behind "
-        "him moves up. Any mock that ignores keepers shows players roughly "
-        "fifteen picks late.\n\n"
-        "**Compare `exp_pick` against your own picks, not `adj_adp`.** A keeper "
-        "does not only leave the pool, he also spends a pick: this draft has "
-        "150 picks but fewer selections. `adj_adp` counts selections, "
-        "`exp_pick` counts picks, and using the first against a pick number "
-        "would count the keeper adjustment twice.",
-        icon="🎯",
-    )
+
+    with st.expander("How to read this board"):
+        st.markdown(
+            "**`par` is a function of price.** Expected points come from a curve "
+            "mapping *positional ADP rank* to what players at that rank have "
+            "historically scored, so two receivers eleven picks apart have "
+            "different PAR for one reason: eleven picks. It answers *what is this "
+            "draft slot worth* and is silent on *how good is this player*.\n\n"
+            "**`se` is that curve's standard error, and it is large.** Six to "
+            "thirteen points, against a board printed to a tenth. Jaxon "
+            "Smith-Njigba was the WR1 in 2025 and outscored Puka Nacua by 30 "
+            "points; he sits below him here by 10.8 PAR, against standard errors "
+            "of 9.0 and 10.8. **`same` is the honest reading** — players sharing "
+            "a `same` group are one asset, and the count tells you how many of "
+            "that asset are left.\n\n"
+            "**`value_gap` is the second opinion.** Quality percentile within "
+            "position minus price percentile within position. Positive means this "
+            "project rates him above his cost. Quarterbacks are scored as of "
+            "2026-08-10, but on three metrics rather than eight or ten, weighted "
+            "into what is largely a rushing read — treat a QB number as thinner "
+            "than a receiver's. A blank still means *not measured*, never *bad*."
+        )
+        st.markdown(
+            "**`env_swing` — the offence he plays in, in points per season.** "
+            "Three numbers multiplied:\n\n"
+            "```\n"
+            "45.3  ×  (his team's implied total − 22.0)  ×  (exp_points / 947)\n"
+            "  ↑                   ↑                            ↑\n"
+            "measured:      how far his offence is        his share of a\n"
+            "fantasy pts    priced above or below         typical team's\n"
+            "per point of   the league average, from      fantasy production\n"
+            "implied total  Vegas game lines\n"
+            "```\n\n"
+            "It is **not** double counting the ADP: the expected-points curve is "
+            "blind to team, assigning this year's TE1 whatever the average TE1 "
+            "scored whether he plays for the best offence in football or the "
+            "worst. The market's view of the team is in the ADP *level*, not in "
+            "his positional *rank*, and the curve only reads rank.\n\n"
+            "**It is an upper bound, not a correction to subtract.** Some of the "
+            "discount is already in the price and this does not know how much. "
+            "Read it as *how big is the argument*."
+        )
+        st.markdown(
+            "**`adj_adp` is where he goes once the keepers are off the board.** "
+            "Public ADP is priced where nobody is kept, so every keeper is a "
+            "player the market expects to be drafted who will not be, and "
+            "everyone behind him moves up — roughly fifteen picks.\n\n"
+            "**Compare `exp_pick` against your own picks, not `adj_adp`.** A "
+            "keeper leaves the pool *and* spends a pick. `adj_adp` counts "
+            "selections, `exp_pick` counts picks; using the first against a pick "
+            "number counts the keeper adjustment twice."
+        )
+
+    # `indist_n` is the count of players in the group; shown as `same` because
+    # "how many of this asset are left" is the question it answers on the clock.
+    # A group of one is left blank rather than shown as 1 — a column of 1s reads
+    # as a rating, and the useful signal here is only the groups bigger than one.
+    if "indist_n" in players.columns:
+        players = players.with_columns(
+            pl.when(pl.col("indist_n") > 1)
+            .then(pl.col("indist_n"))
+            .otherwise(None)
+            .alias("same")
+        )
 
     board_cols = [
         c for c in (
             "board_rank", "name", "position", "team", "adp", "adj_adp",
-            "exp_pick", "par", "tier", "quality_pct", "value_gap", "env_swing",
+            "exp_pick", "par", "se", "same", "tier", "quality_pct", "value_gap",
+            "env_swing",
         ) if c in players.columns
     ]
     positions = st.multiselect(
@@ -2248,27 +2534,16 @@ def _tab_draft_day(p: dict[str, Any]) -> None:
 
     st.divider()
 
-    # --- context flags ------------------------------------------------------
-    st.markdown("#### Where the offence outweighs the board")
-    st.info(
-        "Team skill-position points move **45.3 per point of implied team "
-        "total**, measured over 128 team-seasons. These are the pairs where the "
-        "board's own edge is smaller than the gap between the two offences — "
-        "the picks where the ranking is not really the deciding input.\n\n"
-        "**Read this as the size of the argument, not a correction to "
-        "subtract.** The expected-points curve is rank-based and therefore "
-        "team-blind, so this adds information it genuinely does not have. But "
-        "some of the discount is already in the ADP level, and `env_swing` "
-        "cannot know how much, so it is an upper bound.",
-        icon="🏟️",
-    )
-    flags = bd.context_flags(players)
-    if flags.height:
-        table(flags, pretty=False)
-    else:
-        st.caption("No pairs where environment outweighs the board edge.")
-
-    st.divider()
+    # The "where the offence outweighs the board" pairwise panel was cut on
+    # 2026-08-10. `board.context_flags` still exists and is still tested; it just
+    # has no UI. Three reasons, in order: it only considered the top 6 by PAR per
+    # position, which in a superflex league is structurally blind to quarterback
+    # exactly where the roster format makes the decisions; it compared PAR edges
+    # that are mostly inside the standard error, so "environment outweighs it" was
+    # true of nearly any pair; and it emitted a cross-product of names when the
+    # reader has one pick to make. The same signal now rides on the board as the
+    # sortable `env_swing` column, which travels with the player instead of
+    # needing a second table to be cross-referenced.
 
     # --- one position at a time --------------------------------------------
     st.markdown("#### Quality against price, one position at a time")
@@ -2285,11 +2560,19 @@ def _tab_draft_day(p: dict[str, Any]) -> None:
     if scored.height:
         which = st.radio(
             "Position",
-            [p for p in ("WR", "RB", "TE")
+            [p for p in ("QB", "RB", "WR", "TE")
              if scored.filter(pl.col("position") == p).height],
             horizontal=True,
             key="draft_quality_position",
         )
+        if which == "QB":
+            st.caption(
+                "Quarterback quality rides on three metrics rather than eight or "
+                "ten, and the stability weighting makes it largely a rushing "
+                "read. Season-forward it correlates +0.367 with next-season PPG "
+                "(95% CI [+0.213, +0.493]) — about RB's level. Thinner than the "
+                "other positions, not absent."
+            )
         sub = scored.filter(pl.col("position") == which)
         pdf = sub.to_pandas()
         base = alt.Chart(pdf)
@@ -2338,14 +2621,6 @@ def _tab_draft_day(p: dict[str, Any]) -> None:
             "(`uv run python -m src.bootstrap --light`)."
         )
 
-    if data["unmatched"].height:
-        st.warning(
-            "These keepers did not match a row on the ADP board. Most are "
-            "benign — a keeper too deep to be in the top 200 never appears — "
-            "but a match failure would leave a kept player on your board."
-        )
-        table(data["unmatched"], pretty=False)
-
     st.divider()
 
     # --- tie-breaks: the promotion screen and the claims ledger -------------
@@ -2363,26 +2638,71 @@ def _placeholder(name: str, phase: str) -> None:
     st.info(f"Not built yet — {phase}.", icon="🚧")
 
 
+def _tab_research(p: dict[str, Any]) -> None:
+    """The measured nulls and the supporting work, collapsed.
+
+    Merged from the old Players and Strategy tabs on 2026-08-10. **Nothing here
+    was deleted and that is deliberate** — the audience for this app is Zach plus
+    people evaluating his work, and the honest negative results are the most
+    credible thing in the repo. `breakout` and `projection` are measured nulls
+    and the house rule is that a negative result is a result.
+
+    What changed is billing, not content. These answer "is any of this real",
+    which is a question you settle once and revisit rarely; they were sitting
+    third and fourth in the tab strip in front of the two tabs read on the clock.
+    Each section is behind an expander so the tab opens as a contents page rather
+    than a wall.
+    """
+    st.subheader("Research")
+    st.caption(
+        "The work behind the boards, including the parts that did not pan out. "
+        "Two of these are measured nulls kept on purpose: fitted models have "
+        "repeatedly failed to beat ADP here, and the useful thing to publish is "
+        "the interval, not another re-run until it flips."
+    )
+
+    with st.expander("Do these metrics repeat? — stability", expanded=True):
+        _stability_section(p["dark"])
+    with st.expander("Comparable players, and the scores behind them"):
+        _tab_players(p, sections=False)
+    with st.expander("Did last season's usage predict beating ADP? — a measured null"):
+        _breakout_section(p["dark"])
+    with st.expander("The same question, asked more precisely — a measured null"):
+        _projection_section(p["dark"])
+    with st.expander("Rookies"):
+        _rookie_section(p["dark"])
+    with st.expander("What is a draft strategy worth? — pinned to the old format"):
+        _tab_strategy(p)
+
+
 def main() -> None:
     st.title("ff-edge")
     p = _sidebar()
 
-    # Draft Day leads because it is the only tab with a deadline on it. The
-    # Board tab is `valuation.py` — quality against price — and is deliberately
-    # not the draft board, which lives under Draft Day. See DASHBOARD_SPEC.md.
-    draft_day, landscape, players, strategy, board, reference = st.tabs(
-        ["Draft Day", "Landscape", "Players", "Strategy", "Board", "Glossary"]
+    # Draft Day leads because it is the only tab with a deadline on it, and Board
+    # follows it because "who is actually good" is the question the draft board is
+    # worst at — `par` reproduces ADP's order within a position, so the second
+    # opinion needs to be one click away rather than four.
+    #
+    # The Board tab is `valuation.py` — quality against price — and is
+    # deliberately *not* the draft board, which lives under Draft Day. That trap
+    # is inherited from DASHBOARD_SPEC.md and is still live: an edit meant for
+    # `src/board.py` belongs in `_tab_draft_day`, not `_tab_board`.
+    #
+    # Players and Strategy merged into Research on 2026-08-10. See
+    # DASHBOARD_SPEC_v2.md; the short version is that neither is read on the
+    # clock and both were sitting in front of the two that are.
+    draft_day, board, landscape, research, reference = st.tabs(
+        ["Draft Day", "Board", "Landscape", "Research", "Glossary"]
     )
     with draft_day:
         _tab_draft_day(p)
-    with landscape:
-        _tab_landscape(p)
-    with players:
-        _tab_players(p)
-    with strategy:
-        _tab_strategy(p)
     with board:
         _tab_board(p)
+    with landscape:
+        _tab_landscape(p)
+    with research:
+        _tab_research(p)
     with reference:
         _glossary_section()
 

@@ -618,3 +618,86 @@ def weekly_trust(season: int = CURRENT_SEASON, force: bool = False) -> pl.DataFr
         )
 
     return out.sort(["player_id", "week"]) if out is not None else pl.DataFrame()
+
+
+# Games below which a promotion grade is a description of which games he played
+# rather than a measurement of how he played. `screen` already refuses to assign
+# a quality tier under 8; this is the softer line where a grade still computes
+# but should not be read at the same weight.
+THIN_SEASON_GAMES = 10
+
+
+def roster_context(
+    names: list[str],
+    df: pl.DataFrame | None = None,
+    board: pl.DataFrame | None = None,
+    season: int = CURRENT_SEASON,
+) -> pl.DataFrame:
+    """What the usage metrics cannot see: he moved, or he barely played.
+
+    The screen grades a player on last season's role. Two things routinely break
+    that read and neither is anywhere in the metrics:
+
+    - **He changed teams.** A target share earned in one offence is a claim about
+      a job he no longer holds. Jaylen Waddle's 2025 usage is Miami's; he is
+      drafted in Denver.
+    - **He barely played.** Malik Nabers played four games in 2025. Every rate
+      stat computed off them is real arithmetic and close to no evidence.
+
+    **Both team codes are normalized, on both sides.** This function compares a
+    team from the weekly stats against a team from the ADP board, which is
+    precisely the join that produced the Arizona bug: the 2026 roster feed spells
+    Arizona `AZ` while the 2025 stats say `ARI`, so an unnormalized comparison
+    reports every Cardinal who stayed as having left. A bare `!=` is a join for
+    this purpose and needs the same treatment as one.
+
+    Returns: player_name, position, games, prior_team, draft_team, changed_team,
+    thin_season — one row per resolved name, empty if none resolve.
+    """
+    df = df if df is not None else ft.build()
+    if not df.height or not names:
+        return pl.DataFrame()
+
+    pool = df.filter(pl.col("season") == season)
+    resolved, _ = _resolve(names, pool)
+    if not resolved.height:
+        return pl.DataFrame()
+
+    out = resolved.select(
+        "player_name",
+        "position",
+        "games",
+        ids.normalize_team("team").alias("prior_team"),
+    ).with_columns(
+        (pl.col("games") < THIN_SEASON_GAMES).alias("thin_season")
+    )
+
+    if board is None:
+        from src import expected as ex
+
+        board = ex.expected_points()
+    if not board.height or "team" not in board.columns:
+        return out.with_columns(
+            pl.lit(None, dtype=pl.Utf8).alias("draft_team"),
+            pl.lit(None, dtype=pl.Boolean).alias("changed_team"),
+        )
+
+    # Normalized here too — the whole point of the function.
+    market = (
+        board.select(
+            ids.normalize("name").alias("_norm"),
+            ids.normalize_team("team").alias("draft_team"),
+        )
+        .unique(subset=["_norm"], keep="first")
+    )
+    return (
+        out.with_columns(ids.normalize("player_name").alias("_norm"))
+        .join(market, on="_norm", how="left")
+        .drop("_norm")
+        .with_columns(
+            pl.when(pl.col("draft_team").is_null())
+            .then(None)
+            .otherwise(pl.col("draft_team") != pl.col("prior_team"))
+            .alias("changed_team")
+        )
+    )

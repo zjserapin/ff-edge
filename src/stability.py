@@ -194,3 +194,42 @@ def noisy_features(stability: pl.DataFrame) -> pl.DataFrame:
     return stability.filter(pl.col("r_yoy") < NOISE_FLOOR).select(
         "position", "axis", "metric", "n_pairs", "r_yoy"
     )
+
+
+def sticky_features(
+    stability: pl.DataFrame,
+    position: str,
+    top_n: int | None = 6,
+    include_outcomes: bool = False,
+) -> pl.DataFrame:
+    """The metrics that actually repeat at a position, best first.
+
+    Written for the panel that plots persistence against draft price: the point
+    of that panel is "here is a real signal the market may not be paying for",
+    which only holds if the metric on the axis is one that carries year to year.
+    Picking the metrics by hand would make it a chart about the author's
+    priors, so the list comes from the measurement.
+
+    **Outcome columns are excluded by default**, and this is the load-bearing
+    argument. `ppg` and `exp_ppg` are the *result*, not an input — draft price is
+    built almost entirely on last season's production, so plotting them against
+    price is close to plotting price against itself and would show a tight
+    diagonal that means nothing. The `axis` column already separates them, which
+    is why this filters on it rather than on a hardcoded name list that would go
+    stale the moment a column is added.
+
+    Returns: metric, axis, r_yoy, n_pairs — empty if the position has nothing
+    that clears the sticky threshold.
+    """
+    if not stability.height:
+        return pl.DataFrame()
+
+    out = stability.filter(
+        (pl.col("position") == position) & (pl.col("verdict") == "sticky")
+    )
+    if not include_outcomes:
+        out = out.filter(pl.col("axis") != "outcome")
+    out = out.select("metric", "axis", "r_yoy", "n_pairs").sort(
+        "r_yoy", descending=True, nulls_last=True
+    )
+    return out.head(top_n) if top_n else out

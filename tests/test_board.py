@@ -499,3 +499,150 @@ def test_draftable_marks_drafted_without_touching_kept() -> None:
     assert marked.filter(pl.col("drafted")).get_column("name").to_list() == ["b"]
     available = marked.filter(~pl.col("kept") & ~pl.col("drafted"))
     assert available.get_column("name").to_list() == ["c"]
+
+
+# --- indistinguishable groups -----------------------------------------------
+
+
+def _scored(rows: list[tuple[str, str, float, float]]) -> pl.DataFrame:
+    """name, position, par, se — the only columns `indistinguishable` reads."""
+    return pl.DataFrame(
+        {
+            "name": [r[0] for r in rows],
+            "position": [r[1] for r in rows],
+            "par": [r[2] for r in rows],
+            "se": [r[3] for r in rows],
+        }
+    )
+
+
+def test_indistinguishable_does_not_chain_down_a_shallow_slope() -> None:
+    """The failure mode that makes single-linkage useless here.
+
+    Each player is within a pooled standard error of the man directly above him,
+    but the top and bottom are 40 points apart. Comparing against the previous
+    player would put all nine in one group and report that the entire position is
+    interchangeable. Comparing against the group *leader* — what the function
+    actually does — has to cut somewhere.
+    """
+    rows = [(f"p{i}", "WR", 100.0 - 5.0 * i, 4.0) for i in range(9)]
+    got = bd.indistinguishable(_scored(rows))
+    groups = got.get_column("indist_group").unique().to_list()
+    assert len(groups) > 1, "a 40-point spread collapsed into one group"
+
+    # And every group must actually satisfy the claim it makes: each member
+    # within the pooled SE of its own leader. Brute-forced rather than asserted.
+    for group in groups:
+        members = got.filter(pl.col("indist_group") == group).sort(
+            "par", descending=True
+        )
+        lead_par = members.get_column("par")[0]
+        lead_se = members.get_column("se")[0]
+        for par, se in zip(members.get_column("par"), members.get_column("se")):
+            pooled = (lead_se**2 + se**2) ** 0.5
+            assert lead_par - par <= pooled + 1e-9
+
+
+def test_indistinguishable_separates_a_genuine_cliff() -> None:
+    """Two tight clusters far apart must not merge."""
+    rows = [
+        ("a", "RB", 100.0, 3.0), ("b", "RB", 99.0, 3.0),
+        ("c", "RB", 40.0, 3.0), ("d", "RB", 39.0, 3.0),
+    ]
+    got = bd.indistinguishable(_scored(rows))
+    by_name = {r["name"]: r["indist_group"] for r in got.iter_rows(named=True)}
+    assert by_name["a"] == by_name["b"]
+    assert by_name["c"] == by_name["d"]
+    assert by_name["a"] != by_name["c"]
+    counts = {r["name"]: r["indist_n"] for r in got.iter_rows(named=True)}
+    assert counts["a"] == 2 and counts["c"] == 2
+
+
+def test_indistinguishable_is_per_position() -> None:
+    """A receiver and a back at the same PAR are not the same asset."""
+    rows = [("w", "WR", 50.0, 5.0), ("r", "RB", 50.0, 5.0)]
+    got = bd.indistinguishable(_scored(rows))
+    assert got.get_column("indist_n").to_list() == [1, 1]
+
+
+def test_indistinguishable_leaves_unscored_players_ungrouped() -> None:
+    """A null PAR is not evidence of similarity to anything."""
+    rows = [("a", "TE", 30.0, 4.0), ("b", "TE", None, 4.0)]
+    got = bd.indistinguishable(_scored(rows))
+    blank = got.filter(pl.col("name") == "b")
+    assert blank.get_column("indist_group")[0] is None
+
+
+def test_indistinguishable_degrades_without_a_standard_error() -> None:
+    """No `se` column means the question cannot be asked — nulls, not a crash."""
+    frame = _scored([("a", "WR", 10.0, 1.0)]).drop("se")
+    got = bd.indistinguishable(frame)
+    assert got.get_column("indist_group").is_null().all()
+
+
+# --- tier map ---------------------------------------------------------------
+
+
+def _tiered() -> pl.DataFrame:
+    """A board with known tiers, for counting."""
+    return pl.DataFrame(
+        {
+            "name": ["a", "b", "c", "d", "e", "f"],
+            "position": ["RB", "RB", "RB", "WR", "WR", "WR"],
+            "par": [50.0, 48.0, 20.0, 30.0, 29.0, 28.0],
+            "tier": [1, 1, 2, 1, 1, 1],
+        }
+    )
+
+
+def test_tier_map_counts_what_is_left_not_what_existed() -> None:
+    got = bd.tier_map(_tiered())
+    rb1 = got.filter((pl.col("position") == "RB") & (pl.col("tier") == 1))
+    assert rb1.get_column("n_left")[0] == 2
+    assert rb1.get_column("best_available")[0] == "a"
+    assert rb1.get_column("par_top")[0] == 50.0
+    assert rb1.get_column("par_bottom")[0] == 48.0
+    assert got.filter(pl.col("position") == "WR").get_column("n_left")[0] == 3
+
+
+def test_tier_map_best_available_is_the_top_of_its_tier() -> None:
+    """`best_available` is read on the clock — it must be the max, not the first row."""
+    scrambled = _tiered().sort("par")  # worst first, to catch an order assumption
+    got = bd.tier_map(scrambled)
+    for row in got.iter_rows(named=True):
+        members = scrambled.filter(
+            (pl.col("position") == row["position"]) & (pl.col("tier") == row["tier"])
+        )
+        best = members.sort("par", descending=True).get_column("name")[0]
+        assert row["best_available"] == best
+        assert row["par_top"] == members.get_column("par").max()
+
+
+def test_tier_map_caps_tiers_per_position() -> None:
+    """Tier 9 at running back is not a draft-day input."""
+    many = pl.DataFrame(
+        {
+            "name": [f"p{i}" for i in range(12)],
+            "position": ["RB"] * 12,
+            "par": [100.0 - 5 * i for i in range(12)],
+            "tier": list(range(1, 13)),
+        }
+    )
+    assert bd.tier_map(many, limit=4).height == 4
+
+
+def test_tier_map_ignores_unscored_players() -> None:
+    frame = pl.DataFrame(
+        {
+            "name": ["a", "b"],
+            "position": ["TE", "TE"],
+            "par": [10.0, None],
+            "tier": [1, 1],
+        }
+    )
+    assert bd.tier_map(frame).get_column("n_left")[0] == 1
+
+
+def test_tier_map_survives_a_board_without_tiers() -> None:
+    frame = pl.DataFrame({"name": ["a"], "position": ["WR"], "par": [1.0]})
+    assert bd.tier_map(frame).is_empty()

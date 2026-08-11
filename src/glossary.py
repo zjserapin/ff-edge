@@ -422,7 +422,44 @@ TERMS: dict[str, Term] = {
                    "Ranked on total points over weeks 1-14, the fantasy regular season.",
                    "Value"),
     "par": _t("Points above replacement", "Season points minus the replacement player's.",
-              "The only unit that compares a quarterback to a tight end.", "Value"),
+              """The only unit that compares a quarterback to a tight end — and read
+              it that way, across positions, because that is the comparison it is
+              good at. Within a position it is a restatement of draft price:
+              expected points come from a curve mapping positional ADP rank to
+              historical scoring, so the board reproduces the market's order
+              exactly. A.J. Brown and George Pickens carry identical PAR. Check
+              `se` before believing any gap.""", "Value"),
+    "se": _t("Standard error", "How much the expected-points curve could be off.",
+             """The standard error of the mean at that positional ADP rank, from the
+             unsmoothed window — so it is the real uncertainty, not the residual
+             left after isotonic fitting. Typically 6-13 points, against a board
+             printed to a tenth of a point. Any PAR gap smaller than this is
+             noise wearing a decimal place.""", "Value"),
+    "env_swing": _t(
+        "Offence swing (pts/season)",
+        "Season points gained or lost purely from the offence he plays in.",
+        """Measured slope (45.3 fantasy points per point of implied team total)
+        times how far his team's implied total sits from the league mean of 22.0,
+        times his share of a typical offence (his expected points over 947).
+        **Not double counting the ADP** — the expected-points curve is blind to
+        team, assigning this year's TE1 whatever the average TE1 scored whether he
+        plays for the best offence in football or the worst; the market's view of
+        the team lands in the ADP level, not the positional rank, and the curve
+        only reads rank. **An upper bound, not a correction to subtract**: some of
+        the discount is already in the price and this does not know how much. Read
+        it as the size of the argument, not as points to add.""",
+        "Value"),
+    "team_implied": _t("Implied team total", "Vegas's expected points for his offence.",
+                       """Averaged over the games sportsbooks have posted so far.
+                       League mean is about 22.0.""", "Value"),
+    "same": _t("Same asset", "How many players here the curve cannot tell apart.",
+               """Players whose PAR gaps all sit inside the pooled standard error of
+               the group leader, counted per position. A 5 means this player and
+               four others are one asset and you should take whichever falls to
+               you. A 1 means the board can genuinely separate him from his
+               neighbours. Grouped against the leader rather than the previous
+               player, which is what stops a long shallow slope from chaining an
+               entire position into one group.""", "Value"),
     "par_ppg": _t("PAR per game", "Points per game above replacement.",
                   """Value over replacement on a per-game basis, so seasons of different
                   length compare fairly.""", "Value"),

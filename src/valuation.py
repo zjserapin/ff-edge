@@ -42,11 +42,55 @@ from src import profiles as pf
 from src.config import CURRENT_SEASON, SEASON
 from src.profiles import LeagueProfile
 
-# The positions this module is for. Quarterbacks are excluded by default: one
-# starts, the position is shallow, and the quality metrics that make this work
-# (yards per route run, separation, yards after contact) have no quarterback
-# analogue worth the name.
-SKILL_POSITIONS: tuple[str, ...] = ("WR", "RB", "TE")
+# The positions this module scores. Named for what it is rather than
+# `SKILL_POSITIONS`, which stopped being true when quarterbacks were added.
+#
+# **Quarterbacks were excluded until 2026-08-10, and the reason was half right.**
+# The old note said the metrics that carry this — yards per route run,
+# separation, yards after contact — have no quarterback analogue. True of those
+# metrics, and false of the position: QB has its own quality set (`ypa`,
+# `pts_over_exp_per_att`, `ypc`) which `archetypes.scores` has always computed
+# and this module simply threw away. In a superflex league that left the board
+# blank at exactly the position where the roster format makes the edge.
+#
+# It was gated on a measurement before being switched on. Season-forward, the
+# stability-weighted QB quality score at season t against PPG at t+1:
+#
+#     QB   n=163   rho +0.367   95% CI [+0.213, +0.493]   (3 features)
+#     RB   n=377   rho +0.330   95% CI [+0.236, +0.419]   (8 features)
+#     WR   n=610   rho +0.502   95% CI [+0.439, +0.564]   (10 features)
+#
+# So QB carries about as much signal as RB, off three columns instead of eight.
+# Two caveats that belong next to any QB number this produces, because neither
+# is visible in the pooled figure:
+#
+#   - **It is a thinner measurement.** Three metrics, and the stability weights
+#     make it mostly a rushing score (`ypc` repeats at 0.601, `ypa` at 0.360).
+#     Defensible for fantasy quarterbacks, but it is a rushing read wearing a
+#     general-quality label.
+#   - **The recent window does not clear zero on its own.** 2018-2022 gives
+#     +0.420 [+0.267, +0.567]; 2023-2025 gives +0.118 [-0.208, +0.416] on 43
+#     pairs. Those intervals overlap, so this is not established decay — a
+#     single season's interval here is ~0.9 wide — but it is not nothing either.
+VALUED_POSITIONS: tuple[str, ...] = ("WR", "RB", "TE", "QB")
+
+# The volume floor under which a per-opportunity metric is a rumour rather than a
+# measurement, keyed by position because the denominators are different things.
+#
+# **A quarterback's `routes` value is dropbacks, not routes run.** Josh Allen
+# shows 665. So the old single `routes >= 100` gate did not drop quarterbacks —
+# it waved them through on a column that means something else at their position,
+# which is the more dangerous of the two failure modes. Taysom Hill is the case
+# that makes it concrete: 6 pass attempts, 52 carries, a `ypa` computed off the
+# 6, and a quality percentile of 25 built on it.
+MIN_VOLUME: dict[str, tuple[str, float]] = {
+    "WR": ("routes", 100.0),
+    "RB": ("routes", 100.0),
+    "TE": ("routes", 100.0),
+    # Roughly a half-season of starter volume. Below it `ypa` and
+    # `pts_over_exp_per_att` are both small-sample artifacts.
+    "QB": ("pass_attempts", 150.0),
+}
 
 # How far a player's quality percentile must sit above or below his price
 # percentile before it is worth calling a disagreement. Twenty points is roughly
@@ -78,7 +122,7 @@ def _pct(col: str, bigger_is_better: bool = True) -> pl.Expr:
 def board(
     feature_season: int = CURRENT_SEASON,
     adp_season: int = SEASON,
-    positions: tuple[str, ...] = SKILL_POSITIONS,
+    positions: tuple[str, ...] = VALUED_POSITIONS,
     min_games: int = 8,
     min_routes: int = 100,
     scoring: str | None = None,
@@ -92,7 +136,16 @@ def board(
     `min_routes` matters more than it looks. Yards per route run on 40 routes is
     not a measurement, it is a rumour — a single long catch moves it half a yard.
     The default drops players whose efficiency could not be estimated, which is
-    the right trade even though it hides a few genuine deep-bench fliers.
+    the right trade even though it hides a few genuine deep-bench fliers. It
+    applies to the routes-based positions only; quarterbacks are gated on pass
+    attempts instead. See `MIN_VOLUME` for why that distinction is not cosmetic.
+
+    **Quarterbacks carry a `quality_pct` but not a `path_score`.** The path terms
+    are vacated target share and the teammate share standing in front of him,
+    neither of which describes a quarterback's route to volume — a starting QB
+    already has all the volume there is. `path_score` therefore comes back null
+    for QB, and null means *not applicable* rather than *no path*. Read
+    `quality_pct` and `value_gap` for quarterbacks and ignore the path column.
 
     **The price side has to come from the profile's market**, and defaulting it
     to half-PPR was wrong here for the same reason it was wrong in
@@ -135,12 +188,23 @@ def board(
     keep = [
         c
         for c in (
-            "player_id", "routes", "yprr", "tprr", "target_share", "route_share",
+            "player_id", "routes", "pass_attempts", "yprr", "tprr",
+            "target_share", "route_share",
             "snap_pct", "adot", "avg_separation", "ypc",
             "yards_after_contact_per_att", "ryoe_per_att",
             "exp_td_share", "ez_target_share", "gz_carry_share",
             "neutral_target_share", "teammate_top_share", "is_team_alpha",
             "vacated_target_share_next", "vacated_carry_share_next", "age",
+            # Carried so the board can be plotted against the metrics that
+            # actually persist — `stability.sticky_features` picks the list and
+            # every position's top six has to be reachable from here. Without
+            # these, quarterbacks lost `rush_share` (the single stickiest metric
+            # measured anywhere, 0.82) and running backs lost four of their six.
+            # The panel degraded silently to whichever columns happened to be
+            # present, which is a chart quietly answering a smaller question.
+            "air_yards_share", "tgt_per_game", "carry_per_game",
+            "rush_share", "neutral_rush_share", "rz_carry_share",
+            "rz_target_share",
         )
         if c in season_features.columns
     ]
@@ -166,8 +230,26 @@ def board(
     if not joined.height:
         return pl.DataFrame()
 
-    if "routes" in joined.columns:
-        joined = joined.filter(pl.col("routes").fill_null(0) >= min_routes)
+    # Volume floor, one denominator per position — see `MIN_VOLUME`. Written as
+    # an allow-list rather than a series of exclusions so that a position with no
+    # floor defined drops out instead of being waved through ungated, which is
+    # the direction that fails safe.
+    # `min_routes` stays the caller-facing knob it always was, so it overrides the
+    # routes-based floors; QB's attempt floor has no such knob and comes from the
+    # table.
+    floors = {
+        position: (col, float(min_routes) if col == "routes" else floor)
+        for position, (col, floor) in MIN_VOLUME.items()
+    }
+    keep_gate = pl.lit(False)
+    for position, (volume_col, floor) in floors.items():
+        if position not in positions or volume_col not in joined.columns:
+            continue
+        keep_gate = keep_gate | (
+            (pl.col("position") == position)
+            & (pl.col(volume_col).fill_null(0) >= floor)
+        )
+    joined = joined.filter(keep_gate)
     if not joined.height:
         return pl.DataFrame()
 
@@ -202,8 +284,16 @@ def board(
         # A *smaller* teammate share is the good end — nobody blocking him.
         path_terms.append(_pct("teammate_top_share", bigger_is_better=False))
 
+    # Nulled at QB rather than left to compute. Every term above is either about
+    # earning targets or about the teammate taking them, so for a starting
+    # quarterback the composite would silently reduce to "room to grow" alone and
+    # read as a real path score. A blank column says *not applicable*; a plausible
+    # number says something false.
     scored = scored.with_columns(
-        (sum(path_terms) / len(path_terms)).round(1).alias("path_score")
+        pl.when(pl.col("position") == "QB")
+        .then(pl.lit(None, dtype=pl.Float64))
+        .otherwise((sum(path_terms) / len(path_terms)).round(1))
+        .alias("path_score")
     )
 
     return scored.with_columns(
@@ -225,12 +315,22 @@ def undervalued(
     bad depth charts. A receiver in the 90th percentile of quality who is already
     the alpha on his team has no room left — his price is high because he earned
     it, and the quality gap is telling you he is good, not that he is cheap.
+
+    **Quarterbacks bypass the path filter rather than failing it.** Their
+    `path_score` is null by construction (see `board`), and a null fails a `>=`
+    comparison silently, so without this every underpriced quarterback would
+    vanish from the list for a reason that has nothing to do with his price. The
+    path question is not asked of quarterbacks, so it cannot disqualify one.
     """
     if not valued.height:
         return pl.DataFrame()
     return (
         valued.filter(
-            (pl.col("verdict") == "undervalued") & (pl.col("path_score") >= min_path)
+            (pl.col("verdict") == "undervalued")
+            & (
+                (pl.col("path_score") >= min_path)
+                | (pl.col("position") == "QB")
+            )
         )
         .sort("value_gap", descending=True)
         .head(limit)
