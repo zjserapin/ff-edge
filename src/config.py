@@ -231,6 +231,30 @@ SUPERFLEX_ADP_SCORING = "2qb"
 # before it fills in. Check rather than assume when a season looks empty.
 ADP_MISSING_YEARS: list[int] = []
 
+# --- The Fantasy Footballers -------------------------------------------------
+
+# How much of the blended board is theirs, 0.0 to 1.0. 0.5 gives their panel an
+# equal say with this project's own expected-points curve.
+#
+# **This is a judgment call, not a measurement, and it is the only one in the
+# file.** Nothing here has established that their projections beat the ADP curve
+# out of sample — that would need their historical boards, which they do not
+# publish, so it cannot be backtested the way everything else in this repo is.
+# What the blend buys is a genuinely independent read: `exp_points` is a function
+# of positional ADP rank and therefore reproduces the market's ordering within a
+# position exactly, while their projection is built from projected touches. Two
+# sources that disagree are more useful than one that cannot.
+#
+# `board.build` returns `board_rank` (unblended) alongside `blend_rank` on
+# purpose, and `board.compare_footballers` reports what the weight actually
+# moved. If the blend never changes a decision, the complexity is not earning
+# its keep and the weight should go to 0.0.
+FOOTBALLERS_WEIGHT = 0.5
+
+# Below this the consensus is one or two analysts rather than the panel, and two
+# players' numbers stop being comparable. 302 of 313 players carry all three.
+FOOTBALLERS_MIN_ANALYSTS = 2
+
 # --- Sportsbook props (FanDuel) ---------------------------------------------
 
 # FanDuel's sportsbook API is genuinely public — no account, no cookie. The `_ak`
