@@ -407,3 +407,170 @@ def attach_ids(df: pl.DataFrame) -> pl.DataFrame:
     is that the rate is something you see rather than assume.
     """
     return df.join(resolve_players(df), on="player", how="left")
+
+
+# The one market each position is priced on almost universally, which is what
+# makes a within-position comparison legitimate. Everything else FanDuel posts
+# is partial: rushing lines exist for 5 of 24 quarterbacks and receiving lines
+# for 2 of 25 running backs, so a composite built across markets ranks players
+# partly by which markets they happen to have.
+PRIMARY_MARKET: dict[str, str] = {
+    "QB": "passing_yards",
+    "RB": "rushing_yards",
+    "WR": "receiving_yards",
+    "TE": "receiving_yards",
+}
+
+
+def line_percentiles(
+    df: pl.DataFrame | None = None, resolved: pl.DataFrame | None = None
+) -> pl.DataFrame:
+    """Each player's primary prop line as a percentile within his position.
+
+    **Why not `implied_points`.** That function sums every market a player has
+    into a fantasy total, and the markets are not evenly posted: 23 of 25 running
+    backs have no receiving line at all, so in a half-PPR league their total is
+    missing exactly the thing that separates a three-down back from a early-down
+    one. Ranking on it would systematically rate pass-catching backs last for a
+    reason that is about FanDuel's market list rather than about football.
+
+    The primary market per position is posted for very nearly everyone —
+    23/24 QB, 24/25 RB, 34/34 WR, 9/9 TE — so a percentile computed inside a
+    position compares like with like.
+
+    **This is a yardage opinion, not a fantasy projection**, and the distinction
+    matters most at receiver: there is no season-long receptions market and no
+    receiving-touchdown market anywhere in this feed, so a receiver's line says
+    what the book thinks he will gain and nothing about how he will score. Read
+    it as a second market's view of *volume*, priced with money.
+
+    Returns: player, gsis_id, position, market, line, line_pct — empty if no
+    lines are posted, which is the normal state outside draft season.
+    """
+    df = df if df is not None else season_long()
+    if not df.height:
+        return pl.DataFrame()
+
+    resolved = resolved if resolved is not None else resolve_players(df)
+    if not resolved.height:
+        return pl.DataFrame()
+
+    joined = df.join(
+        resolved.select("player", "gsis_id", "position"), on="player", how="inner"
+    )
+    primary = pl.DataFrame(
+        {
+            "position": list(PRIMARY_MARKET),
+            "market": [PRIMARY_MARKET[p] for p in PRIMARY_MARKET],
+        }
+    )
+    mine = joined.join(primary, on=["position", "market"], how="inner")
+    if not mine.height:
+        return pl.DataFrame()
+
+    # One row per player: a market can carry both an Over and an Under runner,
+    # and both name the same line.
+    mine = mine.unique(subset=["player", "market"], keep="first")
+    return mine.select(
+        "player", "gsis_id", "position", "market", "line",
+        (
+            pl.col("line").rank("average").over("position")
+            / pl.len().over("position")
+            * 100
+        ).round(1).alias("line_pct"),
+    ).sort(["position", "line"], descending=[False, True])
+
+
+def against_price(
+    priced: pl.DataFrame, lines: pl.DataFrame | None = None
+) -> pl.DataFrame:
+    """Where the sportsbook and the draft market disagree about a player.
+
+    `priced` needs `gsis_id`, `position` and `market_pct` — the draft-price
+    percentile within position that `valuation.board` already computes. Both
+    sides are percentiles inside the same position *and* over the same set of
+    players, which is what makes subtracting them mean something; see the note on
+    populations below.
+
+    `vegas_gap` is positive when the book rates him above where he is drafted.
+    Like `value_gap` it is a **disagreement score, not a projection**: a reason to
+    look closer rather than a reason to be right. What makes it worth having next
+    to `value_gap` is that the two disagree for unrelated reasons — `value_gap`
+    comes from per-opportunity quality this project measured, `vegas_gap` from a
+    number a bookmaker is willing to take money on, and neither is derived from
+    ADP.
+
+    **Expect mostly nulls.** FanDuel prices 92 players season-long, top of the
+    board only, so a join to a 200-player draft board is thin by construction and
+    not by breakage. A null is "no line posted", never "no edge".
+
+    **`vegas_gap` is least trustworthy at quarterback, which is unfortunately
+    where it looks most exciting.** A quarterback's primary market is passing
+    yards, and passing yards is the weakest proxy for fantasy value of any
+    position's primary market: fantasy quarterback scoring concentrates in
+    rushing, `rush_share` is the stickiest metric measured anywhere in this
+    project at 0.82, and FanDuel posts a rushing line for 5 of 24 quarterbacks.
+    So the top of a `vegas_gap` ranking fills with high-volume pocket passers —
+    Jared Goff leads the league in passing yards and is a mediocre fantasy
+    quarterback for exactly the reason this column cannot see.
+
+    Read it as strongest at WR and TE, where receiving yards is the dominant
+    input to scoring; weaker at RB, where the receiving game is missing; and at
+    QB as a statement about passing volume rather than about fantasy points.
+
+    Returns `priced` with market, line, line_pct and vegas_gap added.
+    """
+    if not priced.height or "gsis_id" not in priced.columns:
+        return priced
+
+    lines = lines if lines is not None else line_percentiles()
+    cols = ["market", "line", "line_pct", "vegas_gap"]
+    if not lines.height:
+        return priced.with_columns(
+            [pl.lit(None).alias("market"), pl.lit(None, dtype=pl.Float64).alias("line"),
+             pl.lit(None, dtype=pl.Float64).alias("line_pct"),
+             pl.lit(None, dtype=pl.Float64).alias("vegas_gap")]
+        )
+
+    joined = priced.join(
+        lines.select("gsis_id", "market", "line").filter(
+            pl.col("gsis_id").is_not_null()
+        ),
+        on="gsis_id",
+        how="left",
+    )
+
+    # **Both percentiles are recomputed over the players who have a line**, and
+    # this is the whole correctness of the column rather than a refinement.
+    #
+    # `market_pct` arrives ranked against every player at the position — 54
+    # receivers — while a line exists for 34, and those 34 are the *top* of the
+    # board because that is who a sportsbook posts season-long markets for. Rank
+    # the line inside the priced subset and the price against the full board and
+    # the two sit on different populations: the priced group's `market_pct`
+    # clusters high by selection while its `line_pct` spans 0-100 by
+    # construction, so every gap skews negative. The first version of this made
+    # exactly that mistake and reported zero undervalued receivers, which reads
+    # as a finding and is an artifact of comparing a subset against a superset.
+    # Done as a filter-and-rejoin rather than a windowed expression because the
+    # population being ranked over is the point: these percentiles are defined on
+    # the priced rows only, and writing that as a filter says so unambiguously.
+    def _pct(col: str) -> pl.Expr:
+        return (
+            pl.col(col).rank("average").over("position")
+            / pl.len().over("position")
+            * 100
+        ).round(1)
+
+    ranked = (
+        joined.filter(pl.col("line").is_not_null())
+        .select(
+            "gsis_id",
+            _pct("line").alias("line_pct"),
+            _pct("market_pct").alias("price_pct_priced"),
+        )
+        .with_columns(
+            (pl.col("line_pct") - pl.col("price_pct_priced")).round(1).alias("vegas_gap")
+        )
+    )
+    return joined.join(ranked, on="gsis_id", how="left")

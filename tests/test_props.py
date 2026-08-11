@@ -237,3 +237,149 @@ def test_known_name_collisions_resolve_to_the_right_player(live: pl.DataFrame) -
             continue  # the book drops players; absence is not a failure
         assert rows["position"].unique().to_list() == [position], player
         assert rows["gsis_id"].unique().to_list() == [gsis], player
+
+
+# --- primary-market percentiles ---------------------------------------------
+
+
+def _lines() -> pl.DataFrame:
+    """Season-long rows shaped like the parsed feed."""
+    return pl.DataFrame(
+        {
+            "player": ["QB A", "QB B", "RB A", "RB A", "RB B", "WR A", "WR B"],
+            "market": [
+                "passing_yards", "passing_yards",
+                "rushing_yards", "receiving_yards", "rushing_yards",
+                "receiving_yards", "receiving_yards",
+            ],
+            "line": [4200.5, 3500.5, 1200.5, 400.5, 900.5, 1300.5, 800.5],
+        }
+    )
+
+
+def _resolved() -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "player": ["QB A", "QB B", "RB A", "RB B", "WR A", "WR B"],
+            "gsis_id": ["q1", "q2", "r1", "r2", "w1", "w2"],
+            "position": ["QB", "QB", "RB", "RB", "WR", "WR"],
+        }
+    )
+
+
+def test_line_percentiles_uses_only_the_primary_market() -> None:
+    """The whole reason this exists instead of `implied_points`.
+
+    RB A has a receiving line and RB B does not — true of 23 of 25 real backs.
+    Summing markets would rank A above B partly because FanDuel posted him an
+    extra market. Only the primary market per position may contribute.
+    """
+    got = props.line_percentiles(_lines(), _resolved())
+    rb = got.filter(pl.col("position") == "RB")
+    assert set(rb.get_column("market").to_list()) == {"rushing_yards"}
+    assert rb.height == 2
+    # And the value used is the rushing line, not a sum with the receiving one.
+    a = rb.filter(pl.col("player") == "RB A")
+    assert a.get_column("line")[0] == 1200.5
+
+
+def test_line_percentiles_rank_within_position_not_across() -> None:
+    """A 1300-yard receiver and a 4200-yard passer are both their position's top."""
+    got = props.line_percentiles(_lines(), _resolved())
+    tops = got.filter(pl.col("line_pct") == 100.0).get_column("player").to_list()
+    assert set(tops) == {"QB A", "RB A", "WR A"}
+
+
+def test_line_percentiles_puts_the_bigger_line_higher() -> None:
+    """Direction check — `rank(descending=...)` has bitten this repo before."""
+    got = props.line_percentiles(_lines(), _resolved())
+    wr = got.filter(pl.col("position") == "WR").sort("line", descending=True)
+    pcts = wr.get_column("line_pct").to_list()
+    assert pcts == sorted(pcts, reverse=True)
+
+
+def test_against_price_is_a_difference_of_two_percentiles() -> None:
+    priced = pl.DataFrame(
+        {"gsis_id": ["w1", "w2"], "name": ["WR A", "WR B"],
+         "position": ["WR", "WR"], "market_pct": [40.0, 90.0]}
+    )
+    got = props.against_price(priced, props.line_percentiles(_lines(), _resolved()))
+    by = {r["name"]: r["vegas_gap"] for r in got.iter_rows(named=True)}
+    # Both percentiles are re-ranked over the two priced receivers, so the
+    # incoming `market_pct` of 40 and 90 become 50 and 100 — their order is what
+    # survives, not their level. WR A has the better line and the cheaper price,
+    # so the book likes him more by a full half of the field.
+    assert by["WR A"] == 50.0
+    assert by["WR B"] == -50.0
+    # Symmetric by construction, which is the property the population fix buys.
+    assert by["WR A"] == -by["WR B"]
+
+
+def test_against_price_leaves_unpriced_players_null_not_zero() -> None:
+    """FanDuel prices 92 players. A null must not read as 'no edge'."""
+    priced = pl.DataFrame(
+        {"gsis_id": ["w1", "nobody"], "name": ["WR A", "Deep Guy"],
+         "position": ["WR", "WR"], "market_pct": [40.0, 20.0]}
+    )
+    got = props.against_price(priced, props.line_percentiles(_lines(), _resolved()))
+    deep = got.filter(pl.col("name") == "Deep Guy")
+    assert deep.get_column("vegas_gap")[0] is None
+    assert deep.get_column("line")[0] is None
+
+
+def test_against_price_preserves_row_count() -> None:
+    """A name join fanning rows out is this module's documented failure mode."""
+    priced = pl.DataFrame(
+        {"gsis_id": ["q1", "r1", "w1"], "name": ["a", "b", "c"],
+         "position": ["QB", "RB", "WR"], "market_pct": [10.0, 20.0, 30.0]}
+    )
+    got = props.against_price(priced, props.line_percentiles(_lines(), _resolved()))
+    assert got.height == priced.height
+
+
+def test_against_price_ranks_both_sides_over_the_same_population() -> None:
+    """The bug that reported every receiver as overvalued.
+
+    A sportsbook posts season-long markets for the top of the board only — 34 of
+    54 receivers. Rank the line inside that priced subset while the price
+    percentile arrives ranked against all 54, and the two sit on different
+    populations: the priced group's price percentile clusters high by selection
+    while its line percentile spans 0-100 by construction. Every gap then skews
+    negative, which reads as a finding about the market and is an artifact of
+    comparing a subset against a superset.
+
+    The invariant that catches it: within a position, `vegas_gap` is a difference
+    of two percentiles over the same rows, so it must average to zero.
+    """
+    # Four priced players whose prices span only the expensive end of a board
+    # that also holds cheap unpriced ones — the real selection shape.
+    priced = pl.DataFrame(
+        {
+            "gsis_id": ["w1", "w2", "w3", "w4", "cheap1", "cheap2"],
+            "name": ["A", "B", "C", "D", "E", "F"],
+            "position": ["WR"] * 6,
+            "market_pct": [100.0, 90.0, 80.0, 70.0, 20.0, 10.0],
+        }
+    )
+    lines = pl.DataFrame(
+        {
+            "player": ["A", "B", "C", "D"],
+            "gsis_id": ["w1", "w2", "w3", "w4"],
+            "position": ["WR"] * 4,
+            "market": ["receiving_yards"] * 4,
+            "line": [1300.0, 900.0, 1100.0, 700.0],
+        }
+    )
+    got = pp_against(priced, lines)
+    scored = got.filter(pl.col("vegas_gap").is_not_null())
+    assert scored.height == 4
+    assert abs(scored.get_column("vegas_gap").mean()) < 1e-9, (
+        "vegas_gap is biased — the two percentiles are over different populations"
+    )
+    # The unpriced players stay null rather than being ranked against nothing.
+    assert got.filter(pl.col("name") == "E").get_column("vegas_gap")[0] is None
+
+
+def pp_against(priced: pl.DataFrame, lines: pl.DataFrame) -> pl.DataFrame:
+    """`against_price` with a prebuilt line frame — keeps the test off the network."""
+    return props.against_price(priced, lines)

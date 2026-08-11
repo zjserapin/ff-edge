@@ -30,6 +30,7 @@ from src import claims as cm
 from src import landscape as ls
 from src import projection as pj
 from src import promotion as pm
+from src import props as pp
 from src import rookies as rk
 from src import scoring as sc
 from src import simulate as sim
@@ -1608,7 +1609,24 @@ def _tab_strategy(p: dict[str, Any]) -> None:
 
 @st.cache_data(show_spinner="Valuing the board…")
 def _valuation() -> pl.DataFrame:
-    return val.board(df=_features())
+    """The quality-vs-price board, with the sportsbook's view joined on.
+
+    `props.against_price` is composed here rather than inside `valuation.board`
+    for the same reason `attach_environment` is: the module's tests should not
+    require FanDuel to be reachable, and a board that cannot price a player is
+    still a board.
+    """
+    board = val.board(df=_features())
+    if not board.height:
+        return board
+    try:
+        return pp.against_price(board)
+    except Exception:
+        # A book that is down, rate-limiting, or has changed its market names
+        # must cost the tab a column, not the whole page. Every consumer already
+        # treats `vegas_gap` as optional because it is null for two thirds of the
+        # board on a good day.
+        return board
 
 
 def _sticky_against_price(
@@ -1720,6 +1738,125 @@ def _sticky_against_price(
             "valuation board: " + ", ".join(f"`{m}`" for m in absent) + "."
         )
     data_expander(sticky, "Show the persistence figures")
+
+
+_VEGAS_TRUST: dict[str, str] = {
+    "WR": "**Strongest here.** Receiving yards is the dominant input to a "
+          "receiver's scoring, so the line and fantasy value point the same way. "
+          "Still missing touchdowns and receptions — no season-long market exists "
+          "for either — so this is a view on volume, not on points.",
+    "TE": "**Strong here**, same as receiver: receiving yards drives the scoring. "
+          "Only nine tight ends are priced, so the percentile is cut against a "
+          "thin field.",
+    "RB": "**Weaker here.** The line is rushing yards, and 23 of 25 backs have no "
+          "receiving market at all — so in a half-PPR league this is blind to "
+          "exactly what separates a three-down back from an early-down one.",
+    "QB": "**Weakest here, and it looks most exciting here.** The line is passing "
+          "yards, but fantasy quarterback value concentrates in *rushing* — "
+          "`rush_share` is the stickiest metric measured anywhere in this project "
+          "at 0.82 — and FanDuel posts a rushing line for 5 of 24 quarterbacks. "
+          "High-volume pocket passers therefore rise to the top of this list for "
+          "the exact reason they are mediocre fantasy quarterbacks. Read it as a "
+          "statement about passing volume, not about points.",
+}
+
+
+def _vegas_against_price(view: pl.DataFrame, position: str, dark: bool) -> None:
+    """The sportsbook's line against draft price — a third opinion, money-backed.
+
+    Worth having next to `value_gap` because the two disagree for unrelated
+    reasons: `value_gap` comes from per-opportunity quality this project
+    measured, `vegas_gap` from a number a bookmaker will take money on. Neither
+    is derived from ADP, and where they agree is more interesting than either
+    alone.
+    """
+    if "vegas_gap" not in view.columns:
+        return
+    priced = view.filter(pl.col("line_pct").is_not_null())
+    if not priced.height:
+        st.caption(
+            "No sportsbook lines matched at this position. FanDuel prices 92 "
+            "players season-long, top of the board only."
+        )
+        return
+
+    st.markdown("#### What the sportsbook thinks, against what he costs")
+    st.caption(
+        f"{priced.height} of {view.height} {position}s have a season-long line. "
+        "`vegas_gap` is the line's percentile within position minus the draft "
+        "price's — positive means the book rates him above where he is drafted. "
+        "A **disagreement score, not a projection**, and the reason to read it "
+        "next to `value_gap` is that the two are built from unrelated evidence."
+    )
+    st.info(_VEGAS_TRUST.get(position, ""), icon="⚖️")
+
+    pdf = priced.to_pandas()
+    points = (
+        alt.Chart(pdf)
+        .mark_circle(size=140, opacity=0.85)
+        .encode(
+            x=alt.X("price_pct_priced:Q", title="Draft price percentile (among priced players)"),
+            y=alt.Y("line_pct:Q", title="Sportsbook line percentile"),
+            color=alt.Color(
+                "vegas_gap:Q",
+                scale=alt.Scale(scheme="redyellowblue"),
+                title="Vegas gap",
+            ),
+            tooltip=[
+                alt.Tooltip("name:N", title="Player"),
+                alt.Tooltip("team:N", title="Team"),
+                alt.Tooltip("adp:Q", title="ADP", format=".1f"),
+                alt.Tooltip("line:Q", title="Line", format=".1f"),
+                alt.Tooltip("line_pct:Q", title="Line %ile", format=".0f"),
+                alt.Tooltip("price_pct_priced:Q", title="Price %ile (priced)", format=".0f"),
+                alt.Tooltip("vegas_gap:Q", title="Vegas gap", format="+.0f"),
+                alt.Tooltip("value_gap:Q", title="Value gap", format="+.0f"),
+            ],
+        )
+        .properties(height=420)
+    )
+    parity = (
+        alt.Chart(pl.DataFrame({"a": [0, 100]}).to_pandas())
+        .mark_line(strokeDash=[5, 5], strokeWidth=1, color=theme.ink(dark)["muted"])
+        .encode(x=alt.X("a:Q"), y=alt.Y("a:Q"))
+    )
+    labels = (
+        alt.Chart(pdf[pdf["vegas_gap"].abs() >= 15])
+        .mark_text(align="left", dx=9, fontSize=10, color=theme.ink(dark)["primary"])
+        .encode(x=alt.X("price_pct_priced:Q"), y=alt.Y("line_pct:Q"), text="name:N")
+    )
+    st.altair_chart(theme.base_chart(parity + points + labels, dark), width="stretch")
+
+    # Where the two independent opinions agree is the actual output of this tab.
+    both = priced.filter(
+        pl.col("value_gap").is_not_null()
+        & (
+            ((pl.col("value_gap") >= 15) & (pl.col("vegas_gap") >= 10))
+            | ((pl.col("value_gap") <= -15) & (pl.col("vegas_gap") <= -10))
+        )
+    )
+    if both.height:
+        st.markdown("**Both opinions agree**")
+        st.caption(
+            "Quality and the sportsbook lean the same way against draft price. "
+            "Two unrelated kinds of evidence pointing together is a stronger "
+            "reason to look than either on its own — it is still not a "
+            "projection."
+        )
+        table(
+            both.select(
+                "name", "team", "adp", "price_pct_priced", "quality_pct",
+                "value_gap", "line", "line_pct", "vegas_gap",
+            ).sort("vegas_gap", descending=True, nulls_last=True),
+            pretty=False,
+        )
+    data_expander(
+        priced.select(
+            "name", "team", "adp", "market", "line", "line_pct",
+            "price_pct_priced", "vegas_gap", "value_gap",
+        ).sort("vegas_gap", descending=True, nulls_last=True),
+        "Show every priced player",
+    )
 
 
 def _tab_board(p: dict[str, Any]) -> None:
@@ -1851,6 +1988,7 @@ def _tab_board(p: dict[str, Any]) -> None:
     )
 
     _sticky_against_price(view, which, dark)
+    _vegas_against_price(view, which, dark)
 
     # --- the lists ---
     show = ["name", "position", "team", "adp", "quality_pct", "opportunity_pct",
