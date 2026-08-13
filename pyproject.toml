@@ -6,8 +6,19 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "nflreadpy>=0.1.5",
-    "polars>=1.0",
-    "pyarrow>=15.0",
+    # 1.43.0 and 1.43.1 are yanked upstream. Neither caused the pyarrow crash
+    # below — that was measured and ruled out — but running a release its own
+    # authors pulled is not a thing to do ten days before a draft.
+    "polars>=1.43.2",
+    # !=25.0.0 is load bearing. That release segfaults the interpreter inside
+    # `pandas_compat` when a frame is converted between pandas and Arrow, which
+    # is what `st.dataframe` does to every table in app.py. No traceback, no
+    # error page — the server dies. Nine consecutive draft-day dry runs died on
+    # the ninth pick; the same walk on 25.0.1 survived eight runs plus a reverse
+    # pass. Fixed upstream in 25.0.1, so this excludes one release rather than
+    # holding the floor down. `tests/test_display.py` fails loudly if it comes
+    # back through a stale lock.
+    "pyarrow>=15.0,!=25.0.0",
     "requests>=2.31",
     "pandas>=2.0",
     "numpy>=1.26",

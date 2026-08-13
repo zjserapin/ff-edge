@@ -28,7 +28,8 @@ one, columns that look like duplicates but aren't. None of it raises.
 the user's terminal is invisible here. Prefix every command that needs it:
 
 ```bash
-uv run pytest                                          # 190 pass, 2 skip w/o a league
+uv run pytest                                          # 269 pass, 5 skip w/o a league
+FF_EDGE_LEAGUE_ID=... FF_EDGE_SLEEPER_USER=... uv run pytest   # 272 pass, 2 skip
 FF_EDGE_LEAGUE_ID=... uv run streamlit run app.py
 FF_EDGE_LEAGUE_ID=... uv run python -c "from src import board; print(board.build())"
 uv run python -m src.bootstrap --light                 # daily cache refresh
@@ -36,6 +37,16 @@ uv run python -m src.bootstrap --light                 # daily cache refresh
 
 Env vars that matter: `FF_EDGE_LEAGUE_ID`, `FF_EDGE_SLEEPER_USER`,
 `ANTHROPIC_API_KEY` (news extraction only — depth-chart claims work without it).
+
+**`FF_EDGE_SLEEPER_USER` gates more than it looks like it does.** Without the
+handle, `board.picks` resolves no owner, the Draft Day pick selector never
+renders, and `tests/test_draft_day.py` skips — so the tab's most important
+control goes untested while the suite reports green. Set both vars together.
+
+**Never use `uv run --no-sync` to work around a dependency problem.** Plain
+`uv run` re-syncs from the lock on every invocation, which is the mechanism that
+keeps the pyarrow exclusion below actually enforced. `--no-sync` exists here for
+one purpose: deliberately installing a known-bad version to prove a guard fires.
 
 Worktrees: `data/` and `.venv/` are gitignored, so a git worktree has neither.
 14 of 16 test files touch the cache. **Anything that reads data runs in the main
@@ -60,6 +71,27 @@ tree, not a worktree.**
 ## Data traps — every one of these fails silently
 
 These were each found the hard way. Do not reintroduce them.
+
+**pyarrow 25.0.0 segfaults the app, and 270 tests pass against it.** Excluded in
+`pyproject.toml`; fixed upstream in 25.0.1. Every table in `app.py` is polars,
+and `st.dataframe` round-trips each one through pandas and back into Arrow bytes
+for the browser. On 25.0.0 that corrupts memory and takes the interpreter with
+it — SIGSEGV, no traceback, no Streamlit error page, the server just gone.
+
+Worth internalising *how* it hid, because it generalises past this one release:
+
+- It needed **repetition**, not an input. Rendering once passed. Rendering nine
+  times, changing the pick each time, died — in the picks table, whose contents
+  are identical on every rerun.
+- It was **order dependent**. The same fifteen picks walked in reverse never
+  crashed once. That is heap layout, so any test free to choose a convenient
+  order would have stayed green.
+- The whole unit suite passed against a build that could not survive a draft.
+
+`tests/test_draft_day.py` is the answer to that class and exists for this
+reason: it drives the real widget, forward, the whole list. **A failure there
+may not look like a failure** — pytest exits 139 with no summary. A test run
+that vanishes is a red result.
 
 **`config.ROOT` uses `parents[1]`, not `.parent`.** `src/config.py` lives in
 `src/`. Using `.parent` repoints `DATA_DIR` at `src/data`, creates it, and

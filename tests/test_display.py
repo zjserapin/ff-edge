@@ -71,3 +71,35 @@ def test_charted_metrics_all_have_definitions() -> None:
     for column in charted:
         assert glossary.lookup(column) is not None, f"{column} has no glossary entry"
         assert glossary.describe(column), f"{column} has an empty description"
+
+
+# --- the crash that had no traceback ---------------------------------------
+
+
+def test_pyarrow_is_not_the_release_that_segfaults() -> None:
+    """pyarrow 25.0.0 kills the process while rendering a table.
+
+    Every frame in `app.py` is polars, and `st.dataframe` converts each one
+    through pandas and back into Arrow bytes for the browser. On pyarrow 25.0.0
+    that round trip corrupts memory inside `pandas_compat` and takes the
+    interpreter with it — SIGSEGV, no traceback, no Streamlit error page, the
+    server simply gone.
+
+    It was found by walking the Draft Day pick selector through the fifteen
+    picks Zach owns. It died on the ninth render, every time, in the *picks*
+    table — whose contents are identical on every rerun. Walking the same
+    fifteen picks in the opposite order never died. That is heap-layout
+    dependence, not a bad input, which is why the whole test suite passed
+    against a build that could not survive a draft.
+
+    Pinned here rather than trusted to `pyproject.toml` alone because the lock
+    is what actually gets installed, and a lock can carry a version the
+    constraint would now reject.
+    """
+    import pyarrow
+
+    assert pyarrow.__version__ != "25.0.0", (
+        "pyarrow 25.0.0 segfaults on the pandas/Arrow round trip that every "
+        "st.dataframe call makes — run `uv sync` to pick up the exclusion in "
+        "pyproject.toml"
+    )
