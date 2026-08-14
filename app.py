@@ -2784,6 +2784,114 @@ def _placeholder(name: str, phase: str) -> None:
 _SIGNAL_ORDER = ["both up", "split", "both down", "quiet"]
 
 
+def _what_this_board_assumes(data: dict[str, Any]) -> None:
+    """State the demand the board is actually pricing, on screen.
+
+    **This exists because the board was confusing without it, and the confusion
+    was reasonable.** The league is superflex, so the header says superflex — but
+    thirteen quarterbacks are kept, which drops QB demand to seven slots across
+    ten teams. That is *less* QB demand than a standard 1QB league, and the board
+    has been pricing it correctly the whole time; it simply never said so.
+
+    The consequence is worth reading off the table rather than inferring: a
+    request to "switch this to 1QB" would raise league QB demand from 7 to 10 and
+    make quarterbacks **more** valuable, which is the opposite of what anyone
+    asking that question wants. The keeper adjustment has already done the job,
+    and done more of it.
+    """
+    summary, replacement = data.get("summary"), data.get("replacement")
+    if summary is None or not summary.height:
+        return
+
+    with st.expander("What this board assumes about your draft", expanded=False):
+        joined = summary
+        if replacement is not None and replacement.height:
+            joined = summary.join(
+                replacement.select("position", "replacement_rank", "replacement_points"),
+                on="position",
+                how="left",
+            )
+        table(joined)
+        st.caption(
+            "**`draft_demand` is league demand minus the starters already kept**, "
+            "and it is the number replacement level is taken from — not the "
+            "roster slots. A position where keepers have absorbed most of the "
+            "demand is priced against a shallower pool than its format implies, "
+            "which is the correct answer for the draft you are actually having "
+            "and a surprising one if you read the format label instead."
+        )
+
+
+def _cost_of_waiting_panel(players: pl.DataFrame, data: dict[str, Any]) -> None:
+    """What a round costs at each position, at your own picks.
+
+    **The panel that stops PAR being read as the whole answer.** PAR is a level;
+    the decision is a shape. On the 2026 board the two disagree sharply — the top
+    six running backs carry identical PAR while the receiver curve falls off a
+    cliff — so the board's own ordering, read alone, recommends the wrong pick
+    between two positions you intend to fill anyway.
+
+    The rule this makes visible: **between two positions you will fill regardless,
+    take the one that is more expensive to wait on.** Taking the cheaper wait
+    first and circling back is strictly better, and the size of "better" is the
+    difference between the two costs.
+
+    Needs a pick list, so it needs `FF_EDGE_SLEEPER_USER`. Without the handle
+    `board.picks` resolves no owner and this degrades to the `drop` column on the
+    table, which needs neither the handle nor a league.
+    """
+    picks = _my_picks()
+    usable = (
+        picks.filter(pl.col("usable")).get_column("pick_no").to_list()
+        if picks.height and "usable" in picks.columns
+        else []
+    )
+    if len(usable) < 2:
+        st.info(
+            "Cost of waiting needs your pick list — set `FF_EDGE_SLEEPER_USER` "
+            "alongside `FF_EDGE_LEAGUE_ID`. The `drop` column on the board below "
+            "is the pick-independent version and is always available.",
+            icon="🕐",
+        )
+        return
+
+    with st.expander("What does waiting a round cost?", expanded=True):
+        horizon = st.slider(
+            "Picks to look ahead", 2, min(6, len(usable)), min(4, len(usable)),
+            key="big_board_horizon",
+            help="How many of your own picks to walk forward.",
+        )
+        waiting = bd.cost_of_waiting(players, usable[:horizon])
+        if not waiting.height:
+            st.warning("No cost-of-waiting estimate under these settings.")
+            return
+
+        first = usable[0]
+        at_first = (
+            waiting.filter(pl.col("pick_no") == first)
+            .sort("cost_of_waiting", descending=True, nulls_last=True)
+        )
+        table(waiting.sort(["pick_no", "cost_of_waiting"], descending=[False, True], nulls_last=True))
+
+        if at_first.height >= 2:
+            top = at_first.row(0, named=True)
+            nxt = at_first.row(1, named=True)
+            gap = (top["cost_of_waiting"] or 0) - (nxt["cost_of_waiting"] or 0)
+            st.caption(
+                f"**At pick {first}: take {top['position']}, come back for "
+                f"{nxt['position']}.** Waiting on {top['position']} costs "
+                f"{top['cost_of_waiting']:.1f} points against "
+                f"{nxt['position']}'s {nxt['cost_of_waiting']:.1f}, so the other "
+                f"order gives up {gap:.1f} points for nothing — the "
+                f"{nxt['position']} you want is still there next time and the "
+                f"{top['position']} is not. Note this can disagree with the board "
+                "above, and when it does it is usually right: PAR ranks the "
+                "*level*, this ranks the *shape*. It is still not a licence to "
+                "reach — a position can be expensive to wait on and worth less "
+                "anyway, so read the two together."
+            )
+
+
 def _tab_big_board(p: dict[str, Any]) -> None:
     """One ranked list, ordered by PAR, annotated by the two independent reads.
 
@@ -2820,7 +2928,7 @@ def _tab_big_board(p: dict[str, Any]) -> None:
         )
         return
 
-    players = bd.signal(bd.attach_vegas(players, _valuation()))
+    players = bd.positional_drop(bd.signal(bd.attach_vegas(players, _valuation())))
 
     # Same treatment the draft board gives it: a column of 1s reads as a rating,
     # and the only useful signal is the groups bigger than one.
@@ -2846,6 +2954,9 @@ def _tab_big_board(p: dict[str, Any]) -> None:
         "quality on a player whose last season fell under the volume floor."
     )
 
+    _what_this_board_assumes(data)
+    _cost_of_waiting_panel(players, data)
+
     positions = st.multiselect(
         "Positions",
         list(FANTASY_POSITIONS),
@@ -2869,10 +2980,13 @@ def _tab_big_board(p: dict[str, Any]) -> None:
     if signals:
         view = view.filter(pl.col("signal").is_in(signals))
 
+    # `drop` sits immediately right of `par` on purpose: they are the level and
+    # the shape of the same curve, they routinely disagree, and the disagreement
+    # is only visible when the eye can cross between them without travelling.
     columns = [
         c for c in (
             "board_rank", "name", "position", "team", "bye", "tier", "same",
-            "adp", "adj_adp", "par", "value_gap", "vegas_gap", "signal",
+            "adp", "adj_adp", "par", "drop", "value_gap", "vegas_gap", "signal",
             "env_swing",
         ) if c in view.columns
     ]

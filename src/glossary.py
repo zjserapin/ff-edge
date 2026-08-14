@@ -595,6 +595,46 @@ TERMS: dict[str, Term] = {
         not monotone, so the tiering pools ranks the data cannot order instead of
         forcing one. A tier break is a real cliff; inside a tier, take the cheaper
         player.""", "Board"),
+    "drop": _t(
+        "Drop (next 5)", "PAR you give up by falling five places at his position. High means do not wait.",
+        """The shape of the positional curve, next to PAR's level — and the two
+        routinely disagree. In 2026 the top six running backs carry *identical*
+        PAR, because the ADP curve is not monotone there and the tiering pools
+        ranks it cannot order rather than inventing one; so falling five backs
+        from the top costs nothing while falling five receivers costs 26 points.
+        A board sorted on PAR alone therefore puts six interchangeable backs
+        above a receiver you cannot replace. Between two positions you intend to
+        fill anyway, take the one that is more expensive to wait on. Not a licence
+        to reach: a high drop on a low-PAR player is still a low-PAR player.
+        `cost_of_waiting` is the exact version where a pick list exists; this one
+        needs neither picks nor a league.""", "Board"),
+    "cost_of_waiting": _t(
+        "Cost of waiting", "PAR lost between the best at this position now and the best still there at your next pick.",
+        """Uses your real pick list and the draft-slot dispersion FFC publishes
+        beside ADP, so it answers "what do I lose by taking someone else first"
+        exactly rather than by rule of thumb. Read it next to PAR, never instead
+        of it — a position can be expensive to wait on and still be worth less
+        than another.""", "Board"),
+    "best_par": _t(
+        "Best PAR available", "Expected PAR of the best player at this position still on the board at that pick.",
+        "", "Board"),
+    "draft_demand": _t(
+        "Draft demand", "Starting slots the league will actually draft for, after keepers.",
+        """League demand minus the starters already kept, and the number
+        replacement level is taken from. Thirteen kept quarterbacks turn a
+        superflex league's 20 QB slots into 7 — less QB demand than a standard
+        1QB league — so the board prices a shallower pool than the format label
+        implies. That is the correct answer for the draft actually being had.""",
+        "Board"),
+    "league_demand": _t(
+        "League demand", "Starting slots at this position across the whole league, before keepers.",
+        "Roster slots times teams, with flex demand allocated across eligible positions.", "Board"),
+    "replacement_rank": _t(
+        "Replacement rank", "The positional rank replacement level falls at, among players still available.",
+        "", "Board"),
+    "replacement_points": _t(
+        "Replacement points", "Projected points of the replacement-level player. PAR is measured from here.",
+        "", "Board"),
     "vegas_gap": _t(
         "Vegas gap", "The book's line percentile minus his price percentile. Positive means the book likes him more than the draft does.",
         """A second opinion that is not derived from ADP and has real money behind

@@ -199,7 +199,9 @@ to spend reading time.
 
 **The superflex edge is mostly already spent in this league.** 13 of the top
 quarterbacks are keepers, so QB draft demand is 7 rather than 20 and replacement
-lands at QB8 *among the available*. No quarterback appears until board rank 30.
+lands at QB8 *among the available*. The first quarterback on the board is Brock
+Purdy at **rank 19** (an earlier draft of this file said rank 30, which was the
+first *split*, not the first QB).
 `RESEARCH_SPEC.md` §0 is still right that the format is genuinely superflex —
 that was confirmed live — but the actionable edge in the 08-22 draft is much
 smaller than the format implies, because the other managers already took it.
@@ -214,6 +216,50 @@ earlier the same day. Fixed in `src/nflverse._played`; written up in
 `CLAUDE.md`. **The relevant lesson for this spec is that the Big Board tab is
 now the app's front door, so anything that raises inside it takes the front door
 with it.**
+
+## 10. The level/shape split — added 2026-08-13, second pass
+
+Zach, reading the shipped board: *"A lot of RBs have higher PAR than the WRs
+however it is a little contradictory as I do need to start 2 WRs and will likely
+flex another… I'd rather have a top WR like Chase, Puka instead of CMC or Taylor
+after the top 2 RBs go."*
+
+**Measured, and he is right by a wide margin.** The PAR curve on the live board:
+
+```
+RB   72.6  72.6  72.6  72.6  72.6  72.6  70.5  67.4  60.5  53.9
+WR   58.2  52.2  46.4  45.2  39.7  31.8  21.4  21.4  20.4  16.1
+```
+
+The top six backs carry *identical* PAR — the ADP curve is not monotone there and
+`expected.tiers` pools ranks it cannot order rather than inventing one. RB1→RB8
+costs 5.2 points; WR1→WR8 costs 36.8. Seven times steeper.
+
+`cost_of_waiting`, built long ago and never surfaced, already priced his exact
+scenario at his real picks:
+
+| at pick 4 | best PAR | cost of waiting to 17 |
+|---|---|---|
+| RB | 72.6 | 6.6 |
+| WR | 54.9 | 15.6 |
+
+RB@4 + WR@17 = 111.9. WR@4 + RB@17 = 120.9. **Taking the receiver first is worth
++9.0 PAR**, and the margin is exactly the difference between the two waiting
+costs.
+
+**The generalisation, which is the point:** PAR is a *level* and the decision is
+a *shape*. Between two positions you intend to fill anyway, take the one that is
+more expensive to wait on. A board sorted on PAR alone recommends the wrong pick
+whenever the curves have different slopes, which on this board they violently do.
+
+Shipped: a `drop` column beside `par` (pick-independent, works with no league and
+no handle), a cost-of-waiting panel driven by the real pick list, and a "what
+this board assumes" panel that states draft demand rather than the format label.
+
+**Not shipped, and declined with evidence: switching the board to 1QB.** See
+`HANDOFF.md`. The short version is that it would raise QB demand from 7 to 10 and
+make quarterbacks *more* valuable, which is the reverse of the intent, while
+silently returning 20 undraftable keepers to the board.
 
 ---
 

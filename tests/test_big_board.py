@@ -175,6 +175,108 @@ def test_signal_survives_a_board_with_no_vegas_column_at_all() -> None:
     assert out.get_column("signal").item() is None
 
 
+# --- the drop column, which is the shape next to PAR's level ----------------
+
+
+def _par_board(rows: list[tuple[str, str, float | None]]) -> pl.DataFrame:
+    """(name, position, par) -> a board-shaped frame."""
+    return pl.DataFrame(
+        [{"name": n, "position": p, "par": v} for n, p, v in rows],
+        schema={"name": pl.Utf8, "position": pl.Utf8, "par": pl.Float64},
+    )
+
+
+def test_drop_measures_the_fall_to_the_nth_next_at_the_position() -> None:
+    board = _par_board([(f"WR{i}", "WR", float(100 - 10 * i)) for i in range(8)])
+
+    out = bd.positional_drop(board, spots=3)
+    got = dict(zip(out.get_column("name"), out.get_column("drop")))
+
+    assert got["WR0"] == 30.0  # 100 -> 70
+    assert got["WR4"] == 30.0  # 60  -> 30
+
+
+def test_a_flat_top_reports_a_drop_of_zero() -> None:
+    """The 2026 running backs, and the whole reason this column exists.
+
+    Six identical PARs is not a bug in the curve — `expected.tiers` pools ranks
+    the data cannot order rather than forcing one. A drop of zero is the board
+    saying "waiting costs you nothing here", which is the single most useful
+    thing it can say about the top of that position.
+    """
+    board = _par_board(
+        [(f"RB{i}", "RB", 72.6) for i in range(6)]
+        + [("RB6", "RB", 70.5), ("RB7", "RB", 67.4)]
+    )
+
+    out = bd.positional_drop(board, spots=5)
+    got = dict(zip(out.get_column("name"), out.get_column("drop")))
+
+    assert got["RB0"] == 0.0
+
+
+def test_drop_never_crosses_positions() -> None:
+    """A receiver's drop must not be measured against a running back.
+
+    The failure mode is a frame that happens to be sorted by PAR globally: the
+    shift would walk straight out of the position and return a number that looks
+    entirely plausible.
+    """
+    board = _par_board(
+        [("RB1", "RB", 90.0), ("WR1", "WR", 80.0), ("RB2", "RB", 70.0),
+         ("WR2", "WR", 60.0), ("RB3", "RB", 50.0), ("WR3", "WR", 40.0)]
+    )
+
+    out = bd.positional_drop(board, spots=2)
+    got = dict(zip(out.get_column("name"), out.get_column("drop")))
+
+    assert got["RB1"] == 40.0  # 90 -> RB3's 50, not WR2's 60
+    assert got["WR1"] == 40.0  # 80 -> WR3's 40, not RB3's 50
+
+
+def test_drop_is_null_when_nothing_is_left_to_fall_to() -> None:
+    """Null is "the position runs out here", which is not a drop of zero."""
+    board = _par_board([("A", "TE", 30.0), ("B", "TE", 20.0), ("C", "TE", 10.0)])
+
+    out = bd.positional_drop(board, spots=5)
+
+    assert out.get_column("drop").null_count() == 3
+
+
+def test_drop_does_not_reorder_the_board() -> None:
+    """The shift needs a PAR-sorted frame; the caller's order is not ours to keep.
+
+    `build` hands back a board the app renders in the order it was given, so a
+    silent re-sort here would change what the first screen shows without
+    changing a single number.
+    """
+    board = _par_board([("C", "WR", 10.0), ("A", "WR", 30.0), ("B", "WR", 20.0)])
+
+    out = bd.positional_drop(board, spots=1)
+
+    assert out.get_column("name").to_list() == ["C", "A", "B"]
+
+
+def test_drop_puts_unscored_players_last_within_a_position() -> None:
+    """`sort(descending=True)` defaults to nulls FIRST — the CLAUDE.md trap.
+
+    Unguarded, a player with no PAR heads his position group and every drop below
+    him is measured from nothing.
+    """
+    board = _par_board([("Scored", "WR", 50.0), ("Unscored", "WR", None),
+                        ("Lower", "WR", 20.0)])
+
+    out = bd.positional_drop(board, spots=1)
+    got = dict(zip(out.get_column("name"), out.get_column("drop")))
+
+    assert got["Scored"] == 30.0, "the null PAR player was sorted to the top"
+
+
+def test_drop_rejects_a_meaningless_horizon() -> None:
+    with pytest.raises(ValueError):
+        bd.positional_drop(_par_board([("A", "WR", 10.0)]), spots=0)
+
+
 # --- the trap that ships a board of unscored players ------------------------
 
 
@@ -236,6 +338,28 @@ def test_the_row_slider_can_be_driven_the_whole_way_up(board_tab) -> None:
     for value in values:
         at = at.slider(key="big_board_rows").set_value(value).run()
         assert not at.exception, f"{value} rows raised: {at.exception[0].value}"
+
+
+def test_the_waiting_horizon_can_be_driven_the_whole_way_up(board_tab) -> None:
+    """The second control on the tab, and it recomputes on every step.
+
+    `cost_of_waiting` is real work — a survival model walked over every player at
+    every pick — so unlike the row slider this one actually rebuilds a frame each
+    time. That makes it the more likely of the two to find an allocation-sequence
+    bug, and the reason it is driven forward rather than sampled.
+    """
+    at = board_tab
+    if not [s for s in at.slider if s.key == "big_board_horizon"]:
+        pytest.skip("no pick list — cost-of-waiting panel not rendered")
+
+    slider = at.slider(key="big_board_horizon")
+    values = list(range(int(slider.min), int(slider.max) + 1, int(slider.step)))
+    if len(values) < 2:
+        pytest.skip("too few picks to exercise repetition")
+
+    for value in values:
+        at = at.slider(key="big_board_horizon").set_value(value).run()
+        assert not at.exception, f"horizon {value} raised: {at.exception[0].value}"
 
 
 def test_every_signal_filter_renders(board_tab) -> None:

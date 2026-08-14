@@ -1035,6 +1035,62 @@ def signal(
     )
 
 
+def positional_drop(players: pl.DataFrame, spots: int = 5) -> pl.DataFrame:
+    """PAR given up by falling `spots` places at the same position.
+
+    **The column that stops PAR being read as the whole answer.** PAR is a
+    *level* — how much this player is worth over replacement. The decision on the
+    clock is about *shape*: what you lose by taking someone else first and
+    circling back. Those come apart badly on the 2026 board, and not subtly:
+
+        RB   72.6  72.6  72.6  72.6  72.6  72.6  70.5  67.4  60.5  53.9
+        WR   58.2  52.2  46.4  45.2  39.7  31.8  21.4  21.4  20.4  16.1
+
+    The top six running backs are the *same number*. Not close — identical,
+    because the ADP curve is not monotone there and `expected.tiers` pools ranks
+    it cannot order rather than inventing one. So RB1 to RB8 costs 5.2 points
+    while WR1 to WR8 costs 36.8, and a board sorted on PAR alone puts six
+    interchangeable backs above a receiver you genuinely cannot replace.
+
+    Read it against PAR, never instead of it: **between two positions you intend
+    to fill anyway, take the one that is more expensive to wait on.** A high drop
+    on a low-PAR player is still a low-PAR player.
+
+    `spots` defaults to 5 as a rough stand-in for how many of one position leave
+    the board between picks in a 10-team league. It is a blunt instrument by
+    design — `cost_of_waiting` is the exact version, using your real pick list
+    and the draft-slot dispersion FFC ships beside ADP, and it should be
+    preferred whenever a pick list exists. This exists because it needs neither,
+    so it works on a cold clone and for a league this project cannot read.
+
+    Null where fewer than `spots` players remain below him at the position:
+    there is nothing left to fall to, which is not the same as a drop of zero.
+    """
+    if not players.height or "par" not in players.columns:
+        return players
+    if spots < 1:
+        raise ValueError(f"spots must be at least 1, got {spots}")
+
+    # The shift has to run down a PAR-sorted frame, but the caller's row order is
+    # not this function's to change — `build` returns a board the app renders in
+    # the order it was handed. So the sort is undone before returning.
+    return (
+        players.with_row_index("_row")
+        # nulls_last on a descending sort, every time: polars defaults it to
+        # False, so unscored players would head each position group and the drop
+        # would be measured from a player who has no PAR at all.
+        .sort("par", descending=True, nulls_last=True)
+        .with_columns(
+            (pl.col("par") - pl.col("par").shift(-spots))
+            .round(1)
+            .over("position")
+            .alias("drop")
+        )
+        .sort("_row")
+        .drop("_row")
+    )
+
+
 def indistinguishable(players: pl.DataFrame, value_col: str = "par") -> pl.DataFrame:
     """Group players the expected-points curve cannot actually tell apart.
 

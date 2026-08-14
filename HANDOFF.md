@@ -1,10 +1,10 @@
 # ff-edge — handoff
 
 **Session date:** 2026-08-13 (two sessions, this is the second)
-**Branch:** `measure-what-repeats`, pushed through commit 27. `origin/main` still
-at `5da50ec` (07-27), so everything lives only on the branch. That is a merge
-decision, not a backup problem.
-**State:** 303 tests pass with a league, 298 pass and 7 skip without one.
+**Branch:** `dropoff-and-landscape`, off `main`. **`main` is finally current** —
+`measure-what-repeats` merged and pushed on 08-13 (fast-forward, `673f148`), so
+the 07-27 gap is closed and `main` no longer carries the preseason crash.
+**State:** 311 tests pass with a league, 305 pass and 8 skip without one.
 **The Shiva Bowl draft is 2026-08-22 at 19:00.** Nine days. **Two more drafts
 follow it** — see the calendar below.
 
@@ -67,6 +67,14 @@ which is the one Phase 0 item still outstanding.
 | `BIG_BOARD_SPEC.md` | **New.** Spec, then build, then the results written back into it. |
 | `CLAUDE.md` | The future-season trap, and why it was invisible. |
 | `RESEARCH_SPEC.md` | Unchanged so far — **its §3 and §5.2 both need correcting**, see below. |
+
+Then a second pass on the board, after Zach read it (`BIG_BOARD_SPEC.md` §10):
+
+| file | what |
+|---|---|
+| `src/board.py` | `positional_drop` — the *shape* of the positional curve beside PAR's *level*. |
+| `app.py` | `drop` column, a cost-of-waiting panel on the real pick list, and a "what this board assumes" panel that prints draft demand instead of the format label. |
+| `src/glossary.py` | 7 more terms, including `drop`, `cost_of_waiting` and `draft_demand`. |
 
 ---
 
@@ -154,7 +162,19 @@ pricing it like a 1QB league is the edge existing, not evaporating.
 **The wrinkle, found while building the board: the edge is mostly already
 spent.** 13 of the top quarterbacks are keepers. QB draft demand is therefore 7,
 not 20, and replacement lands at **QB8 among the available** rather than QB21.
-No quarterback appears until board rank 30.
+The first quarterback on the board is Brock Purdy at **rank 19**, then Mahomes
+23 and Herbert 30. (A previous version of this file said "no QB until rank 30" —
+that was the first `split`, not the first quarterback.)
+
+**This is why a 1QB profile is the wrong fix and was declined on 08-13.** Measured
+three ways: the board already behaves like a 1QB draft; QB draft demand is 7
+slots across 10 teams, which is *less* than a 1QB league's 10, so switching would
+make quarterbacks **more** valuable rather than less; and a synthetic 1QB profile
+reports `kept = 0` and puts all 20 kept players — Josh Allen included — back on
+the board. On the ADP market specifically, non-QB ordering correlates 0.974
+between the 2qb and 1QB markets with a median shift of 4 places, and all eight
+QBs whose price moves most between them are kept. The confusion was real; it was
+a labelling problem, now answered by the "What this board assumes" panel.
 
 Both things are true and they are not in tension: the format really is
 superflex, and Zach's league-mates already took most of what that was worth by
@@ -278,8 +298,8 @@ seasons.
 ## Commands
 
 ```bash
-uv run pytest                                                  # 298 pass, 7 skip
-FF_EDGE_LEAGUE_ID=... FF_EDGE_SLEEPER_USER=... uv run pytest    # 303 pass, 2 skip
+uv run pytest                                                  # 305 pass, 8 skip
+FF_EDGE_LEAGUE_ID=... FF_EDGE_SLEEPER_USER=... uv run pytest    # 311 pass, 2 skip
 FF_EDGE_LEAGUE_ID=... uv run streamlit run app.py
 FF_EDGE_PROFILE=standard_12 uv run python -c "from src import board; print(board.build()['players'].head())"
 uv run python -m src.peek                                      # the screens, still unreached from the UI
