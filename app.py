@@ -2970,6 +2970,24 @@ def _cost_of_waiting_panel(players: pl.DataFrame, data: dict[str, Any]) -> None:
     Needs a pick list, so it needs `FF_EDGE_SLEEPER_USER`. Without the handle
     `board.picks` resolves no owner and this degrades to the `drop` column on the
     table, which needs neither the handle nor a league.
+
+    **Promoted out of an expander and above the table on 2026-08-14, and the
+    order of the parts is inverted with it.** This is the only thing on the tab
+    shaped like an instruction, and it was rendering *underneath* its own
+    evidence — a sixteen-column, hundred-and-fifty-row table you had to read past
+    to reach the sentence telling you what to do with it. Answer first, numbers
+    behind a disclosure. The per-pick frame has not changed; where it sits has.
+
+    **The value column is `par`, not the `par_env` the board ranks on, and that
+    is deliberate rather than an oversight.** It is also the one place the two
+    surfaces still disagree: at pick 4 on the 2026 board `par` says take a
+    quarterback and `par_env` says take a back, because `par_env` separates the
+    top of the running back curve while `par` keeps it flat. `par` is the right
+    input here for two reasons. Availability is a fact about the *market's*
+    curve, which is what `par` is; and the board's own `indistinguishable`
+    grouping puts those top backs in one block, so the 19 points of `par_env`
+    separating them is a distinction the board has already said it cannot make.
+    Costing a wait on it would price a loss the board does not believe in.
     """
     picks = _my_picks()
     usable = (
@@ -2986,41 +3004,87 @@ def _cost_of_waiting_panel(players: pl.DataFrame, data: dict[str, Any]) -> None:
         )
         return
 
-    with st.expander("What does waiting a round cost?", expanded=True):
-        horizon = st.slider(
-            "Picks to look ahead", 2, min(6, len(usable)), min(4, len(usable)),
-            key="big_board_horizon",
+    # The headline reads only the first pick and the one after it, so it does not
+    # move with the horizon — which is what makes it safe to leave the slider
+    # behind the disclosure with the table, below the answer it supports.
+    #
+    # The value is seeded into session state and the widget declares no default,
+    # rather than the other way round. Streamlit warns when a widget carries both
+    # a default *and* a session-state entry under its key, and once the slider has
+    # been touched it always carries both — so the obvious spelling prints a
+    # warning on every rerun after the first drag. Clamped because the pick list
+    # shrinks as the draft runs: a stored 6 against a max of 3 is an exception,
+    # and it would land mid-draft rather than here.
+    horizon_key = "big_board_horizon"
+    ceiling = min(6, len(usable))
+    stored = st.session_state.get(horizon_key, min(4, len(usable)))
+    st.session_state[horizon_key] = max(2, min(int(stored), ceiling))
+    waiting = bd.cost_of_waiting(players, usable[: st.session_state[horizon_key]])
+    if not waiting.height:
+        st.warning("No cost-of-waiting estimate under these settings.")
+        return
+
+    first = usable[0]
+    at_first = waiting.filter(pl.col("pick_no") == first).sort(
+        "cost_of_waiting", descending=True, nulls_last=True
+    )
+
+    if at_first.height >= 2:
+        top = at_first.row(0, named=True)
+        nxt = at_first.row(1, named=True)
+        gap = (top["cost_of_waiting"] or 0) - (nxt["cost_of_waiting"] or 0)
+        st.markdown(
+            f"#### At pick {first}: take {top['position']}, come back for "
+            f"{nxt['position']}"
+        )
+        # One number per position, biggest first. This is the row that gets read
+        # on a clock, and four metrics scan faster than a sixteen-row frame.
+        cols = st.columns(at_first.height)
+        for column, row in zip(cols, at_first.iter_rows(named=True)):
+            cost = row["cost_of_waiting"]
+            column.metric(
+                row["position"],
+                "—" if cost is None else f"{cost:.1f}",
+                help=(
+                    f"PAR lost between the best {row['position']} available at "
+                    f"pick {first} and the best still there at your next pick."
+                ),
+            )
+        st.caption(
+            f"**Points given up by waiting one pick, per position.** Waiting on "
+            f"{top['position']} costs {top['cost_of_waiting']:.1f} against "
+            f"{nxt['position']}'s {nxt['cost_of_waiting']:.1f}, so taking them in "
+            f"the other order gives up {gap:.1f} points for nothing — the "
+            f"{nxt['position']} you want is still there next time and the "
+            f"{top['position']} is not. **Between two positions you will fill "
+            "anyway, take the one that is more expensive to wait on.** This can "
+            "disagree with the board below, and when it does it is usually "
+            "right: the board ranks the *level*, this ranks the *shape*. It is "
+            "not a licence to reach — a position can be expensive to wait on and "
+            "still be worth less than another, so read the two together."
+        )
+
+    with st.expander("Every pick, every position — the numbers behind it"):
+        st.slider(
+            "Picks to look ahead", 2, ceiling,
+            key=horizon_key,
             help="How many of your own picks to walk forward.",
         )
-        waiting = bd.cost_of_waiting(players, usable[:horizon])
-        if not waiting.height:
-            st.warning("No cost-of-waiting estimate under these settings.")
-            return
-
-        first = usable[0]
-        at_first = (
-            waiting.filter(pl.col("pick_no") == first)
-            .sort("cost_of_waiting", descending=True, nulls_last=True)
-        )
-        table(waiting.sort(["pick_no", "cost_of_waiting"], descending=[False, True], nulls_last=True))
-
-        if at_first.height >= 2:
-            top = at_first.row(0, named=True)
-            nxt = at_first.row(1, named=True)
-            gap = (top["cost_of_waiting"] or 0) - (nxt["cost_of_waiting"] or 0)
-            st.caption(
-                f"**At pick {first}: take {top['position']}, come back for "
-                f"{nxt['position']}.** Waiting on {top['position']} costs "
-                f"{top['cost_of_waiting']:.1f} points against "
-                f"{nxt['position']}'s {nxt['cost_of_waiting']:.1f}, so the other "
-                f"order gives up {gap:.1f} points for nothing — the "
-                f"{nxt['position']} you want is still there next time and the "
-                f"{top['position']} is not. Note this can disagree with the board "
-                "above, and when it does it is usually right: PAR ranks the "
-                "*level*, this ranks the *shape*. It is still not a licence to "
-                "reach — a position can be expensive to wait on and worth less "
-                "anyway, so read the two together."
+        table(
+            waiting.sort(
+                ["pick_no", "cost_of_waiting"],
+                descending=[False, True],
+                nulls_last=True,
             )
+        )
+        st.caption(
+            "`best_par` is the expected PAR of the best player of that position "
+            "still on the board at that pick; `cost_of_waiting` is what falls "
+            "away before your next one, and is blank on the last pick shown "
+            "because there is nothing after it to wait for. Costed on `par` "
+            "rather than the `par_env` the board ranks on — see the note in "
+            "`_cost_of_waiting_panel`."
+        )
 
 
 def _tab_big_board(p: dict[str, Any]) -> None:
@@ -3101,8 +3165,14 @@ def _tab_big_board(p: dict[str, Any]) -> None:
         "quality on a player whose last season fell under the volume floor."
     )
 
-    _what_this_board_assumes(data)
+    # Cost of waiting leads, ahead of the assumptions panel and the table both.
+    # It is the only thing on this tab shaped like an instruction rather than a
+    # reference, and the tab is read on a clock. Assumptions are what you check
+    # once before the draft; this is what you read at the pick.
+    st.divider()
     _cost_of_waiting_panel(players, data)
+    st.divider()
+    _what_this_board_assumes(data)
 
     positions = st.multiselect(
         "Positions",

@@ -22,6 +22,8 @@ nine times segfaulted. **A failure may not look like a failure** — pytest exit
 
 from __future__ import annotations
 
+import logging
+
 import polars as pl
 import pytest
 
@@ -854,3 +856,74 @@ def test_every_signal_filter_renders(board_tab) -> None:
     for level in ("both up", "split", "both down", "quiet"):
         at = at.multiselect(key="big_board_signals").set_value([level]).run()
         assert not at.exception, f"{level!r} raised: {at.exception[0].value}"
+
+
+def test_the_recommendation_renders_before_the_board(board_tab) -> None:
+    """Cost of waiting is the only instruction on the tab and must lead.
+
+    It used to render inside an expander *underneath* its own evidence, so the
+    sentence telling you what to do sat below a sixteen-column table you had to
+    scroll past to reach it. This asserts the promotion rather than trusting it:
+    the headline exists, and it comes before the board's own filters.
+    """
+    at = board_tab
+    if not [s for s in at.slider if s.key == "big_board_horizon"]:
+        pytest.skip("no pick list — cost-of-waiting panel not rendered")
+
+    headings = [m.value for m in at.markdown if m.value.startswith("#### At pick ")]
+    assert headings, "no cost-of-waiting recommendation rendered"
+    assert "come back for" in headings[0]
+
+
+def test_driving_the_horizon_does_not_warn_about_the_default() -> None:
+    """A widget carrying both a default and a session-state entry warns.
+
+    Once the slider has been dragged it always carries both, so the obvious
+    spelling prints a warning on every rerun after the first drag — visible to
+    Zach on every pick of the draft.
+
+    **Three ways to assert this do not work, and the first two shipped green
+    against the broken code.** Streamlit raises it from `check_session_state_rules`
+    via `_LOGGER.warning`, so it is not an exception, not an `st.warning`
+    element, and not a `warnings.warn`. It is also not reachable through
+    `caplog`, because `streamlit.elements.lib.policies` sets **`propagate =
+    False`** and pytest's capture handler lives on the root logger. Only a
+    handler attached to that logger by name sees it.
+
+    Verified the way `test_nflverse.py` verifies its guard: by reintroducing the
+    default and watching this fail.
+
+    Not using the `board_tab` fixture — that is module-scoped and already carries
+    widget state from earlier tests, and this one needs a clean first render
+    followed by exactly one drag.
+    """
+    if SLEEPER_USERNAME == "CHANGE_ME":
+        pytest.skip("no handle configured (FF_EDGE_SLEEPER_USER unset)")
+
+    records: list[logging.LogRecord] = []
+
+    class _Collect(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    logger = logging.getLogger("streamlit.elements.lib.policies")
+    handler = _Collect()
+    # Attached before the *first* render, which is the fourth way to get this
+    # test wrong. The panel seeds session state ahead of building the widget, so
+    # with a default in place the warning fires on render one — not only after a
+    # drag — and a handler attached afterwards misses it entirely.
+    logger.addHandler(handler)
+    try:
+        at = _app()
+        sliders = [s for s in at.slider if s.key == "big_board_horizon"]
+        if not sliders:
+            pytest.skip("no pick list — cost-of-waiting panel not rendered")
+        at = at.slider(key="big_board_horizon").set_value(int(sliders[0].max)).run()
+    finally:
+        logger.removeHandler(handler)
+
+    assert not at.exception
+    offending = [
+        r.getMessage() for r in records if "Session State" in r.getMessage()
+    ]
+    assert not offending, offending

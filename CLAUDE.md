@@ -124,6 +124,23 @@ reason: it drives the real widget, forward, the whole list. **A failure there
 may not look like a failure** — pytest exits 139 with no summary. A test run
 that vanishes is a red result.
 
+**A Streamlit misuse warning is invisible to all four of the obvious asserts.**
+Passing a widget both a default *and* a `key` whose value is already in session
+state prints a warning on every render. It is not an exception, not an
+`st.warning` element, and not a `warnings.warn`, so `at.exception`, `at.warning`
+and `pytest.warns` all stay green. **`caplog` does not see it either**:
+`streamlit.elements.lib.policies` sets `propagate = False`, and pytest's capture
+handler lives on the root logger. Only a handler added to that logger *by name*
+catches it, and it has to be attached **before the first render** — the panel
+seeds session state ahead of building the widget, so the warning fires on render
+one rather than after a drag.
+
+`test_driving_the_horizon_does_not_warn_about_the_default` is the worked example.
+Three earlier versions of it shipped green against the broken spelling. The
+general rule: **when asserting that something did not happen, prove the assert
+fails when it does** — the same discipline `tests/test_nflverse.py` applies to
+the preseason guard.
+
 **Asking nflverse for a season that has not kicked off raises, and it takes the
 whole app.** Eleven of the loaders wrapped in `src/nflverse.py` reject a future
 season — `ValueError: Season must be between 2006 and 2025` — and two more 404.
