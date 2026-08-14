@@ -93,6 +93,38 @@ reason: it drives the real widget, forward, the whole list. **A failure there
 may not look like a failure** — pytest exits 139 with no summary. A test run
 that vanishes is a red result.
 
+**Asking nflverse for a season that has not kicked off raises, and it takes the
+whole app.** Eleven of the loaders wrapped in `src/nflverse.py` reject a future
+season — `ValueError: Season must be between 2006 and 2025` — and two more 404.
+`src/nflverse._played` now filters those seasons out *before* the cache key is
+built, so they return an empty frame, which is what every caller here already
+handles. **Do not remove that guard, and add it to any new wrapper** over a
+game-data loader. Forward-looking feeds are exempt and must stay exempt:
+schedules, rosters, depth charts and draft picks all have real 2026 rows.
+
+Use `nfl.get_current_season()`, the games-based answer. Its `roster=True`
+variant flips on March 15 and reports 2026 today — the same roster-runs-ahead
+disagreement as the `AZ`/`ARI` split below.
+
+Worth studying *how this one hid*, because nothing about it was silent:
+
+- **The handling was already written.** `promotion.weekly_trust` guards with
+  `if not rush_raw.height`, and `claims.resolve` already treats an empty week
+  table as *pending, not failed*. Both sat one line after the call that raised.
+  The author assumed a future season came back empty rather than throwing.
+- **It was dormant until data arrived.** `claims.resolve` returns early on an
+  empty ledger, so the path was unreachable until `bootstrap` pulled the first
+  150 claims. The bug shipped on the day the ledger stopped being empty — nine
+  days before the draft — and nothing about that day touched the code.
+- **It was invisible to a green suite**, because the app-level tests were the
+  only ones that render `app.py`, and an unhandled exception in a Streamlit tab
+  kills the entire page rather than the section.
+
+The general lesson, and it is the same one `tests/test_draft_day.py` teaches
+from the other direction: **a code path guarded by `if not x.height` is untested
+until something makes `x` non-empty.** A cache that fills, a ledger that
+accumulates, or a season that starts will each do that on their own schedule.
+
 **`config.ROOT` uses `parents[1]`, not `.parent`.** `src/config.py` lives in
 `src/`. Using `.parent` repoints `DATA_DIR` at `src/data`, creates it, and
 orphans the entire cache without raising.

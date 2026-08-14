@@ -28,12 +28,49 @@ def _key(seasons: list[int] | int) -> str:
     return f"{min(seasons)}-{max(seasons)}" if seasons else "all"
 
 
+def _played(seasons: list[int]) -> list[int]:
+    """Drop seasons whose games have not been played yet.
+
+    **Asking nflreadpy for a season that has not started raises, and that killed
+    the whole app on 2026-08-13.** Nine of the loaders wrapped in this file
+    validate their season range — `ValueError: Season must be between 2006 and
+    2025` — and two more 404 looking for a file the nflverse has not published.
+    An unhandled exception inside a Streamlit tab takes the entire page, not the
+    section, so a single call for `[SEASON]` in the preseason is fatal.
+
+    The live one was `promotion.weekly_trust(2026)`, reached from the claims
+    ledger. Note how it hid: `weekly_trust` already guards with
+    `if not rush_raw.height`, and `claims.resolve` already treats an empty week
+    table as "pending, not failed". **The intended behaviour was fully built.**
+    It simply sat one line after the call that raised, because the author
+    reasonably assumed a future season came back empty rather than throwing. And
+    it stayed dormant until the ledger had its first row — `resolve` returns
+    early on an empty ledger — so the bug shipped the day bootstrap first pulled
+    claims, which was nine days before the draft.
+
+    So this converts "raises" into "returns empty", which is what every caller in
+    this repo already handles. Seasons are filtered *before* the cache key is
+    built, so a request for 2018-2026 is stored as 2018-2025 — the honest name
+    for what was actually fetched, and it means nothing has to be invalidated in
+    September when the games start.
+
+    **`get_current_season()` is the games-based answer and that is the one we
+    want.** Its `roster=True` variant flips to the new year on March 15 and would
+    report 2026 today. That is the same disagreement `CLAUDE.md` documents for
+    team codes, where the 2026 roster feed alone spells Arizona `AZ`: roster data
+    rolls forward months before game data does.
+    """
+    return [s for s in seasons if s <= nfl.get_current_season()]
+
+
 # --- Production & opportunity ----------------------------------------------
 
 
 def weekly_stats(seasons: list[int] | None = None, force: bool = False) -> pl.DataFrame:
     """Per-player, per-week box score production."""
-    seasons = seasons or HISTORY_SEASONS
+    seasons = _played(seasons or HISTORY_SEASONS)
+    if not seasons:
+        return pl.DataFrame()
     return frame(
         f"weekly_stats_{_key(seasons)}",
         "weekly",
@@ -47,7 +84,9 @@ def season_stats(
 ) -> pl.DataFrame:
     """Season totals. `level` is one of week/reg/post/reg+post — there is no
     'season' value; passing one raises ValueError inside nflreadpy."""
-    seasons = seasons or HISTORY_SEASONS
+    seasons = _played(seasons or HISTORY_SEASONS)
+    if not seasons:
+        return pl.DataFrame()
     return frame(
         f"season_stats_{level}_{_key(seasons)}",
         "weekly",
@@ -60,7 +99,9 @@ def team_stats(
     seasons: list[int] | None = None, level: str = "reg", force: bool = False
 ) -> pl.DataFrame:
     """Team-level production — the denominator for target/carry share work."""
-    seasons = seasons or HISTORY_SEASONS
+    seasons = _played(seasons or HISTORY_SEASONS)
+    if not seasons:
+        return pl.DataFrame()
     return frame(
         f"team_stats_{level}_{_key(seasons)}",
         "weekly",
@@ -88,7 +129,9 @@ def ff_opportunity(
 
     `stat_type` is weekly / pbp_pass / pbp_rush only — 'season' raises.
     """
-    seasons = seasons or HISTORY_SEASONS
+    seasons = _played(seasons or HISTORY_SEASONS)
+    if not seasons:
+        return pl.DataFrame()
     return frame(
         f"ff_opportunity_{stat_type}_{_key(seasons)}",
         "weekly",
@@ -99,7 +142,9 @@ def ff_opportunity(
 
 def snap_counts(seasons: list[int] | None = None, force: bool = False) -> pl.DataFrame:
     """Offensive/defensive snap participation. Role change shows here first."""
-    seasons = seasons or HISTORY_SEASONS
+    seasons = _played(seasons or HISTORY_SEASONS)
+    if not seasons:
+        return pl.DataFrame()
     return frame(
         f"snap_counts_{_key(seasons)}",
         "weekly",
@@ -110,7 +155,9 @@ def snap_counts(seasons: list[int] | None = None, force: bool = False) -> pl.Dat
 
 def injuries(seasons: list[int] | None = None, force: bool = False) -> pl.DataFrame:
     """Weekly injury reports — practice status and game designation."""
-    seasons = seasons or HISTORY_SEASONS
+    seasons = _played(seasons or HISTORY_SEASONS)
+    if not seasons:
+        return pl.DataFrame()
     return frame(
         f"injuries_{_key(seasons)}",
         "weekly",
@@ -123,7 +170,9 @@ def participation(
     seasons: list[int] | None = None, force: bool = False
 ) -> pl.DataFrame:
     """Play-level personnel groupings (who was on the field for what)."""
-    seasons = seasons or HISTORY_SEASONS
+    seasons = _played(seasons or HISTORY_SEASONS)
+    if not seasons:
+        return pl.DataFrame()
     return frame(
         f"participation_{_key(seasons)}",
         "weekly",
@@ -143,7 +192,9 @@ def ftn_charting(
     analysis window, which is why it stays a current-year display column and
     never becomes a training feature.
     """
-    seasons = seasons or FTN_SEASONS
+    seasons = _played(seasons or FTN_SEASONS)
+    if not seasons:
+        return pl.DataFrame()
     return frame(
         f"ftn_charting_{_key(seasons)}",
         "weekly",
@@ -156,7 +207,9 @@ def nextgen(
     stat_type: str = "passing", seasons: list[int] | None = None, force: bool = False
 ) -> pl.DataFrame:
     """NGS tracking aggregates: passing / receiving / rushing."""
-    seasons = seasons or HISTORY_SEASONS
+    seasons = _played(seasons or HISTORY_SEASONS)
+    if not seasons:
+        return pl.DataFrame()
     return frame(
         f"nextgen_{stat_type}_{_key(seasons)}",
         "weekly",
@@ -172,7 +225,9 @@ def pfr_advstats(
     force: bool = False,
 ) -> pl.DataFrame:
     """Pro-Football-Reference advanced stats: pass / rush / rec / def."""
-    seasons = seasons or HISTORY_SEASONS
+    seasons = _played(seasons or HISTORY_SEASONS)
+    if not seasons:
+        return pl.DataFrame()
     return frame(
         f"pfr_{stat_type}_{level}_{_key(seasons)}",
         "weekly",
@@ -277,7 +332,9 @@ def ff_playerids(force: bool = False) -> pl.DataFrame:
 
 def pbp(seasons: list[int] | None = None, force: bool = False) -> pl.DataFrame:
     """Full play-by-play. Large — expect a few minutes and ~1GB on a cold pull."""
-    seasons = seasons or PBP_SEASONS
+    seasons = _played(seasons or PBP_SEASONS)
+    if not seasons:
+        return pl.DataFrame()
     return frame(
         f"pbp_{_key(seasons)}", "static", lambda: nfl.load_pbp(seasons=seasons), force
     )
