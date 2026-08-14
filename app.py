@@ -3103,11 +3103,16 @@ def _tab_big_board(p: dict[str, Any]) -> None:
     # shape of the same curve and routinely disagree; `quality_pct` is next
     # because it now decides the order *within* a block, and a board must show
     # the number it sorted on.
+    # The three layers that build `par_env`, left to right in the order they are
+    # applied: `par` is the ADP curve's slot value (blind to player and team),
+    # `ffb_par` adds the player, `env_swing` adds the team. Anyone asking "why is
+    # he here" should be able to read the answer across one row.
     columns = [
         c for c in (
             "block", "name", "position", "team", "bye", "tier", "same",
-            "adp", "adj_adp", "par", "env_swing", "par_env", "drop",
-            "quality_pct", "value_gap", "vegas_gap", "signal", "board_rank",
+            "adp", "adj_adp", "par", "ffb_par", "blend_par", "env_swing",
+            "par_env", "drop", "quality_pct", "value_gap", "vegas_gap",
+            "signal", "board_rank",
         ) if c in view.columns
     ]
     # `nulls_last` on every sort in this file, ascending included: polars

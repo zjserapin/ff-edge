@@ -595,6 +595,37 @@ TERMS: dict[str, Term] = {
         not monotone, so the tiering pools ranks the data cannot order instead of
         forcing one. A tier break is a real cliff; inside a tier, take the cheaper
         player.""", "Board"),
+    "ffb_par": _t(
+        "Footballers PAR", "The Fantasy Footballers' projected stat lines, scored in your league, above replacement.",
+        """The board's only genuinely **player-level** projection, and the reason
+        it matters is that `par` is not one: the expected-points curve maps
+        positional ADP rank to points, so the top six backs all price at exactly
+        72.6 and the player's name never enters the calculation. Andy, Jason and
+        Mike's numbers separate them — 160.6, 156.7, 114.9, 84.5, 82.7 for the
+        same five players. Scored through the league's own settings rather than
+        taken as a published ranking, because they do not publish one.""",
+        "Board"),
+    "ffb_spread": _t(
+        "Analyst spread", "How far apart the three analysts are on this player, in league points.",
+        """A free uncertainty read no consensus-of-one source can give. Two
+        players at the same ADP with spreads of 12 and 68 points are completely
+        different bets, and nothing else on this board can tell you which is
+        which.""", "Board"),
+    "blend_par": _t(
+        "Blended PAR", "PAR and Footballers PAR combined on a common scale.",
+        """**Standardized before blending, and skipping that is a silent bug.**
+        Both sides are league points above their own replacement level, which
+        makes them look directly averageable. They are not: `ffb_par` carries
+        1.76x the dispersion of `par`, so a raw 50/50 average hands the
+        Footballers about 64% of the variance — and the ratio varies by position
+        (2.2x at QB), so a raw blend would tilt hardest at exactly the position a
+        superflex league is most sensitive about. Each side is standardized over
+        the rows where both exist, then mapped back onto the `par` scale so the
+        weight means what it says.""", "Board"),
+    "blend_rank": _t(
+        "Blended rank", "Board order using the blended value.",
+        "Kept beside the unblended `board_rank` so the blend's effect is visible rather than asserted.",
+        "Board"),
     "par_env": _t(
         "PAR + offence", "PAR plus a stated fraction of the offensive environment. What the board is ordered on.",
         """`par` prices a draft slot and is blind to the team a player joins —

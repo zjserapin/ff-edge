@@ -30,8 +30,8 @@ one, columns that look like duplicates but aren't. None of it raises.
 the user's terminal is invisible here. Prefix every command that needs it:
 
 ```bash
-uv run pytest                                          # 324 pass, 8 skip w/o a league
-FF_EDGE_LEAGUE_ID=... FF_EDGE_SLEEPER_USER=... uv run pytest   # 330 pass, 2 skip
+uv run pytest                                          # 351 pass, 8 skip w/o a league
+FF_EDGE_LEAGUE_ID=... FF_EDGE_SLEEPER_USER=... uv run pytest   # 357 pass, 2 skip
 FF_EDGE_LEAGUE_ID=... uv run streamlit run app.py
 FF_EDGE_LEAGUE_ID=... uv run python -c "from src import board; print(board.build())"
 uv run python -m src.bootstrap --light                 # daily cache refresh
@@ -229,6 +229,34 @@ Jackson the CB, Justin Jefferson the rookie LB — a name-only join fanned 145
 prop rows out to 151 without raising. `props.resolve_players` resolves one
 identity per *player* rather than per row, which is what makes the row count
 preserved structurally instead of by luck.
+
+**Two point columns above their own replacement level are still not on the same
+scale.** `board.par` and `board.ffb_par` are both league points above the
+position's replacement, which makes them look directly averageable. On the 2026
+board `ffb_par` carries **1.55x the dispersion** of `par` by IQR (1.76x by
+standard deviation), because the ADP curve maps a whole positional rank onto one
+fitted number and flattens at the top — the top four backs all price at exactly
+72.6 — while three analysts projecting touches spread the same four from 84 to
+157. A raw weighted average at `weight=0.5` therefore hands the Footballers
+about 60% of the say, and the ratio is **2.2x at quarterback**, so the tilt is
+worst at the position a superflex league is most sensitive about.
+`board.blend_par` standardizes each side before blending and maps the result
+back onto the `par` scale. Scale first, then weight.
+
+Related, and the reason that standardization uses median/IQR rather than
+mean/sd: **the two sources are censored differently in the tail.** A backup
+quarterback really is ~270 points below a superflex replacement and the
+Footballers say so; the ADP curve floors out near -30 and cannot. Twelve
+undraftable quarterbacks were setting the scale for the whole board.
+
+**The Fantasy Footballers' panel is not evenly fresh.** `updated_at` is per
+analyst per player. On 2026-08-10 the median projection was 7 days old for
+Jason, 64 for Andy and **90 for Mike**. A plain mean blends an August opinion
+with a May one and prints one confident number. `footballers.panel_report()` is
+the `ids.match_report` of that feed — look at it. Coverage is uneven too (302
+players with all three analysts, 7 with two, 4 with one), so `n_analysts` is on
+every consensus row and `FOOTBALLERS_MIN_ANALYSTS` blanks a thin panel rather
+than averaging over a different set of people for every player.
 
 More play-level traps (two-point plays inflating red-zone share, `play_id` type
 mismatch between ff_opportunity and FTN, null receivers on 4% of pass plays) are

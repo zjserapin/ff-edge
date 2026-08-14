@@ -337,6 +337,33 @@ def test_env_weight_survives_a_board_with_no_environment_column() -> None:
     assert out.get_column("par_env").to_list() == [70.0]
 
 
+def test_the_environment_builds_on_the_blend_not_on_raw_par() -> None:
+    """The layer order is the whole design, and getting it wrong is silent.
+
+    `par` is a slot value blind to both player and team. `blend_par` adds the
+    player (the Footballers' projection). This adds the team. Applying the
+    environment to raw `par` while a blended column sat unused would throw away
+    the only player-level projection on the board and nothing would raise.
+    """
+    board = _env([("A", "RB", 70.0, 20.0)]).with_columns(
+        pl.lit(50.0).alias("blend_par")
+    )
+
+    out = bd.apply_env_weight(board, weight=0.5)
+
+    # 50 + 0.5*20 = 60 from the blend; 80 would mean it used raw par.
+    assert out.get_column("par_env").item() == pytest.approx(60.0)
+
+
+def test_env_weight_falls_back_to_par_without_a_blend() -> None:
+    """A cold clone has no Footballers data. The board must still rank."""
+    board = _env([("A", "RB", 70.0, 20.0)])
+
+    out = bd.apply_env_weight(board, weight=0.5)
+
+    assert out.get_column("par_env").item() == pytest.approx(80.0)
+
+
 def test_the_environment_weight_can_move_a_player_between_blocks() -> None:
     """The reason `rank_board` takes a `value_col` at all.
 

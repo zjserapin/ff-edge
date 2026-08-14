@@ -39,6 +39,7 @@ import polars as pl
 
 from src import adp as adp_mod
 from src import expected as ex
+from src import footballers as ffb
 from src import ids
 from src import profiles as pf
 from src import scoring as sc
@@ -46,6 +47,8 @@ from src import sleeper
 from src.config import (
     ENV_WEIGHT,
     FANTASY_POSITIONS,
+    FOOTBALLERS_MIN_ANALYSTS,
+    FOOTBALLERS_WEIGHT,
     LEAGUE_ADP_TEAMS,
     SEASON,
     SLEEPER_USERNAME,
@@ -477,12 +480,222 @@ def replacement(
     return pl.DataFrame(rows) if rows else pl.DataFrame()
 
 
+def attach_footballers(
+    pool: pl.DataFrame,
+    summary: pl.DataFrame,
+    min_analysts: int = FOOTBALLERS_MIN_ANALYSTS,
+    use_draft_demand: bool = True,
+    scoring: dict[str, float] | None = None,
+) -> pl.DataFrame:
+    """Blend the Fantasy Footballers' projections into the board, on PAR.
+
+    **Why this blends PAR and not rank.** Averaging two rank orderings throws
+    away how *far apart* the players are, which is the only thing the board is
+    actually for — a tier is a statement about distance, not order. Both sources
+    here produce a season point total, so they can be blended as numbers instead.
+
+    **Why each side gets its own replacement level, and why that is the load-
+    bearing decision in this function.** `exp_points` comes from the ADP curve,
+    which is fitted on *realized* seasons and therefore has injuries, benchings
+    and missed games already baked into it. A projection does not: analysts
+    project the season a player has if things go normally, so their totals run
+    systematically higher than the curve's. Subtract a common baseline and that
+    level difference lands entirely on the blend, quietly tilting the board
+    toward whichever source is more optimistic.
+
+    Subtracting *each system's own* replacement level removes it. `ffb_par` is
+    "points above the replacement player as the Footballers see him"; `par` is
+    the same sentence about the ADP curve. A uniform +12% on every projection
+    lifts their replacement by 12% too and cancels. What survives is the only
+    thing worth blending: disagreement about the *shape* of the position.
+
+    The Footballers' baseline is computed over the same draftable pool and the
+    same `draft_demand` as the board's, so the two are answering the identical
+    question about the identical league.
+
+    Adds `ffb_par`, `blend_par`, and everything `footballers.attach` brings.
+    Players the panel has not published survive as nulls and fall back to their
+    own `par` in `blend_par` — never dropped, and never silently blended against
+    a zero, which would rank an unpublished player as though three analysts had
+    projected him at replacement level.
+    """
+    pool = ffb.attach(pool, scoring=scoring)
+
+    if "ffb_points" not in pool.columns:
+        return pool.with_columns(
+            pl.lit(None, dtype=pl.Float64).alias("ffb_par"),
+            pl.lit(None, dtype=pl.Float64).alias("blend_par"),
+        )
+
+    # A thin panel is not a consensus. Blanked here rather than filtered so the
+    # player keeps his row and his own par.
+    pool = pool.with_columns(
+        pl.when(pl.col("n_analysts") >= min_analysts)
+        .then(pl.col("ffb_points"))
+        .otherwise(None)
+        .alias("ffb_points")
+    )
+
+    repl_ffb = replacement(
+        pool, summary, value_col="ffb_points", use_draft_demand=use_draft_demand
+    )
+    if not repl_ffb.height:
+        return pool.with_columns(
+            pl.lit(None, dtype=pl.Float64).alias("ffb_par"),
+            pl.lit(None, dtype=pl.Float64).alias("blend_par"),
+        )
+
+    return pool.join(
+        repl_ffb.select(
+            "position", pl.col("replacement_points").alias("_ffb_repl")
+        ),
+        on="position",
+        how="left",
+    ).with_columns(
+        (pl.col("ffb_points") - pl.col("_ffb_repl")).round(1).alias("ffb_par")
+    ).drop("_ffb_repl")
+
+
+def blend_par(
+    players: pl.DataFrame, weight: float = FOOTBALLERS_WEIGHT
+) -> pl.DataFrame:
+    """Blend `par` and `ffb_par` on a common scale, falling back to `par` alone.
+
+    Kept separate from `attach_footballers` because `ffb_par` needs the pool
+    *before* keepers and drafted players are removed (that is where replacement
+    is set) while the blend needs `par`, which only exists after. Splitting them
+    is what lets both be computed against the right frame.
+
+    **Standardized first, and skipping that step is a silent bug.** Both columns
+    are in league points and both are above their own replacement level, which
+    makes them look directly averageable. They are not: measured on the 2026
+    board, `ffb_par` carries **1.76x the dispersion** of `par` (sd 60.6 against
+    34.4), because the ADP curve maps a whole positional rank to one number and
+    flattens hard at the top — the top four backs all price at exactly 72.6 —
+    while three analysts projecting touches spread them from 84 to 157.
+
+    Averaged raw, a nominal weight of 0.5 hands the Footballers about 64% of the
+    variance in the result. Worse, the ratio is not constant across positions:
+    2.2x at QB, 1.7x at RB, 1.55x at WR. So the raw blend tilts hardest at
+    quarterback, which in a superflex league is the position the board is most
+    sensitive about and the last one you would choose to distort by accident.
+
+    So each side is standardized over the players where **both** exist — a
+    shared row set, or the two standardizations describe different populations —
+    and the blend is mapped back onto the `par` scale so the output stays
+    readable as points above replacement. The weight then means what it says:
+    0.5 is an equal say.
+
+    **Median and IQR rather than mean and standard deviation**, because the two
+    sources are censored differently in the tail. A backup quarterback is
+    genuinely 270 points below a superflex replacement level and the Footballers
+    say so; the ADP curve cannot, because it maps positional rank onto a fitted
+    curve that floors out around -30. That is one real tail and one clipped one,
+    and it moves the measured scale ratio a long way: 1.76 by standard deviation,
+    1.55 by IQR, 1.43 with the dozen deepest quarterbacks dropped. A standard
+    deviation set by twelve players nobody will draft is the wrong number to
+    calibrate the whole board's blend on, so the scale is taken from the body of
+    the distribution instead.
+
+    Standardization is global rather than per position, deliberately. PAR's only
+    job is cross-position comparison; standardizing within position would rescale
+    every position to the same spread and assert that the best tight end is worth
+    the best quarterback. The two sources genuinely disagree about how far a
+    position spreads, and that disagreement is a real opinion worth keeping.
+    """
+    if "ffb_par" not in players.columns or "par" not in players.columns:
+        return players
+
+    both = players.filter(
+        pl.col("par").is_not_null() & pl.col("ffb_par").is_not_null()
+    )
+    if both.height < 4:
+        return players.with_columns(
+            pl.col("par").alias("blend_par"),
+            pl.col("par").alias("blend_par_exact"),
+        )
+
+    def _center_scale(col: str) -> tuple[float, float]:
+        s = both.get_column(col)
+        return float(s.median()), float(s.quantile(0.75) - s.quantile(0.25))
+
+    par_mid, par_scale = _center_scale("par")
+    ffb_mid, ffb_scale = _center_scale("ffb_par")
+
+    # A degenerate spread on either side makes the standardization undefined.
+    # Falling back to par alone is the honest answer; a blend nobody can scale
+    # is not.
+    if par_scale <= 0 or ffb_scale <= 0:
+        return players.with_columns(
+            pl.col("par").alias("blend_par"),
+            pl.col("par").alias("blend_par_exact"),
+        )
+
+    w = float(weight)
+    z_par = (pl.col("par") - par_mid) / par_scale
+    z_ffb = (pl.col("ffb_par") - ffb_mid) / ffb_scale
+    blended = pl.when(pl.col("ffb_par").is_null()).then(pl.col("par")).otherwise(
+        par_mid + (w * z_ffb + (1.0 - w) * z_par) * par_scale
+    )
+
+    # Rounded for display, exact for ranking, and the pair is not redundant.
+    # Standardizing compresses the Footballers' scale by roughly a third, so two
+    # players 0.1 apart on `ffb_par` land 0.06 apart here and collide at one
+    # decimal. Ranking the rounded column then breaks that tie on **row order**,
+    # which is arbitrary in a way that changes if the input is ever reordered —
+    # at weight 1.0 it visibly reversed Pittman and Pollard against their own
+    # ffb_par. Ranking the exact value keeps the order faithful and
+    # reproducible; the tenth is a display convention, not the number.
+    return players.with_columns(
+        blended.alias("blend_par_exact"),
+        blended.round(1).alias("blend_par"),
+    )
+
+
+def compare_footballers(built: dict[str, pl.DataFrame]) -> pl.DataFrame:
+    """What the blend actually moved, player by player.
+
+    The sibling of `compare_baselines`, and it exists for the same reason: a
+    correction that never changes a decision is complexity that is not earning
+    its keep. `rank_shift` is `board_rank - blend_rank`, so positive means the
+    Footballers like him more than this project's own curve does.
+
+    Sorted by the size of the disagreement, because the rows where two
+    independent reads diverge are the only ones worth spending time on. Agreement
+    is not information.
+    """
+    players = built.get("players", pl.DataFrame())
+    if not players.height or "blend_rank" not in players.columns:
+        return pl.DataFrame()
+
+    cols = [
+        c
+        for c in (
+            "name", "position", "team", "adp", "board_rank", "blend_rank",
+            "par", "ffb_par", "blend_par", "ffb_spread", "n_analysts",
+            "stalest_days",
+        )
+        if c in players.columns
+    ]
+    return (
+        players.filter(pl.col("ffb_par").is_not_null())
+        .select(cols)
+        .with_columns(
+            (pl.col("board_rank") - pl.col("blend_rank"))
+            .cast(pl.Int32)
+            .alias("rank_shift")
+        )
+        .sort(pl.col("rank_shift").abs(), descending=True, nulls_last=True)
+    )
+
+
 def build(
     league_id: str | None = None,
     season: int = SEASON,
     use_draft_demand: bool = True,
     gap: float = ex.TIER_GAP_POINTS,
     profile: LeagueProfile | None = None,
+    footballers_weight: float = FOOTBALLERS_WEIGHT,
 ) -> dict[str, pl.DataFrame]:
     """The whole board, end to end, for one league profile.
 
@@ -520,6 +733,17 @@ def build(
         pool, slots=keeper_slots(league_id) if profile.keepers else None,
         teams=profile.teams,
     )
+    # Attached to the *pool*, before keepers and drafted players leave, because
+    # that is the frame the Footballers' own replacement level has to be read
+    # off — the same pool and the same demand the board's baseline uses. See
+    # `attach_footballers` for why each source keeps its own baseline.
+    pool = attach_footballers(pool, summary, use_draft_demand=use_draft_demand)
+    if "ffb_par" in pool.columns and not pool.get_column("ffb_par").is_not_null().any():
+        warnings.append(
+            "The Fantasy Footballers' projections did not load, so the board is "
+            "this project's curve alone. Their page is public and unauthenticated; "
+            "a failure here is a network problem or a site change, not a paywall."
+        )
     # Replacement is computed *before* live picks are removed, deliberately.
     # PAR is a valuation, and a valuation should not move because a leaguemate
     # picked: excluding drafted players from the baseline pool while leaving
@@ -542,18 +766,33 @@ def build(
     # even tell these two apart" — and the board needs both, because a tier break
     # that falls inside the standard error is a break the data did not earn.
     players = indistinguishable(players, value_col="par")
-    # A provisional ordering only. `rank_board` rewrites `board_rank` once
-    # quality is attached, because an ordinal rank breaks ties by row order and
-    # row order here is ADP — see that function. This stays so `build` returns a
-    # sorted board on its own, for callers with no valuation frame.
-    #
-    # `nulls_last` on both: polars defaults a descending sort to nulls FIRST, so
-    # a player the ADP curve could not match would open the board looking like
-    # its best pick. Latent today (no null PAR on the live board) and one feed
-    # change from being live.
+    # A provisional ordering only. `rank_board` rewrites `board_rank` in the app
+    # once quality and environment are attached, because an ordinal rank breaks
+    # ties by row order and row order here is ADP — see that function. This stays
+    # so `build` returns a sorted board on its own, for callers with no valuation
+    # frame, and because it is the **unblended control** that makes
+    # `compare_footballers` a real comparison rather than a restatement — the
+    # same reason `compare_baselines` exists.
     players = players.with_columns(
         pl.col("par").rank("ordinal", descending=True).cast(pl.Int32).alias("board_rank")
-    ).sort("par", descending=True, nulls_last=True)
+    )
+    players = blend_par(players, weight=footballers_weight)
+    if "blend_par_exact" in players.columns:
+        players = (
+            players.with_columns(
+                pl.col("blend_par_exact")
+                .rank("ordinal", descending=True)
+                .cast(pl.Int32)
+                .alias("blend_rank")
+            )
+            .sort("blend_par_exact", descending=True, nulls_last=True)
+            .drop("blend_par_exact")
+        )
+    else:
+        # `nulls_last` matters here: polars defaults a descending sort to nulls
+        # FIRST, so a player the ADP curve could not match would open the board
+        # looking like its best pick.
+        players = players.sort("par", descending=True, nulls_last=True)
 
     return {
         "profile": profile,
@@ -1046,7 +1285,7 @@ def signal(
 
 
 def apply_env_weight(
-    players: pl.DataFrame, weight: float = ENV_WEIGHT
+    players: pl.DataFrame, weight: float = ENV_WEIGHT, base: str | None = None
 ) -> pl.DataFrame:
     """`par` adjusted for the offence a player actually plays in.
 
@@ -1065,16 +1304,26 @@ def apply_env_weight(
     ignoring by default. See the long note in `config.py`, and measure it before
     trusting the exact figure.
 
+    **`base` defaults to `blend_par` when the Footballers blend has run**, and to
+    `par` otherwise. That ordering is the point of the whole chain: the ADP curve
+    gives a *slot* value blind to both player and team, the Footballers blend adds
+    the player, and this adds the team. Applying the environment to raw `par`
+    while a blended column sat unused would throw away the only player-level
+    projection on the board.
+
     Adds `par_env`. Falls back to `par` where the environment join found nothing,
     so an unreachable Vegas feed costs a correction rather than a row.
     """
-    if not players.height or "par" not in players.columns:
+    if not players.height:
+        return players
+    base = base or ("blend_par" if "blend_par" in players.columns else "par")
+    if base not in players.columns:
         return players
     if "env_swing" not in players.columns:
-        return players.with_columns(pl.col("par").alias("par_env"))
+        return players.with_columns(pl.col(base).alias("par_env"))
 
     return players.with_columns(
-        (pl.col("par") + weight * pl.col("env_swing").fill_null(0.0))
+        (pl.col(base) + weight * pl.col("env_swing").fill_null(0.0))
         .round(1)
         .alias("par_env")
     )

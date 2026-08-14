@@ -124,6 +124,15 @@ def run(light: bool = False) -> None:
         lambda: adp.snapshot(SUPERFLEX_ADP_SCORING, LEAGUE_ADP_TEAMS),
     )
 
+    _section("The Fantasy Footballers")
+    # Their page serves today's projections only. Like the ADP history this
+    # accumulates one day at a time and cannot be backfilled, so a day not run
+    # is a day of analyst movement lost. Run daily from now to kickoff.
+    from src import footballers as ffb
+
+    step("footballers projections", ffb.fetch)
+    step("footballers snapshot", ffb.snapshot)
+
     _section("claims ledger")
     # Depth-chart diffs always run; news extraction self-skips without an
     # ANTHROPIC_API_KEY in the shell. Like the ADP history, the ledger only
