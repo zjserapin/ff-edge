@@ -4,7 +4,7 @@
 **Branch:** `measure-what-repeats`, pushed through commit 27. `origin/main` still
 at `5da50ec` (07-27), so everything lives only on the branch. That is a merge
 decision, not a backup problem.
-**State:** 283 tests pass with a league, 278 pass and 7 skip without one.
+**State:** 303 tests pass with a league, 298 pass and 7 skip without one.
 **The Shiva Bowl draft is 2026-08-22 at 19:00.** Nine days. **Two more drafts
 follow it** — see the calendar below.
 
@@ -63,6 +63,7 @@ which is the one Phase 0 item still outstanding.
 | `src/glossary.py` | 8 new terms. `vegas_gap` had been displayed on the Board tab with no definition at all. |
 | `app.py` | `_tab_big_board`, now first in the tab strip. |
 | `tests/test_big_board.py` | **New.** 9 unit + 2 driven-tab, the latter ported from `test_draft_day.py`. |
+| `tests/test_nflverse.py` | **New.** 20 tests pinning the preseason guard, verified against the unguarded code — 15 of them fail without it. |
 | `BIG_BOARD_SPEC.md` | **New.** Spec, then build, then the results written back into it. |
 | `CLAUDE.md` | The future-season trap, and why it was invisible. |
 | `RESEARCH_SPEC.md` | Unchanged so far — **its §3 and §5.2 both need correcting**, see below. |
@@ -266,8 +267,8 @@ seasons.
 ## Commands
 
 ```bash
-uv run pytest                                                  # 278 pass, 7 skip
-FF_EDGE_LEAGUE_ID=... FF_EDGE_SLEEPER_USER=... uv run pytest    # 283 pass, 2 skip
+uv run pytest                                                  # 298 pass, 7 skip
+FF_EDGE_LEAGUE_ID=... FF_EDGE_SLEEPER_USER=... uv run pytest    # 303 pass, 2 skip
 FF_EDGE_LEAGUE_ID=... uv run streamlit run app.py
 FF_EDGE_PROFILE=standard_12 uv run python -c "from src import board; print(board.build()['players'].head())"
 uv run python -m src.peek                                      # the screens, still unreached from the UI

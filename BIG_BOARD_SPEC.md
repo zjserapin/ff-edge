@@ -1,6 +1,7 @@
 # big board spec — one ranked list, before the draft
 
-**Written 2026-08-13. Status: proposed, not built.**
+**Written 2026-08-13. Status: built the same day — see §9 for what shipped and
+what the build changed. §1-7 are the spec as agreed, left as written.**
 Pulls `RESEARCH_SPEC.md` §5.2 forward from Phase 1 into Phase 0, because it is
 what Zach actually asked for:
 
@@ -180,8 +181,8 @@ Applicable traps from `CLAUDE.md`, all of which fail silently:
 
 ## 9. What shipped, and what it cost
 
-Built 2026-08-13, same day as the spec. 283 tests pass with a league (up from
-272), 278 pass and 7 skip without one.
+Built 2026-08-13, same day as the spec. 303 tests pass with a league (up from
+272), 298 pass and 7 skip without one.
 
 | where | what |
 |---|---|
