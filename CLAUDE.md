@@ -197,6 +197,25 @@ with no ADP-curve match, every time. Pass `nulls_last=True` on any descending
 sort meant to surface a top. `expected.tiers` drops null values before sorting,
 which is why the real board is unaffected and an ad-hoc query is not.
 
+**But `nulls_last=True` on a *tiebreak* key is a different thing, and there it
+silently demotes.** The two uses look identical and are opposites. On a primary
+sort it keeps unscored rows off the top, which is right. On a secondary key it
+ranks "we did not measure him" as "worst of his group" — which `rank_board`
+promised in its own docstring not to do while doing exactly that. All seven
+unscored players inside the 2026 roster-demand line sat last in their block, and
+Brock Purdy, the **highest** `par_env` in his, sat third of three.
+
+The fix is to **impute rather than sink**: `rank_board` fills a missing
+`quality_pct` with its block's median, so an unmeasured player lands among the
+block's typical members, and only an exact tie in every key falls back to
+preferring the measured player. Ask which claim the null is making — *"not on
+the board"* belongs last, *"not measured"* belongs in the middle.
+
+Related, same function: **a stable sort makes incoming row order the real last
+tiebreak**, which is an invariant nothing enforces. `rank_board` now names
+`value_col` as an explicit final key so an upstream join that reorders rows
+cannot reorder the board.
+
 **Both `ff_opportunity` pbp tables carry weeks 19-22 with no `season_type`.**
 Filter weeks explicitly.
 

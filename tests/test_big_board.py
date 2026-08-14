@@ -414,11 +414,13 @@ def test_the_block_outranks_quality_across_groups() -> None:
     assert out.get_column("name").to_list() == ["Poor but valuable", "Great but cheap"]
 
 
-def test_an_unscored_player_sorts_last_inside_his_block() -> None:
-    """"Not measured" is not "worst", but it cannot open the board either.
+def test_an_unscored_player_cannot_open_a_block() -> None:
+    """"Not measured" cannot open the board.
 
-    Polars sorts descending with nulls FIRST by default, so without the guard the
-    top of every block is the players nothing is known about.
+    Polars sorts descending with nulls FIRST by default, so without a guard the
+    top of every block is the players nothing is known about. The guard used to
+    be `nulls_last`, which overshot — see the test below. It is now the median
+    plus a measured-first tiebreak, and this case still has to hold.
     """
     board = _ranked(
         [("Unscored", "RB", 72.6, 1, None), ("Scored", "RB", 72.6, 1, 20.0)]
@@ -427,6 +429,74 @@ def test_an_unscored_player_sorts_last_inside_his_block() -> None:
     out = bd.rank_board(board).sort("board_rank")
 
     assert out.get_column("name").to_list() == ["Scored", "Unscored"]
+
+
+def test_an_unscored_player_is_not_demoted_to_the_bottom_of_his_block() -> None:
+    """The finding-03 regression.
+
+    `nulls_last` on the quality key did exactly what the docstring promised it
+    would not: on the 2026 board all seven unscored players inside roster demand
+    sat last in their block, and Brock Purdy — the *highest* `par_env` in his —
+    sat third of three. A missing quality score is a gap in last season's volume
+    coverage, not a finding about the player.
+
+    Here the unscored player is mid-pack on quality by construction: the block's
+    scored members run 90 and 10, so a median stand-in places him between them.
+    Bottom of the block is the one answer the data does not support.
+    """
+    board = _ranked(
+        [
+            ("Best", "RB", 72.6, 1, 90.0),
+            ("Unscored", "RB", 72.6, 1, None),
+            ("Worst", "RB", 72.6, 1, 10.0),
+        ]
+    )
+
+    out = bd.rank_board(board).sort("board_rank")
+
+    assert out.get_column("name").to_list() == ["Best", "Unscored", "Worst"]
+
+
+def test_a_block_with_no_quality_at_all_falls_back_to_the_boards_own_number() -> None:
+    """Not to ADP, and not to the order the rows happened to arrive in.
+
+    Where the median cannot be computed the third key decides, and it is the
+    value the board already ranked on. Deferring to price here would reintroduce
+    the circularity this whole function exists to remove.
+    """
+    board = _ranked(
+        [
+            ("Low", "RB", 60.0, 1, None),
+            ("High", "RB", 70.0, 1, None),
+            ("Mid", "RB", 65.0, 1, None),
+        ]
+    )
+
+    out = bd.rank_board(board).sort("board_rank")
+
+    assert out.get_column("name").to_list() == ["High", "Mid", "Low"]
+
+
+def test_the_last_tiebreak_does_not_depend_on_incoming_row_order() -> None:
+    """A board that reorders because an upstream join reordered is not a board.
+
+    Polars sorts stably, so equal keys used to keep whatever order the frame
+    arrived in — an invariant nothing enforced. `blend_par` already hit the sharp
+    edge of that when rounding collapsed two players into one displayed value.
+    """
+    rows = [
+        ("A", "RB", 72.6, 1, 50.0),
+        ("B", "RB", 70.0, 1, 50.0),
+        ("C", "RB", 68.0, 1, 50.0),
+    ]
+    forward = bd.rank_board(_ranked(rows)).sort("board_rank")
+    reversed_ = bd.rank_board(_ranked(list(reversed(rows)))).sort("board_rank")
+
+    assert (
+        forward.get_column("name").to_list()
+        == reversed_.get_column("name").to_list()
+        == ["A", "B", "C"]
+    )
 
 
 def test_ranking_survives_a_board_with_no_quality_at_all() -> None:
