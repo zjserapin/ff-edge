@@ -2331,6 +2331,12 @@ def _draft_board() -> dict[str, Any]:
     # be the conservative choice; this errs toward using the adjustment at all.
     players = bd.indistinguishable(players, value_col="par_env")
     players = bd.positional_drop(players)
+    # Roster demand before ranking, and on the same column the ranking uses: the
+    # cap decides *how many* of a position the draft will absorb, while
+    # `par_env` still decides *which* of them. Reversing that order would rank
+    # the board first and then cut a line through an ordering that had already
+    # interleaved the positions, which is the distortion this is here to remove.
+    players = bd.roster_demand(players, out.get("replacement"), value_col="par_env")
     out["players"] = bd.rank_board(players, value_col="par_env")
     return out
 
@@ -2842,8 +2848,14 @@ def _block_similarity_panel(players: pl.DataFrame) -> None:
             "and which one you want depends on the rest of your roster."
         )
 
+        # Below the roster-demand line `block` is null on purpose — the board is
+        # in ADP order there and has resolved nothing to compare. Grouping without
+        # dropping those first collects all ~98 of them into one phantom "block"
+        # whose label then fails to look itself up, because `== None` matches no
+        # rows in polars.
         counts = (
-            players.group_by("block")
+            players.filter(pl.col("block").is_not_null())
+            .group_by("block")
             .agg(pl.len().alias("n"), pl.col("position").first().alias("pos"))
             .filter(pl.col("n") > 1)
             .sort("block")
@@ -3061,10 +3073,25 @@ def _tab_big_board(p: dict[str, Any]) -> None:
         )
 
     kept, priced = data["kept"].height, players.get_column("vegas_gap").drop_nulls().len()
-    left, mid, right = st.columns(3)
-    left.metric("Draftable", players.height)
-    mid.metric("Off the board (kept)", kept)
-    right.metric("With a book line", priced)
+    inside = (
+        int(players.get_column("in_demand").sum())
+        if "in_demand" in players.columns
+        else None
+    )
+    cols = st.columns(4 if inside is not None else 3)
+    cols[0].metric("Draftable", players.height)
+    cols[1].metric("Off the board (kept)", kept)
+    if inside is not None:
+        cols[2].metric(
+            "Inside roster demand",
+            inside,
+            help=(
+                "Players inside the number of their position the draft still has "
+                "to fill. Below this line the board is in ADP order and `block` "
+                "is blank, because PAR has no lineup value under replacement."
+            ),
+        )
+    cols[-1].metric("With a book line", priced)
 
     st.caption(
         f"**{players.height - priced} of {players.height} players have no "
@@ -3112,12 +3139,16 @@ def _tab_big_board(p: dict[str, Any]) -> None:
     # applied: `par` is the ADP curve's slot value (blind to player and team),
     # `ffb_par` adds the player, `env_swing` adds the team. Anyone asking "why is
     # he here" should be able to read the answer across one row.
+    # `pos_rank` sits next to `position` because the two are read together on the
+    # clock — "the 6th of 8 tight ends this draft still needs" is the sentence
+    # that decides whether you take him now, and it is the number the
+    # roster-demand line is drawn on.
     columns = [
         c for c in (
-            "block", "name", "position", "team", "bye", "tier", "same",
-            "adp", "adj_adp", "par", "ffb_par", "ecr", "ecr_sd", "blend_par",
-            "env_swing", "par_env", "drop", "quality_pct", "value_gap",
-            "vegas_gap", "signal", "board_rank",
+            "block", "name", "position", "pos_rank", "demand", "team", "bye",
+            "tier", "same", "adp", "adj_adp", "par", "ffb_par", "ecr", "ecr_sd",
+            "blend_par", "env_swing", "par_env", "drop", "quality_pct",
+            "value_gap", "vegas_gap", "signal", "board_rank",
         ) if c in view.columns
     ]
     # `nulls_last` on every sort in this file, ascending included: polars
@@ -3146,6 +3177,21 @@ def _tab_big_board(p: dict[str, Any]) -> None:
         "trusting the exact figure**; it may well come back null like the last "
         "two things measured here."
     )
+    if "in_demand" in view.columns:
+        st.caption(
+            "**The board is cut in two at roster demand, and the blank `block` "
+            "column is where.** Above the line sit the players inside the number "
+            "of their position this draft still has to fill — that count comes "
+            "from the league's own roster shape and its keepers, not from a "
+            "number anyone chose. Below it the order is **ADP's, not this "
+            "tool's**, and that is deliberate: under replacement, PAR has no "
+            "lineup value left to rank on, because you would start the freely "
+            "available replacement instead. Ranking −15 above −35 there was "
+            "asserting a distinction PAR cannot support, and it was putting "
+            "every tight end on the board a median **47 places** above his ADP. "
+            "The board now disagrees with the market where it has grounds to and "
+            "says so plainly where it does not."
+        )
     st.caption(
         "**`par` deliberately does not fall monotonically down this board, and "
         "that is the fix rather than a bug.** Rows are ordered by `block` — "

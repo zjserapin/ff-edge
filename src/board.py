@@ -1564,6 +1564,78 @@ def apply_env_weight(
     )
 
 
+def roster_demand(
+    players: pl.DataFrame,
+    replacement_frame: pl.DataFrame | None,
+    value_col: str = "par_env",
+) -> pl.DataFrame:
+    """Mark where each position runs out of slots the league will actually fill.
+
+    **The fix for the board's largest measured distortion, and it asserts no new
+    number.** Ranking across positions on points-above-replacement promoted every
+    tight end on the 2026 board — median **+47.5 places** against ADP, never fewer
+    than +23 — and the cause is not any weight or blend. It is that PAR is a
+    *level above a positional baseline* and the board holds each position to a
+    different depth: 67 receivers against 18 tight ends. The deep receivers sit
+    far below receiver replacement (median `par` -17.9) while the deep tight ends
+    sit essentially at theirs (median 0.0), so a cross-position sort interleaves
+    TE15 at -15 ahead of WR55 at -35.
+
+    That comparison is arithmetically correct and decision-useless. **Below
+    replacement, PAR carries no lineup value at all** — you would start the freely
+    available replacement instead, so the marginal starting-lineup points from any
+    of these players is zero regardless of how negative the number is. Ranking -15
+    above -35 asserts a distinction PAR cannot support, which is the same house
+    rule `expected.tiers` follows when it refuses to force a rank order the curve
+    does not earn.
+
+    So the board is split at the line where PAR stops meaning anything, and the
+    line needs no new constant: `replacement()` already computes
+    `replacement_rank` per position from the league's own roster shape and its
+    keepers. A player inside it is inside the demand the draft has to fill; the
+    first player past it *is* the replacement, by construction. On the 2026 board
+    that is 56 players — 22 RB, 21 WR, 7 QB, 6 TE.
+
+    **`pos_rank` is taken on `value_col`, not on ADP**, so the board still gets to
+    disagree with the market about *which* players fill those slots. It only stops
+    disagreeing about *how many* exist.
+
+    A position missing from `replacement_frame` keeps every player inside the
+    line, and so does a player the ranking column could not score. Both are the
+    `rank_board` lesson: not measured is not worst, and a data gap must not quietly
+    demote someone sixty places.
+
+    Adds `demand`, `pos_rank` and `in_demand`. `rank_board` reads them.
+    """
+    if not players.height or "position" not in players.columns:
+        return players
+    if value_col not in players.columns:
+        return players
+    if replacement_frame is None or not replacement_frame.height:
+        return players
+    if "replacement_rank" not in replacement_frame.columns:
+        return players
+
+    # `replacement_rank` is the first player *past* demand, so demand is one less.
+    demand = replacement_frame.select(
+        "position",
+        (pl.col("replacement_rank") - 1).cast(pl.Int32).alias("demand"),
+    )
+    return (
+        players.join(demand, on="position", how="left")
+        .with_columns(
+            pl.col(value_col)
+            .rank("ordinal", descending=True)
+            .over("position")
+            .cast(pl.Int32)
+            .alias("pos_rank")
+        )
+        .with_columns(
+            (pl.col("pos_rank") <= pl.col("demand")).fill_null(True).alias("in_demand")
+        )
+    )
+
+
 def rank_board(players: pl.DataFrame, value_col: str = "par") -> pl.DataFrame:
     """Order the board by what the curve can actually resolve, then by quality.
 
@@ -1610,6 +1682,19 @@ def rank_board(players: pl.DataFrame, value_col: str = "par") -> pl.DataFrame:
     within-block ordering could never have reached the comparison being asked
     about.
 
+    **The board is cut in two at roster demand, when `roster_demand` has run.**
+    Everything above is ordered as described; everything below is ordered by ADP
+    and carries a null `block`, because below replacement PAR has no lineup value
+    to rank on and this tool has nothing to say. Deferring there is not a
+    concession — it is the only honest answer, and it is what stops eighteen tight
+    ends from being interleaved into the top hundred on the strength of a number
+    that means "less bad than a receiver nobody will start either". See
+    `roster_demand`.
+
+    A null `block` below the line is deliberate and should stay visible. The
+    column is the board's claim to have resolved something; printing a number
+    there would extend the claim past where it holds.
+
     Adds `block` and rewrites `board_rank`. Players with no quality score sort
     last inside their block — "not measured" is not "worst".
     """
@@ -1628,23 +1713,35 @@ def rank_board(players: pl.DataFrame, value_col: str = "par") -> pl.DataFrame:
         if "quality_pct" in players.columns
         else pl.lit(None, dtype=pl.Float64)
     )
+    keyed = players.with_columns(group_key.alias("_group_par"), quality.alias("_q"))
 
-    return (
-        players.with_columns(group_key.alias("_group_par"), quality.alias("_q"))
-        # nulls_last on both keys. Polars defaults descending sorts to nulls
-        # FIRST, so an unscored player would otherwise open the board — the exact
-        # trap CLAUDE.md documents, and the reason a "best N" query here returns
-        # the N rows that could not be scored.
-        .sort(["_group_par", "_q"], descending=[True, True], nulls_last=True)
-        .with_columns(
-            pl.col("_group_par")
-            .rank("dense", descending=True)
-            .cast(pl.Int32)
-            .alias("block"),
-            pl.int_range(1, pl.len() + 1).cast(pl.Int32).alias("board_rank"),
+    # nulls_last on every key. Polars defaults descending sorts to nulls FIRST, so
+    # an unscored player would otherwise open the board — the exact trap CLAUDE.md
+    # documents, and the reason a "best N" query here returns the N rows that
+    # could not be scored.
+    def _ranked(frame: pl.DataFrame) -> pl.DataFrame:
+        return frame.sort(
+            ["_group_par", "_q"], descending=[True, True], nulls_last=True
+        ).with_columns(
+            pl.col("_group_par").rank("dense", descending=True).cast(pl.Int32).alias("block")
         )
-        .drop("_group_par", "_q")
-    )
+
+    if "in_demand" not in keyed.columns:
+        ordered = _ranked(keyed)
+    else:
+        inside = _ranked(keyed.filter(pl.col("in_demand")))
+        # Ascending, and ADP's own nulls last: a player the market never priced is
+        # not the best pick left on the board.
+        beyond = keyed.filter(~pl.col("in_demand")).with_columns(
+            pl.lit(None, dtype=pl.Int32).alias("block")
+        )
+        if "adp" in beyond.columns:
+            beyond = beyond.sort("adp", nulls_last=True)
+        ordered = pl.concat([inside, beyond], how="vertical")
+
+    return ordered.with_columns(
+        pl.int_range(1, pl.len() + 1).cast(pl.Int32).alias("board_rank")
+    ).drop("_group_par", "_q")
 
 
 def positional_drop(players: pl.DataFrame, spots: int = 5) -> pl.DataFrame:
