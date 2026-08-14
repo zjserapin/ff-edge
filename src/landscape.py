@@ -100,6 +100,20 @@ def concentration(
 ) -> pl.DataFrame:
     """What fraction of positional points the top N players account for.
 
+    **Deliberately unreachable from the dashboard as of 2026-08-13, and that is
+    not the same as dead code.** The Landscape tab was cut and this section was
+    the one deleted outright rather than rehomed: "are the top players taking a
+    bigger slice" is a genuinely interesting question that changes no draft
+    choice. It stays here because the measurement is sound, tested, and produced
+    a real finding worth keeping — over 2018-2025 the answer is mostly *no*, with
+    QB/RB/WR all shifting under two points, and **tight end moving the other
+    way**: the top five fell from 31.7% of the position to 23.9%. The
+    elite-tight-end premium is a claim about a few players owning the position,
+    and across this window the position spread out instead.
+
+    So: do not re-surface it looking for a draft edge, and do not delete it as an
+    orphan. If it earns a home again it is as an article, not a board column.
+
     The denominator is the entire argument. Counting every player who caught a
     pass makes this metric a function of how many bodies the league cycled
     through — the top-15 share "falls" in a year with more garbage-time

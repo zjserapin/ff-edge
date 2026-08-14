@@ -230,15 +230,6 @@ def _par(
 
 
 @st.cache_data(show_spinner=False)
-def _concentration(
-    scoring_key: tuple[tuple[str, float], ...], shares: tuple[int, ...]
-) -> pl.DataFrame:
-    return ls.concentration(
-        scoring=dict(scoring_key), shares=shares, season_points=_season_points(scoring_key)
-    )
-
-
-@st.cache_data(show_spinner=False)
 def _scarcity(
     scoring_key: tuple[tuple[str, float], ...],
     roster: tuple[str, ...],
@@ -377,12 +368,22 @@ def _sidebar() -> dict[str, Any]:
 # --- Landscape tab ----------------------------------------------------------
 
 
-def _tab_landscape(p: dict[str, Any]) -> None:
+def _positional_value_section(p: dict[str, Any]) -> None:
+    """Where replacement level sits, and how it has moved.
+
+    **Demoted out of its own tab on 2026-08-13.** This is PAR's derivation rather
+    than a decision: it explains *why* a quarterback and a tight end can be
+    compared at all, which is a thing you settle once and revisit rarely. It sat
+    in the tab strip in front of surfaces read on the clock.
+
+    What it is genuinely good for is auditing a surprise on the Big Board. When
+    PAR says something counter-intuitive, replacement level is usually the reason,
+    and this is where you can see it.
+    """
     dark = p["dark"]
     pos_scale = theme.position_scale(dark)
-    ink = theme.ink(dark)
 
-    st.subheader("How positional value has moved")
+    st.markdown("##### How positional value has moved")
     st.caption(
         f"Seasons {FEATURE_SEASONS[0]}–{FEATURE_SEASONS[-1]}, every season "
         "rescored under the settings in the sidebar. Weeks 1–14 only — the "
@@ -473,12 +474,29 @@ def _tab_landscape(p: dict[str, Any]) -> None:
         )
         table(repl)
 
-    # --- Scarcity curves ---
-    st.markdown("#### The shape of the dropoff")
+
+def _dropoff_section(p: dict[str, Any]) -> None:
+    """The positional curves — the picture behind the `drop` column.
+
+    **Promoted onto the Big Board on 2026-08-13, when the rest of Landscape was
+    cut.** It survived the cut because it is the only part of that tab shaped
+    like a decision, and because it is the chart form of the argument the board
+    now makes numerically: `par` is a *level*, this is the *shape*, and between
+    two positions you intend to fill anyway the shape decides.
+
+    Read against the board's `drop` column rather than instead of it. `drop`
+    prices this season's curve at one horizon; this shows the whole curve across
+    seasons, which is what tells you whether a cliff is a real feature of the
+    position or an artefact of one year's players.
+    """
+    dark = p["dark"]
+    ink = theme.ink(dark)
+
+    st.markdown("##### The shape of the dropoff")
     st.caption(
-        "The average above tells you how much a position is worth; this tells "
-        "you *where*. A cliff is worth reaching for, a gentle slope is worth "
-        "waiting on, and both can produce the same average."
+        "Where a position's value actually falls away. A cliff is worth reaching "
+        "for, a gentle slope is worth waiting on, and both can produce the same "
+        "average — which is exactly why the board carries `drop` next to `par`."
     )
     c1, c2, c3 = st.columns([2, 2, 2])
     with c1:
@@ -519,6 +537,15 @@ def _tab_landscape(p: dict[str, Any]) -> None:
         max_rank,
         basis_key,
     )
+    # Its own guard now. This used to live behind one early return covering the
+    # whole Landscape tab; splitting the tab up left three call sites where an
+    # empty frame would reach `get_column("season")` and raise ColumnNotFound —
+    # which inside a Streamlit tab kills the entire page, not the section.
+    if not scarcity.height or "season" not in scarcity.columns:
+        st.warning(
+            "No scored seasons found. Run `uv run python -m src.bootstrap --light`."
+        )
+        return
     seasons = sorted(scarcity.get_column("season").unique().to_list())
     chosen = st.multiselect(
         "Seasons", seasons, default=seasons[-3:], key="scarcity_seasons"
@@ -664,14 +691,37 @@ def _tab_landscape(p: dict[str, Any]) -> None:
             )
         )
 
-    # --- Cross-positional mix ---
-    st.markdown("#### Who actually occupies the top of the board")
+def _positional_mix_section(p: dict[str, Any]) -> None:
+    """How many of each position have historically occupied the top of a board.
+
+    Kept, demoted, and worth being precise about what it does and does not
+    settle. It is the early-RB argument as a countable fact — but it counts what
+    *PAR* put at the top in past seasons, so it inherits PAR's blind spot: it
+    ranks by level and says nothing about the shape of the curve underneath.
+
+    The 2026 board is the case in point. Six running backs carry identical PAR
+    and would each be counted here as a top-24 player, while the receiver behind
+    them is the one you cannot replace. Read it as context for replacement level,
+    never as a draft plan.
+    """
+    dark = p["dark"]
+    pos_scale = theme.position_scale(dark)
+
+    st.markdown("##### Who actually occupies the top of the board")
     st.caption(
-        "Every position ranked together on value over replacement. This is the "
-        "early-RB argument as a countable fact rather than an opinion."
+        "Every position ranked together on value over replacement, per season. "
+        "Counts *level*, not shape — see the dropoff curves on the Big Board for "
+        "the half this cannot see."
     )
     cross = _cross(p["scoring_key"], p["roster_positions"], p["teams"], p["flex_split"])
+    if not cross.height:
+        st.warning(
+            "No scored seasons found. Run `uv run python -m src.bootstrap --light`."
+        )
+        return
     mix = ls.positional_mix(cross)
+    if not mix.height:
+        return
     cutoff = st.select_slider(
         "Top N by value over replacement", options=[12, 24, 36, 48], value=24
     )
@@ -705,99 +755,6 @@ def _tab_landscape(p: dict[str, Any]) -> None:
     )
     data_expander(mix.filter(pl.col("cutoff") == cutoff))
 
-    # --- Concentration ---
-    st.markdown("#### Are the top players taking a bigger slice?")
-    st.caption(
-        "Share of positional points held by the top N, among a pool of roughly "
-        "three times the number of starters. An uncapped pool would make this a "
-        "measure of how many replacement bodies the league cycled through."
-    )
-    conc = _concentration(p["scoring_key"], (5, 15, 30))
-    # Faceted by position and coloured by top-N, not the reverse. Top 5 / 15 / 30
-    # is an *ordered* quantity, so it belongs on the single-hue ordinal ramp
-    # where darker means a wider slice of the pool; position is identity and gets
-    # its own panel. Painting an ordered variable with categorical hues asks the
-    # reader to remember an arbitrary mapping for something that has a natural
-    # one.
-    steps = theme.ordinal_steps(3, dark)
-    top_domain = [5, 15, 30]
-    conc_chart = (
-        alt.Chart(conc.to_pandas())
-        .mark_line(strokeWidth=2, point=alt.OverlayMarkDef(size=55, filled=True))
-        .encode(
-            x=alt.X("season:O", title=None),
-            y=alt.Y(
-                "share:Q",
-                title="Share of positional points",
-                axis=alt.Axis(format="%"),
-                scale=alt.Scale(zero=False),
-            ),
-            color=alt.Color(
-                "top_n:N",
-                scale=alt.Scale(domain=top_domain, range=steps),
-                title="Top N",
-                legend=alt.Legend(orient="top"),
-            ),
-            tooltip=[
-                alt.Tooltip("season:O", title="Season"),
-                alt.Tooltip("position:N", title="Position"),
-                alt.Tooltip("top_n:Q", title="Top N"),
-                alt.Tooltip("share:Q", title="Share", format=".1%"),
-                alt.Tooltip("pool_size:Q", title="Pool"),
-            ],
-        )
-        .properties(height=480, width=380)
-        .facet(column=alt.Column("position:N", title=None,
-                                 sort=list(theme.position_colors())))
-        .resolve_scale(y="independent")
-    )
-    st.altair_chart(theme.base_chart(conc_chart, dark), width="stretch")
-    chart_note(
-        ["share", "pool_size"],
-        extra=(
-            "One panel per position, darker for a wider slice of the pool. The "
-            "pool is capped at roughly three times the number of starters, so "
-            "this measures how top-heavy the draftable players are rather than "
-            "how many bodies the league used. Note the independent y-axes — the "
-            "question is the direction each position moved, not whether the top "
-            "5 outrank the top 30, which they do by construction."
-        ),
-    )
-
-    # The chart shows the shape; this answers the question the chart is being
-    # asked. Eyeballing eight seasons of a line for a trend invites finding one.
-    first, last = (
-        int(conc.get_column("season").min()),
-        int(conc.get_column("season").max()),
-    )
-    drift = (
-        conc.filter(pl.col("season").is_in([first, last]))
-        .pivot(on="season", index=["position", "top_n"], values="share")
-        .with_columns(
-            (pl.col(str(last)) - pl.col(str(first))).round(4).alias("change")
-        )
-        .sort(["position", "top_n"])
-    )
-    st.markdown(f"###### Where it actually moved, {first} to {last}")
-    st.caption(
-        "Positive means the top of that position took a bigger slice than it "
-        "did at the start of the window. Two endpoints, not a fitted trend — "
-        "with eight seasons a slope would be a decoration on the same two "
-        "numbers."
-    )
-    table(drift, pretty=False)
-    st.info(
-        "**The answer is mostly no, and tight end moved the other way.** "
-        "Quarterback, running back and receiver concentration all shifted by "
-        "under two points across eight seasons, which on shares this size is "
-        "flat. Tight end is the exception and it went *down*: the top five fell "
-        "from 31.7% of the position to 23.9%, and the top fifteen from 64.7% to "
-        "58.6%. The elite-tight-end premium is a claim about a few players "
-        "owning the position, and over this window the position spread out "
-        "instead.",
-        icon="📉",
-    )
-    data_expander(conc)
 
 
 @st.cache_data(show_spinner="Building features…")
@@ -3022,6 +2979,15 @@ def _tab_big_board(p: dict[str, Any]) -> None:
         help="The full filtered board, not just the rows shown above.",
     )
 
+    st.divider()
+
+    # Collapsed by design. It is the picture behind `drop`, and the column is the
+    # part read on the clock — this is what you open when the column says
+    # something surprising and you want to see whether the cliff is a real
+    # feature of the position or one season's players.
+    with st.expander("The curves behind the drop column"):
+        _dropoff_section(p)
+
 
 def _tab_research(p: dict[str, Any]) -> None:
     """The measured nulls and the supporting work, collapsed.
@@ -3048,6 +3014,10 @@ def _tab_research(p: dict[str, Any]) -> None:
 
     with st.expander("Do these metrics repeat? — stability", expanded=True):
         _stability_section(p["dark"])
+    with st.expander("Where replacement level sits, and how it has moved"):
+        _positional_value_section(p)
+        st.divider()
+        _positional_mix_section(p)
     with st.expander("Comparable players, and the scores behind them"):
         _tab_players(p, sections=False)
     with st.expander("Did last season's usage predict beating ADP? — a measured null"):
@@ -3084,8 +3054,21 @@ def main() -> None:
     # Players and Strategy merged into Research on 2026-08-10. See
     # DASHBOARD_SPEC_v2.md; the short version is that neither is read on the
     # clock and both were sitting in front of the two that are.
-    big_board, draft_day, board, landscape, research, reference = st.tabs(
-        ["Big Board", "Draft Day", "Board", "Landscape", "Research", "Glossary"]
+    #
+    # Landscape was cut on 2026-08-13 and split three ways rather than deleted,
+    # because exactly one of its four sections was shaped like a decision:
+    #
+    #   the dropoff curves      -> Big Board. The picture behind `drop`.
+    #   PAR per starting slot   -> Research. PAR's derivation, settled once.
+    #   positional mix          -> Research. Context, and it counts level only.
+    #   concentration over time -> deleted. A good article; changes no pick.
+    #
+    # The deletion is the one to defend. "Are the top players taking a bigger
+    # slice" is genuinely interesting and the answer was mostly no, with tight
+    # end moving the other way — but no draft choice turns on it, and the finding
+    # survives in RESEARCH_SPEC.md §4 rather than costing a tab.
+    big_board, draft_day, board, research, reference = st.tabs(
+        ["Big Board", "Draft Day", "Board", "Research", "Glossary"]
     )
     with big_board:
         _tab_big_board(p)
@@ -3093,8 +3076,6 @@ def main() -> None:
         _tab_draft_day(p)
     with board:
         _tab_board(p)
-    with landscape:
-        _tab_landscape(p)
     with research:
         _tab_research(p)
     with reference:

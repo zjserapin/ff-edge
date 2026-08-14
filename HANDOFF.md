@@ -75,6 +75,8 @@ Then a second pass on the board, after Zach read it (`BIG_BOARD_SPEC.md` §10):
 | `src/board.py` | `positional_drop` — the *shape* of the positional curve beside PAR's *level*. |
 | `app.py` | `drop` column, a cost-of-waiting panel on the real pick list, and a "what this board assumes" panel that prints draft demand instead of the format label. |
 | `src/glossary.py` | 7 more terms, including `drop`, `cost_of_waiting` and `draft_demand`. |
+| `app.py` | **Landscape cut.** Split three ways: dropoff curves to the Big Board, PAR-per-slot and positional mix to Research, concentration-over-time deleted. Five tabs, down from six. |
+| `src/landscape.py` | `concentration` marked deliberately unreachable, with its finding, so it is neither re-surfaced nor deleted as an orphan. |
 
 ---
 

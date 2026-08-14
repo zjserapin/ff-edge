@@ -261,6 +261,31 @@ this board assumes" panel that states draft demand rather than the format label.
 make quarterbacks *more* valuable, which is the reverse of the intent, while
 silently returning 20 undraftable keepers to the board.
 
+## 11. Landscape, cut — 2026-08-13
+
+Zach: *"leaning towards canning it as it's not really bringing any valuable info
+to the table. The one thing that is kind of interesting is the drop off
+visuals."*
+
+Agreed, and split three ways rather than deleted wholesale — the tab had four
+sections and exactly one was shaped like a decision.
+
+| section | went | why |
+|---|---|---|
+| The shape of the dropoff | **Big Board** | The picture behind `drop`. The only decision-shaped thing in the tab. |
+| PAR per starting slot | Research | PAR's derivation. Settled once, revisited rarely, and useful for auditing a surprise on the board. |
+| Who occupies the top of the board | Research | Context. **Counts level only** — it would have counted all six identical RBs as top-24 players and missed the receiver behind them. |
+| Are the top players taking a bigger slice? | **deleted** | A good article. Changes no pick. |
+
+The deletion is the part to defend, and the finding is preserved rather than
+lost: over 2018-2025 concentration is flat for QB/RB/WR, and **tight end moved
+the other way** — top five from 31.7% of the position to 23.9%. That is a real
+result and it is recorded in `landscape.concentration`'s docstring, which also
+says out loud that the function is deliberately unreachable so a future session
+neither re-surfaces it nor deletes it as an orphan.
+
+Five tabs, down from six. `app.py` fell ~90 lines despite gaining three panels.
+
 ---
 
 *Record where this turns out to be wrong, inline, the way the dashboard specs
