@@ -38,6 +38,8 @@ after contact and a receiver's separation are not the same axis.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 import numpy as np
 import polars as pl
 from sklearn.preprocessing import StandardScaler
@@ -135,6 +137,45 @@ def _weighted(
     return (x * w).sum(axis=1) / w.sum()
 
 
+def _distance(
+    x: np.ndarray,
+    used: list[str],
+    position: str,
+    weights: dict[tuple[str, str], float] | None,
+    idx: int,
+) -> np.ndarray:
+    """Distance in quality space, weighted by how much each metric persists.
+
+    **The same correction `_weighted` makes to the score, applied to the space.**
+    Both are built from the identical standardized matrix, and until 2026-08-14
+    only one of them used the stability table: `quality_score` weighted each
+    column by its year-over-year correlation, while every distance was a plain
+    `np.linalg.norm` giving every column an equal vote.
+
+    That is not a small difference in this data. At running back the quality
+    features span `tprr` at 0.402 down to `ryoe_per_att` at 0.202 — a two-fold
+    spread — so an unweighted distance let a metric that barely repeats pull two
+    players together as hard as one that does. Two backs came out "similar"
+    partly on a fluky efficiency season neither would repeat, which is the
+    opposite of what a comparison is for. The score computed from the same matrix
+    already knew better.
+
+    Normalised to mean weight 1, so it reduces **exactly** to the unweighted
+    Euclidean distance when every weight is equal. That keeps the numbers on the
+    scale readers of the old panel are used to, and makes the weighting a
+    reweighting rather than a change of units.
+
+    Falls back to unweighted when no weight is known, matching `_weighted`.
+    """
+    delta = (x - x[idx]) ** 2
+    if not weights:
+        return np.sqrt(delta.sum(axis=1))
+    w = np.array([weights.get((position, c), 0.0) for c in used])
+    if w.sum() <= 0:
+        return np.sqrt(delta.sum(axis=1))
+    return np.sqrt((delta * (w / w.mean())).sum(axis=1))
+
+
 def scores(
     season: int = CURRENT_SEASON,
     positions: tuple[str, ...] = FANTASY_POSITIONS,
@@ -216,17 +257,29 @@ def neighbors(
     df: pl.DataFrame | None = None,
     n: int = 8,
     season: int | None = None,
+    restrict_to: Iterable[str] | None = None,
+    weights: dict[tuple[str, str], float] | None = None,
 ) -> pl.DataFrame:
     """Players whose per-opportunity profile sits closest to this one, same position.
 
-    Euclidean distance in the standardized quality space. This is the output the
-    module exists for now that the clustering is gone: "who does this player look
-    like, and what do they cost" answered directly, rather than through a hard
-    group label that discarded the distances on the way.
+    Stability-weighted distance in the standardized quality space — see
+    `_distance`, and note this was an *unweighted* Euclidean norm until
+    2026-08-14 while the score built from the same matrix was weighted. This is
+    the output the module exists for now that the clustering is gone: "who does
+    this player look like, and what do they cost" answered directly, rather than
+    through a hard group label that discarded the distances on the way.
 
     `clusters` is any frame carrying player_id, player_name, position, team and
     the outcome columns — `scores()` is the intended source, and the parameter
     keeps its name so existing callers do not break.
+
+    **`restrict_to` is what points this at the draft board.** Pass the player ids
+    inside one of the board's blocks and the question stops being "who does this
+    player resemble in the abstract" and becomes *"the curve says these nine
+    backs are one asset — which of them are actually alike?"* Those are different
+    questions and only the second one is asked at a draft. The board can say a
+    block is interchangeable on expected points and still be hiding two entirely
+    different player types inside it.
 
     Returns: player_id, player_name, position, team, distance, ppg, pos_rank,
     games.
@@ -243,6 +296,16 @@ def neighbors(
     position = str(target.get_column("position")[0])
 
     pool = clusters.filter(pl.col("position") == position)
+    if restrict_to is not None:
+        keep = set(restrict_to) | {player_id}
+        pool = pool.filter(pl.col("player_id").is_in(list(keep)))
+    # Standardization is per-pool, so a restricted pool is standardized against
+    # its own members. That is the right call for a block — "alike *among these*"
+    # is the question — but it means distances are not comparable between a
+    # restricted call and an unrestricted one. Do not put the two in one table.
+    if pool.height < 2:
+        return pl.DataFrame()
+
     feats = base.filter(pl.col("season") == season).select(
         ["player_id", *[c for c in ft.quality_features(position) if c in base.columns]]
     )
@@ -252,8 +315,11 @@ def neighbors(
     if not used:
         return pl.DataFrame()
 
-    idx = grp.get_column("player_id").to_list().index(player_id)
-    dist = np.linalg.norm(x - x[idx], axis=1)
+    ids_list = grp.get_column("player_id").to_list()
+    if player_id not in ids_list:
+        return pl.DataFrame()
+    idx = ids_list.index(player_id)
+    dist = _distance(x, used, position, weights or stability_weights(base), idx)
 
     return (
         grp.select("player_id", "player_name", "position", "team", "games", "ppg", "pos_rank")

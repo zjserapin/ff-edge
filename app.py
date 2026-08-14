@@ -27,6 +27,7 @@ from src import breakout as bo
 from src import features as ft
 from src import glossary
 from src import claims as cm
+from src import ids
 from src import landscape as ls
 from src import projection as pj
 from src import promotion as pm
@@ -2779,6 +2780,135 @@ def _what_this_board_assumes(data: dict[str, Any]) -> None:
         )
 
 
+def _block_similarity_panel(players: pl.DataFrame) -> None:
+    """Inside a block the curve calls interchangeable, who actually looks alike?
+
+    **The question the new ranking creates and does not answer.** `rank_board`
+    says nine running backs are one asset on expected points — that is a claim
+    about *value*, and it is silent on *type*. A block can hold a back who earns
+    his volume through the passing game and one who earns it on early downs, and
+    the board would price them identically while they are entirely different
+    players to roster behind your other picks.
+
+    This is `archetypes.neighbors` pointed at that question via `restrict_to`,
+    so the standardization happens over the block rather than the position.
+    "Alike *among these nine*" is a sharper question than "alike among sixty
+    backs", and it is the one being asked at the pick.
+
+    Distances are stability-weighted as of 2026-08-14 — see
+    `archetypes._distance`. They are **not comparable to the Research tab's
+    numbers**, which standardize over the whole position.
+    """
+    if "block" not in players.columns or not players.height:
+        return
+
+    with st.expander("Inside a block — which of these actually look alike?"):
+        st.caption(
+            "The board says a block is one asset *on expected points*. That is a "
+            "statement about value and says nothing about type. Two backs worth "
+            "the same pick can earn their volume in completely different ways, "
+            "and which one you want depends on the rest of your roster."
+        )
+
+        counts = (
+            players.group_by("block")
+            .agg(pl.len().alias("n"), pl.col("position").first().alias("pos"))
+            .filter(pl.col("n") > 1)
+            .sort("block")
+        )
+        if not counts.height:
+            st.info("No block on this board holds more than one player.", icon="🔍")
+            return
+
+        options = counts.get_column("block").to_list()
+        block = st.selectbox(
+            "Block",
+            options,
+            format_func=lambda b: (
+                f"Block {b} — "
+                f"{counts.filter(pl.col('block') == b).get_column('n')[0]} players"
+            ),
+            key="big_board_block",
+        )
+        members = players.filter(pl.col("block") == block)
+        names = members.get_column("name").to_list()
+        anchor = st.selectbox("Compared against", names, key="big_board_anchor")
+
+        # Season read off the features frame rather than assumed to be
+        # SEASON - 1, matching the Research tab. The feature window does not
+        # always end where the draft season begins, and guessing produces an
+        # empty frame rather than an error.
+        feats = _features()
+        if not feats.height:
+            st.warning("No features built yet. Run the bootstrap.")
+            return
+        season = int(feats.get_column("season").max())
+        scored = _scores(season, 8)
+        if not scored.height:
+            st.warning("No quality scores available to compare on.")
+            return
+
+        # Name join, deduped to one row per player before it is used — the
+        # `attach_quality` pattern. `ids.normalize` strips generational suffixes,
+        # so Michael Pittman Jr. and Sr. collapse to one key and an undeduped
+        # join silently fans rows out.
+        # **Aliased to `gsis_id`, and that is load bearing.** The board already
+        # carries a `player_id` — FFC's, an Int64 — while `scores` keys on the
+        # nflverse gsis_id, a String. Joining without the rename leaves two
+        # columns of the same name in different namespaces, polars suffixes the
+        # newcomer, and reading `player_id` back returns FFC's integer. It then
+        # travels into a filter against a String column: `player_id == 5683`.
+        # Two id spaces sharing a name is the join trap in CLAUDE.md wearing
+        # different clothes.
+        key = (
+            scored.select(
+                ids.normalize("player_name").alias("_norm"),
+                pl.col("player_id").alias("gsis_id"),
+            )
+            .unique(subset=["_norm"], keep="first")
+        )
+        mapped = (
+            members.with_columns(ids.normalize("name").alias("_norm"))
+            .join(key, on="_norm", how="left")
+            .drop("_norm")
+        )
+        ids_in_block = mapped.get_column("gsis_id").drop_nulls().to_list()
+        target = mapped.filter(pl.col("name") == anchor).get_column("gsis_id")
+
+        unmatched = mapped.height - len(ids_in_block)
+        if unmatched:
+            st.caption(
+                f"{unmatched} of {mapped.height} in this block have no quality "
+                "score — a season under the volume floor is not measured, which "
+                "is not the same as being unlike everyone."
+            )
+        if len(target) == 0 or target[0] is None or len(ids_in_block) < 2:
+            st.info(
+                f"Not enough scored players in block {block} to compare "
+                f"{anchor} against.",
+                icon="🔍",
+            )
+            return
+
+        near = ar.neighbors(
+            target[0], scored, feats, n=20,
+            season=season, restrict_to=ids_in_block,
+        )
+        if not near.height:
+            st.info("No comparison available inside this block.", icon="🔍")
+            return
+
+        table(near.select("player_name", "team", "distance", "ppg", "pos_rank", "games"))
+        st.caption(
+            f"**Closest to {anchor} inside block {block}, nearest first.** "
+            "Distance is in standardized quality space, weighted by how much "
+            "each metric actually repeats year over year — so a stat that is "
+            "mostly noise pulls two players together far less than one that "
+            "carries. Standardized over *this block*, so these numbers do not "
+            "compare with the Research tab's, which use the whole position."
+        )
+
+
 def _cost_of_waiting_panel(players: pl.DataFrame, data: dict[str, Any]) -> None:
     """What a round costs at each position, at your own picks.
 
@@ -3002,6 +3132,8 @@ def _tab_big_board(p: dict[str, Any]) -> None:
     )
 
     st.divider()
+
+    _block_similarity_panel(players)
 
     # Collapsed by design. It is the picture behind `drop`, and the column is the
     # part read on the clock — this is what you open when the column says

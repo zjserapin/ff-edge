@@ -30,8 +30,8 @@ one, columns that look like duplicates but aren't. None of it raises.
 the user's terminal is invisible here. Prefix every command that needs it:
 
 ```bash
-uv run pytest                                          # 311 pass, 8 skip w/o a league
-FF_EDGE_LEAGUE_ID=... FF_EDGE_SLEEPER_USER=... uv run pytest   # 317 pass, 2 skip
+uv run pytest                                          # 318 pass, 8 skip w/o a league
+FF_EDGE_LEAGUE_ID=... FF_EDGE_SLEEPER_USER=... uv run pytest   # 324 pass, 2 skip
 FF_EDGE_LEAGUE_ID=... uv run streamlit run app.py
 FF_EDGE_LEAGUE_ID=... uv run python -c "from src import board; print(board.build())"
 uv run python -m src.bootstrap --light                 # daily cache refresh
@@ -207,6 +207,20 @@ in the same feed: all 97 season-long *yardage* markets are priced -114/-114, so
 de-vigging them returns exactly 0.500 — the absence of a signal, not a
 probability — and `marketType` is a **bucket, not a position** (Bowers, Kittle
 and Loveland are all filed under `WIDE_RECEIVERS`).
+
+**`player_id` means two different things, and they are different types.** The
+draft board's `player_id` is **FFC's, an Int64**; `archetypes.scores`,
+`features.build` and the nflverse tables key on **gsis_id, a String**
+(`00-0034857`). Joining one to the other without renaming leaves two columns
+sharing a name, polars silently suffixes the newcomer to `player_id_right`, and
+reading `player_id` back hands you the wrong namespace. It surfaces downstream as
+`[(col("player_id")) == (dyn int: 5683)]` against a String column, a long way
+from the join that caused it.
+
+**Alias on the way in** — `pl.col("player_id").alias("gsis_id")` — rather than
+relying on join suffixes. `board.attach_quality` sidesteps this entirely by
+joining on the normalized name and never carrying an id across; that is the
+pattern to copy.
 
 **Generational suffixes collapse father onto son.** `ids.normalize` strips
 `Jr./Sr.`, so Michael Pittman Jr. (WR, 2020) and Michael Pittman Sr. (RB, 1998,

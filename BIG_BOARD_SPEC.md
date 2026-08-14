@@ -324,6 +324,54 @@ dense 1..159 rank is what keeps that distinction visible.
 Also fixed while in there: `build` ended with `sort("par", descending=True)` and
 no `nulls_last` — the documented trap, latent only because no PAR is null today.
 
+## 13. Comparables, weighted and pointed at blocks — 2026-08-14
+
+Zach: *"the metrics on the research board are great, are some of those factored
+into the clustering exercise and who does player x look like?"*
+
+The same metrics, yes. **The same weighting, no** — and that was the finding.
+
+`quality_score` is a stability-weighted mean of the standardized features
+(`archetypes._weighted`): each column is weighted by its year-over-year
+correlation, computed rather than hardcoded, and measured to help — rank
+correlation with next season's points went 0.464 → 0.502 at WR and 0.455 → 0.492
+at TE. Every **distance** built from that identical matrix was a bare
+`np.linalg.norm`, giving each column an equal vote.
+
+The spread being ignored is real. RB quality features run from `tprr` at 0.402
+down to `ryoe_per_att` at 0.202 — twofold — so two backs could read as similar
+largely on a fluky efficiency season neither would repeat, while the score
+computed from the same matrix already knew better.
+
+Fixed in `archetypes._distance`, used by `neighbors` and `valuation.comparables`.
+Normalised to mean weight 1, so it reduces **exactly** to the old unweighted
+number when weights are flat: a reweighting, not a change of units. It changes
+answers — the neighbours of James Cook reorder and the sixth comp changes
+identity outright.
+
+**One correction to the question: there is no clustering.** k-means was retired
+for topping out at a silhouette of 0.29, "a partition of a continuum rather than
+real groups". What survives is the distances, without hard labels.
+
+### Pointed at the block problem
+
+`neighbors` takes `restrict_to`, so the pool can be one of the board's blocks
+rather than the whole position. This answers a question §12 *created*: the board
+now says nine backs are one asset, which is a claim about **value** and silent on
+**type**.
+
+It splits them immediately. Inside block 1, Cook's nearest are Taylor (2.01) and
+Henry (2.27); McCaffrey's nearest is Gibbs (3.37) — and Cook and McCaffrey are
+each other's **furthest** at 5.87. Same block, same price, two different players.
+
+Note the standardization happens over the restricted pool, so "alike among these
+nine" is the question asked. **Those distances do not compare with the Research
+tab's**, which standardize over the whole position, and the UI says so.
+
+Found while building: the board's `player_id` is FFC's Int64 and `scores` keys on
+the String gsis_id. Joining them without an alias let polars suffix the newcomer
+and handed back the wrong namespace. Written up in `CLAUDE.md`.
+
 ## 11. Landscape, cut — 2026-08-13
 
 Zach: *"leaning towards canning it as it's not really bringing any valuable info

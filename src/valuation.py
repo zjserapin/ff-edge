@@ -393,9 +393,12 @@ def comparables(
         return pl.DataFrame()
     idx = ids_list.index(gsis_id)
 
-    import numpy as np
-
-    distance = np.linalg.norm(x - x[idx], axis=1)
+    # Weighted by how much each metric repeats, the same way `quality_score` is.
+    # This was a bare `np.linalg.norm` until 2026-08-14 — every column an equal
+    # vote — while the score built from this exact matrix weighted them. Two
+    # backs could come out "similar" on a fluky efficiency season neither would
+    # repeat. See `archetypes._distance`.
+    distance = ar._distance(x, used, position, ar.stability_weights(base), idx)
 
     return (
         grp.select(

@@ -4,7 +4,7 @@
 **Branch:** `dropoff-and-landscape`, off `main`. **`main` is finally current** —
 `measure-what-repeats` merged and pushed on 08-13 (fast-forward, `673f148`), so
 the 07-27 gap is closed and `main` no longer carries the preseason crash.
-**State:** 317 tests pass with a league, 311 pass and 8 skip without one.
+**State:** 324 tests pass with a league, 318 pass and 8 skip without one.
 **The Shiva Bowl draft is 2026-08-22 at 19:00.** Nine days. **Two more drafts
 follow it** — see the calendar below.
 
@@ -84,6 +84,16 @@ Then a third pass, after Zach challenged the rankings (`BIG_BOARD_SPEC.md` §12)
 |---|---|
 | `src/board.py` | **`rank_board`.** The old tiebreak inside equal PAR was row order, i.e. ADP — so the board deferred to the market in every tie. Now: block by what the curve can resolve, then `quality_pct` within the block. Also fixed a latent `nulls_last` trap in `build`. |
 | `app.py` | `block` leads the table instead of `board_rank`; `quality_pct` shown, because a board must display the number it sorted on. |
+
+And a fourth, on comparables (`BIG_BOARD_SPEC.md` §13):
+
+| file | what |
+|---|---|
+| `src/archetypes.py` | **`_distance`** — every distance was unweighted while `quality_score` built from the same matrix was stability-weighted. Now both use the weights. `neighbors` gains `restrict_to`. |
+| `src/valuation.py` | `comparables` uses the weighted distance too. |
+| `app.py` | Block-similarity panel on the Big Board: inside a block the curve calls one asset, which players actually look alike? |
+| `tests/test_archetypes.py` | **New.** 7 tests, including that flat weights reproduce the old number exactly. |
+| `CLAUDE.md` | The `player_id` namespace trap — FFC Int64 vs gsis String, same column name. |
 
 ---
 
@@ -307,8 +317,8 @@ seasons.
 ## Commands
 
 ```bash
-uv run pytest                                                  # 311 pass, 8 skip
-FF_EDGE_LEAGUE_ID=... FF_EDGE_SLEEPER_USER=... uv run pytest    # 317 pass, 2 skip
+uv run pytest                                                  # 318 pass, 8 skip
+FF_EDGE_LEAGUE_ID=... FF_EDGE_SLEEPER_USER=... uv run pytest    # 324 pass, 2 skip
 FF_EDGE_LEAGUE_ID=... uv run streamlit run app.py
 FF_EDGE_PROFILE=standard_12 uv run python -c "from src import board; print(board.build()['players'].head())"
 uv run python -m src.peek                                      # the screens, still unreached from the UI
