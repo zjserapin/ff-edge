@@ -2318,6 +2318,11 @@ def _draft_board() -> dict[str, Any]:
     players = bd.attach_quality(bd.attach_environment(players))
     players = bd.attach_vegas(players, _valuation())
     players = bd.signal(players)
+    # ECR folds into `blend_par` before the environment, so the layer order stays
+    # slot value -> player -> crowd -> team. It is the smallest weight on the
+    # board by a wide margin; see `config.ECR_WEIGHT` for why a consensus of
+    # rankings reading the same market earns less of a vote than a projection.
+    players = bd.blend_ecr(bd.attach_ecr(players))
     players = bd.apply_env_weight(players)
     # Blocks are cut on the environment-adjusted value, so `se` — the standard
     # error of the ADP curve — is being applied to a number the curve did not
@@ -3110,9 +3115,9 @@ def _tab_big_board(p: dict[str, Any]) -> None:
     columns = [
         c for c in (
             "block", "name", "position", "team", "bye", "tier", "same",
-            "adp", "adj_adp", "par", "ffb_par", "blend_par", "env_swing",
-            "par_env", "drop", "quality_pct", "value_gap", "vegas_gap",
-            "signal", "board_rank",
+            "adp", "adj_adp", "par", "ffb_par", "ecr", "ecr_sd", "blend_par",
+            "env_swing", "par_env", "drop", "quality_pct", "value_gap",
+            "vegas_gap", "signal", "board_rank",
         ) if c in view.columns
     ]
     # `nulls_last` on every sort in this file, ascending included: polars

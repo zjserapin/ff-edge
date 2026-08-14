@@ -595,6 +595,22 @@ TERMS: dict[str, Term] = {
         not monotone, so the tiering pools ranks the data cannot order instead of
         forcing one. A tier break is a real cliff; inside a tier, take the cheaper
         player.""", "Board"),
+    "ecr": _t(
+        "Expert rank (ECR)", "FantasyPros consensus rank, from the page that matches your format.",
+        """A hundred-odd rankers rather than three, which is the one thing it has
+        over the Footballers. It gets the smallest weight on this board because
+        it is a consensus of *orderings* largely produced by people reading the
+        same market the board is already priced against — a third opinion that
+        mostly restates the first two. Read from the superflex page when the
+        roster has a SUPER_FLEX and the 1QB page otherwise; the two disagree
+        about quarterbacks by tens of ranks.""", "Board"),
+    "ecr_sd": _t(
+        "Expert disagreement", "How far apart the rankers are on him. Higher means less settled.",
+        """The half of a consensus most products throw away. A tight `sd` means
+        the crowd has converged and the price probably reflects it; a wide one
+        means the argument is still running, which is where an independent read
+        is worth something. Compare Ja'Marr Chase at 2.3 against Derrick Henry at
+        10.4 — same board, completely different confidence.""", "Board"),
     "ffb_par": _t(
         "Footballers PAR", "The Fantasy Footballers' projected stat lines, scored in your league, above replacement.",
         """The board's only genuinely **player-level** projection, and the reason

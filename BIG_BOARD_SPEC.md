@@ -406,6 +406,52 @@ curve, and it is now applied to a number the curve did not produce alone. That
 understates uncertainty by whatever error `env_swing` carries, which is
 unmodelled.
 
+## 15. The board gets a player-level opinion — 2026-08-14
+
+Zach's ranking feedback, and the diagnosis behind three of his six points was a
+single column: `exp_points` is a lookup from *positional ADP rank* to what that
+rank historically scored. RB ranks 1-5 all returned 181.8. **The player's name
+never entered the calculation**, so the board had no player-level opinion at all
+and "the RB1 tier is 8 deep" was a statement about draft slots rather than about
+Bijan and Barkley.
+
+The board now layers four sources, and the display columns sit in that order so
+a row reads left to right as an argument:
+
+| layer | column | what it adds |
+|---|---|---|
+| ADP curve | `par` | the draft slot's value — blind to player *and* team |
+| Fantasy Footballers | `ffb_par` | **the player** (weight 0.5) |
+| FantasyPros ECR | `ecr` | the crowd (weight 0.15) |
+| Team environment | `env_swing` | **the team** (weight 0.35) |
+| | `par_env` | what the board is ordered on |
+
+**ECR is blended on the rank scale, deliberately.** Mapping it through the
+expected-points curve would push it down the same function that pools the top six
+backs into one number — contributing nothing exactly where a third opinion was
+wanted. A rank keeps one value per player to the top. It also earns the smallest
+weight by a wide margin, and that asymmetry is a stated position: the Footballers
+are an independent *projection*, ECR is a consensus of *orderings* largely read
+off the market the board is already priced against.
+
+`ecr_sd` comes free and is the half most consensus products discard — Chase at
+2.3 against Henry at 10.4 is the same board expressing completely different
+confidence.
+
+**Results against the complaints:**
+
+- Block 1 went from **nine backs to three** — Bijan, Gibbs, McCaffrey. Zach said
+  "pretty clearly Bijan and Gibbs"; the Footballers agree with him and the ADP
+  curve did not.
+- **34 blocks, up from 27** — the "tiers are too strong" complaint.
+- Achane to rank 10 on a −31.5 Miami environment; Nacua 7 and Chase 8, above him.
+- ECR joined **157 of 158** players.
+
+The page choice is a real trap and is derived from the profile's roster rather
+than passed in: FantasyPros' superflex board (`redraft-op`) and 1QB board
+(`redraft-overall`) disagree about quarterbacks by tens of ranks, so reading the
+wrong one is the 2026 superflex bug in different clothes.
+
 ## 11. Landscape, cut — 2026-08-13
 
 Zach: *"leaning towards canning it as it's not really bringing any valuable info

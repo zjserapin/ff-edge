@@ -248,6 +248,34 @@ SUPERFLEX_ADP_SCORING = "2qb"
 # two, in which case this returns to 0.0 and that is a result.
 ENV_WEIGHT = 0.35
 
+# --- FantasyPros ECR --------------------------------------------------------
+
+# Deliberately far below FOOTBALLERS_WEIGHT, and the asymmetry is the point.
+#
+# The Footballers publish *projections* — stat lines this project scores under
+# the league's own settings, which is a genuine player-level opinion the ADP
+# curve does not have. FantasyPros ECR is an *ordering*: a consensus of ranks,
+# already heavily correlated with ADP because most of its contributors are
+# reading the same market. A third opinion that mostly restates the first two
+# deserves a small vote, not an equal one.
+#
+# What it adds that nothing else does is breadth — a hundred-odd rankers rather
+# than three — and `sd`, a dispersion read on where that crowd disagrees.
+#
+# **Blended on the rank scale, not through the expected-points curve.** Mapping
+# ECR rank into points would push it through the same curve that pools the top
+# six backs into one number, so it would contribute almost nothing at the top of
+# the board, which is exactly where it was asked for. A rank has one value per
+# player and keeps its resolution.
+ECR_WEIGHT = 0.15
+
+# The FantasyPros page a format is priced against. `redraft-op` is their
+# superflex/2QB board; `redraft-overall` is 1QB. Reading the wrong one is the
+# ECR version of the 2026 superflex bug — quarterbacks sit ~40 ranks apart
+# between the two pages and nothing would raise.
+ECR_PAGE_SUPERFLEX = "redraft-op"
+ECR_PAGE_STANDARD = "redraft-overall"
+
 # Seasons FFC publishes no board for at any scoring x team-count combination,
 # and which therefore cannot be label seasons no matter how much production data
 # exists for them.

@@ -45,6 +45,9 @@ from src import profiles as pf
 from src import scoring as sc
 from src import sleeper
 from src.config import (
+    ECR_PAGE_STANDARD,
+    ECR_PAGE_SUPERFLEX,
+    ECR_WEIGHT,
     ENV_WEIGHT,
     FANTASY_POSITIONS,
     FOOTBALLERS_MIN_ANALYSTS,
@@ -650,6 +653,129 @@ def blend_par(
         blended.alias("blend_par_exact"),
         blended.round(1).alias("blend_par"),
     )
+
+
+def attach_ecr(
+    players: pl.DataFrame, profile: LeagueProfile | None = None
+) -> pl.DataFrame:
+    """Add FantasyPros expert consensus rank, from the page that prices this format.
+
+    **The page choice is the whole trap.** FantasyPros publishes a superflex
+    board (`redraft-op`) and a 1QB board (`redraft-overall`), and quarterbacks
+    sit tens of ranks apart between them. Reading the wrong one is the ECR
+    version of the 2026 superflex bug — a well-formed column, plausible numbers,
+    and every quarterback mispriced. The page is picked off the profile's roster,
+    not passed in, so it cannot drift from the format the way a loose argument
+    would.
+
+    `ecr_sd` travels with it. Most consensus products give a mean and stop; this
+    one ships the dispersion, which is a free read on where a hundred rankers
+    disagree — and disagreement is where a private opinion is worth having.
+
+    Joined on the normalized name and deduped to one row per player first, the
+    `attach_quality` pattern. Nulls where FantasyPros has no row, which is not
+    the same as a low rank.
+    """
+    if not players.height:
+        return players
+
+    profile = profile or pf.resolve()
+    superflex = "SUPER_FLEX" in set(profile.roster_positions)
+    page = ECR_PAGE_SUPERFLEX if superflex else ECR_PAGE_STANDARD
+
+    try:
+        from src import nflverse as nv
+
+        raw = nv.ff_rankings("draft")
+    except Exception:
+        raw = pl.DataFrame()
+
+    empty = (
+        pl.lit(None, dtype=pl.Float64).alias("ecr"),
+        pl.lit(None, dtype=pl.Float64).alias("ecr_sd"),
+    )
+    if not raw.height or "page_type" not in raw.columns:
+        return players.with_columns(*empty)
+
+    board = raw.filter(
+        (pl.col("page_type") == page)
+        & pl.col("pos").str.replace_all(r"\d+", "").is_in(list(FANTASY_POSITIONS))
+    )
+    if not board.height:
+        return players.with_columns(*empty)
+
+    keys = (
+        board.select(
+            ids.normalize("player").alias("_norm"),
+            pl.col("ecr").cast(pl.Float64),
+            pl.col("sd").cast(pl.Float64).alias("ecr_sd"),
+        )
+        .filter(pl.col("ecr").is_not_null())
+        .sort("ecr")
+        .unique(subset=["_norm"], keep="first")
+    )
+
+    return (
+        players.with_columns(ids.normalize("name").alias("_norm"))
+        .join(keys, on="_norm", how="left")
+        .drop("_norm")
+    )
+
+
+def blend_ecr(
+    players: pl.DataFrame, weight: float = ECR_WEIGHT, base: str = "blend_par"
+) -> pl.DataFrame:
+    """Fold ECR into the blended value, on the rank scale.
+
+    **Blended as a rank rather than converted to points, and that is the design
+    decision.** Mapping ECR's rank through `expected.py` would push it down the
+    same curve that pools the top six running backs into a single number — so it
+    would contribute nothing precisely at the top of the board, which is where a
+    third opinion was wanted. A rank carries one value per player all the way up.
+
+    So ECR is negated (low rank is good), standardized on median and IQR the same
+    way `blend_par` treats `ffb_par`, and mixed into the base at
+    `config.ECR_WEIGHT` — far below the Footballers' weight, because ECR is a
+    consensus of orderings largely reading the same market the board is already
+    priced against, while the Footballers are an independent projection.
+
+    Median and IQR rather than mean and standard deviation, for the reason
+    `blend_par` gives: the two sources are censored differently in the tail and a
+    scale set by players nobody drafts is the wrong one to calibrate on.
+
+    Falls back to the base untouched wherever ECR is missing or its spread is
+    degenerate. A player FantasyPros never ranked keeps his blended value rather
+    than being pushed to the bottom.
+    """
+    if "ecr" not in players.columns or base not in players.columns:
+        return players
+
+    both = players.filter(
+        pl.col(base).is_not_null() & pl.col("ecr").is_not_null()
+    )
+    if both.height < 4:
+        return players
+
+    def _center_scale(col: pl.Series) -> tuple[float, float]:
+        return float(col.median()), float(col.quantile(0.75) - col.quantile(0.25))
+
+    base_mid, base_scale = _center_scale(both.get_column(base))
+    # Negated so that, like every other value on this board, larger is better.
+    ecr_value = -both.get_column("ecr")
+    ecr_mid, ecr_scale = _center_scale(ecr_value)
+    if base_scale <= 0 or ecr_scale <= 0:
+        return players
+
+    w = float(weight)
+    z_base = (pl.col(base) - base_mid) / base_scale
+    z_ecr = ((-pl.col("ecr")) - ecr_mid) / ecr_scale
+    blended = (
+        pl.when(pl.col("ecr").is_null())
+        .then(pl.col(base))
+        .otherwise(base_mid + (w * z_ecr + (1.0 - w) * z_base) * base_scale)
+    )
+
+    return players.with_columns(blended.round(1).alias(base))
 
 
 def compare_footballers(built: dict[str, pl.DataFrame]) -> pl.DataFrame:
