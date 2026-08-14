@@ -4,7 +4,7 @@
 **Branch:** `dropoff-and-landscape`, off `main`. **`main` is finally current** —
 `measure-what-repeats` merged and pushed on 08-13 (fast-forward, `673f148`), so
 the 07-27 gap is closed and `main` no longer carries the preseason crash.
-**State:** 311 tests pass with a league, 305 pass and 8 skip without one.
+**State:** 317 tests pass with a league, 311 pass and 8 skip without one.
 **The Shiva Bowl draft is 2026-08-22 at 19:00.** Nine days. **Two more drafts
 follow it** — see the calendar below.
 
@@ -77,6 +77,13 @@ Then a second pass on the board, after Zach read it (`BIG_BOARD_SPEC.md` §10):
 | `src/glossary.py` | 7 more terms, including `drop`, `cost_of_waiting` and `draft_demand`. |
 | `app.py` | **Landscape cut.** Split three ways: dropoff curves to the Big Board, PAR-per-slot and positional mix to Research, concentration-over-time deleted. Five tabs, down from six. |
 | `src/landscape.py` | `concentration` marked deliberately unreachable, with its finding, so it is neither re-surfaced nor deleted as an orphan. |
+
+Then a third pass, after Zach challenged the rankings (`BIG_BOARD_SPEC.md` §12):
+
+| file | what |
+|---|---|
+| `src/board.py` | **`rank_board`.** The old tiebreak inside equal PAR was row order, i.e. ADP — so the board deferred to the market in every tie. Now: block by what the curve can resolve, then `quality_pct` within the block. Also fixed a latent `nulls_last` trap in `build`. |
+| `app.py` | `block` leads the table instead of `board_rank`; `quality_pct` shown, because a board must display the number it sorted on. |
 
 ---
 
@@ -300,8 +307,8 @@ seasons.
 ## Commands
 
 ```bash
-uv run pytest                                                  # 305 pass, 8 skip
-FF_EDGE_LEAGUE_ID=... FF_EDGE_SLEEPER_USER=... uv run pytest    # 311 pass, 2 skip
+uv run pytest                                                  # 311 pass, 8 skip
+FF_EDGE_LEAGUE_ID=... FF_EDGE_SLEEPER_USER=... uv run pytest    # 317 pass, 2 skip
 FF_EDGE_LEAGUE_ID=... uv run streamlit run app.py
 FF_EDGE_PROFILE=standard_12 uv run python -c "from src import board; print(board.build()['players'].head())"
 uv run python -m src.peek                                      # the screens, still unreached from the UI

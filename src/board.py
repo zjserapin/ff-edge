@@ -541,9 +541,18 @@ def build(
     # even tell these two apart" — and the board needs both, because a tier break
     # that falls inside the standard error is a break the data did not earn.
     players = indistinguishable(players, value_col="par")
+    # A provisional ordering only. `rank_board` rewrites `board_rank` once
+    # quality is attached, because an ordinal rank breaks ties by row order and
+    # row order here is ADP — see that function. This stays so `build` returns a
+    # sorted board on its own, for callers with no valuation frame.
+    #
+    # `nulls_last` on both: polars defaults a descending sort to nulls FIRST, so
+    # a player the ADP curve could not match would open the board looking like
+    # its best pick. Latent today (no null PAR on the live board) and one feed
+    # change from being live.
     players = players.with_columns(
         pl.col("par").rank("ordinal", descending=True).cast(pl.Int32).alias("board_rank")
-    ).sort("par", descending=True)
+    ).sort("par", descending=True, nulls_last=True)
 
     return {
         "profile": profile,
@@ -1032,6 +1041,83 @@ def signal(
         .then(pl.lit("split"))
         .otherwise(pl.lit("quiet"))
         .alias("signal")
+    )
+
+
+def rank_board(players: pl.DataFrame) -> pl.DataFrame:
+    """Order the board by what the curve can actually resolve, then by quality.
+
+    **This replaces an ordering that was, inside a tie, just ADP.** `board_rank`
+    was `rank("ordinal")` over `par`, and an ordinal rank breaks ties by *row
+    order* — which traces straight back to the ADP the pool arrived in. Nine
+    running backs share a PAR of 72.6 on the 2026 board, so the top nine were
+    presented as a strict ordering with no evidence behind a single step of it.
+    Derrick Henry outranked James Cook because the market drafts Henry eleven
+    picks earlier. For a tool whose entire purpose is to disagree with the
+    market, a tiebreak that *is* the market is the worst available answer.
+
+    Worse, the board already carried the number that contradicted it. Inside that
+    "indistinguishable" nine, `quality_pct` ran from 13.6 to 100 — and Josh
+    Jacobs (56.8) outranked Ja'Marr Chase (91.1) outright.
+
+    So the order is now lexicographic on two keys:
+
+      1. **The group's PAR**, not the player's. If the pooled standard error says
+         the curve cannot tell nine backs apart, they share a rank key and the
+         board stops pretending otherwise. `block` is that key, dense-ranked.
+      2. **`quality_pct` within the block** — the read that is *not* derived from
+         ADP, so a tie is broken by an independent opinion rather than a circular
+         one.
+
+    **What this is not: a blend.** PAR alone decides which block a player is in,
+    and quality is consulted only where PAR is provably indifferent. Averaging
+    the two would double-count the market, since `par` is a function of price.
+    See `BIG_BOARD_SPEC.md` §2.
+
+    **The honest caveat, and it must travel with this function.** `quality_pct`
+    is last season's per-opportunity efficiency, and this repo has twice measured
+    that such signals do not beat ADP out of sample — `breakout.py` at +0.035 AUC
+    and `projection.py` at +0.002 Spearman, both intervals covering zero. The
+    narrower claim made here is *not* "quality beats ADP"; it is "where the ADP
+    curve has no resolution, an independent read is a better tiebreak than the
+    order rows happened to arrive in." That is a judgement, not a result, and it
+    is why `block` is displayed rather than a dense 1..N rank: the block is
+    measured, the order inside it is not.
+
+    Adds `block` and rewrites `board_rank`. Players with no quality score sort
+    last inside their block — "not measured" is not "worst".
+    """
+    if not players.height or "par" not in players.columns:
+        return players
+
+    # Without a group the block degenerates to the player's own PAR, which is the
+    # pre-2026-08-13 behaviour minus the ADP tiebreak. Better than raising.
+    group_key = (
+        pl.col("par").max().over(["position", "indist_group"])
+        if "indist_group" in players.columns
+        else pl.col("par")
+    )
+    quality = (
+        pl.col("quality_pct")
+        if "quality_pct" in players.columns
+        else pl.lit(None, dtype=pl.Float64)
+    )
+
+    return (
+        players.with_columns(group_key.alias("_group_par"), quality.alias("_q"))
+        # nulls_last on both keys. Polars defaults descending sorts to nulls
+        # FIRST, so an unscored player would otherwise open the board — the exact
+        # trap CLAUDE.md documents, and the reason a "best N" query here returns
+        # the N rows that could not be scored.
+        .sort(["_group_par", "_q"], descending=[True, True], nulls_last=True)
+        .with_columns(
+            pl.col("_group_par")
+            .rank("dense", descending=True)
+            .cast(pl.Int32)
+            .alias("block"),
+            pl.int_range(1, pl.len() + 1).cast(pl.Int32).alias("board_rank"),
+        )
+        .drop("_group_par", "_q")
     )
 
 

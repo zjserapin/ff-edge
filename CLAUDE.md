@@ -30,8 +30,8 @@ one, columns that look like duplicates but aren't. None of it raises.
 the user's terminal is invisible here. Prefix every command that needs it:
 
 ```bash
-uv run pytest                                          # 305 pass, 8 skip w/o a league
-FF_EDGE_LEAGUE_ID=... FF_EDGE_SLEEPER_USER=... uv run pytest   # 311 pass, 2 skip
+uv run pytest                                          # 311 pass, 8 skip w/o a league
+FF_EDGE_LEAGUE_ID=... FF_EDGE_SLEEPER_USER=... uv run pytest   # 317 pass, 2 skip
 FF_EDGE_LEAGUE_ID=... uv run streamlit run app.py
 FF_EDGE_LEAGUE_ID=... uv run python -c "from src import board; print(board.build())"
 uv run python -m src.bootstrap --light                 # daily cache refresh

@@ -595,6 +595,17 @@ TERMS: dict[str, Term] = {
         not monotone, so the tiering pools ranks the data cannot order instead of
         forcing one. A tier break is a real cliff; inside a tier, take the cheaper
         player.""", "Board"),
+    "block": _t(
+        "Block", "Players the PAR curve genuinely cannot tell apart. Order inside a block is a tiebreak, not a measurement.",
+        """The board's honest unit. PAR is printed to a tenth of a point off a
+        curve carrying a standard error of 6 to 13, so on the 2026 board nine
+        running backs share a PAR of 72.6 — the curve has no resolution there at
+        all. A dense 1..159 rank would present nine steps of pure noise as an
+        ordering, and it used to: `board_rank` broke ties by row order, which is
+        ADP, so the board silently deferred to the market it exists to disagree
+        with. Players inside a block are one asset; **take the one you want for
+        other reasons** — price, the drop column, your own read. Between blocks
+        the difference is real.""", "Board"),
     "drop": _t(
         "Drop (next 5)", "PAR you give up by falling five places at his position. High means do not wait.",
         """The shape of the positional curve, next to PAR's level — and the two

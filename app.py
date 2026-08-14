@@ -2885,7 +2885,11 @@ def _tab_big_board(p: dict[str, Any]) -> None:
         )
         return
 
-    players = bd.positional_drop(bd.signal(bd.attach_vegas(players, _valuation())))
+    # rank_board runs last and after attach_quality, because it needs
+    # `quality_pct` to break ties the PAR curve cannot. Order matters here.
+    players = bd.rank_board(
+        bd.positional_drop(bd.signal(bd.attach_vegas(players, _valuation())))
+    )
 
     # Same treatment the draft board gives it: a column of 1s reads as a rating,
     # and the only useful signal is the groups bigger than one.
@@ -2937,14 +2941,19 @@ def _tab_big_board(p: dict[str, Any]) -> None:
     if signals:
         view = view.filter(pl.col("signal").is_in(signals))
 
-    # `drop` sits immediately right of `par` on purpose: they are the level and
-    # the shape of the same curve, they routinely disagree, and the disagreement
-    # is only visible when the eye can cross between them without travelling.
+    # `block` leads instead of `board_rank`, which is the whole point of the
+    # change: the block is measured and the order inside it is not, so the column
+    # that implied a strict 1..159 ordering no longer opens the table.
+    #
+    # `drop` sits immediately right of `par` because they are the level and the
+    # shape of the same curve and routinely disagree; `quality_pct` is next
+    # because it now decides the order *within* a block, and a board must show
+    # the number it sorted on.
     columns = [
         c for c in (
-            "board_rank", "name", "position", "team", "bye", "tier", "same",
-            "adp", "adj_adp", "par", "drop", "value_gap", "vegas_gap", "signal",
-            "env_swing",
+            "block", "name", "position", "team", "bye", "tier", "same",
+            "adp", "adj_adp", "par", "drop", "quality_pct", "value_gap",
+            "vegas_gap", "signal", "env_swing", "board_rank",
         ) if c in view.columns
     ]
     # `nulls_last` on every sort in this file, ascending included: polars
@@ -2961,11 +2970,24 @@ def _tab_big_board(p: dict[str, Any]) -> None:
     )
     table(view.head(shown))
 
+    st.caption(
+        "**`par` deliberately does not fall monotonically down this board, and "
+        "that is the fix rather than a bug.** Rows are ordered by `block` — "
+        "players the PAR curve cannot tell apart share one — and *within* a "
+        "block by `quality_pct`, the read that is not derived from ADP. Nine "
+        "running backs share a PAR of 72.6 against a curve whose standard error "
+        "is 6 to 13, so ranking them 1 through 9 was presenting noise as an "
+        "ordering; the old tiebreak was row order, which is ADP, meaning the "
+        "board quietly deferred to the market it exists to argue with. "
+        "**The block is measured. The order inside it is a tiebreak, not a "
+        "result** — `quality_pct` is last season's efficiency, and this project "
+        "has twice measured that such signals do not beat ADP out of sample."
+    )
     chart_note(
-        ["par", "value_gap", "vegas_gap", "signal"],
+        ["block", "par", "drop", "quality_pct", "value_gap", "vegas_gap", "signal"],
         "<strong style='color:#c3c2b7'>same</strong> — how many players the "
-        "curve cannot tell apart from this one. Inside a group, take the "
-        "cheaper.",
+        "curve cannot tell apart from this one. Inside a block, take the "
+        "cheaper, or the one the drop column says you cannot wait on.",
     )
 
     # There is no other export in this app, and a board you cannot mark up is not

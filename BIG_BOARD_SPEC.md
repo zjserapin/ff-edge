@@ -261,6 +261,69 @@ this board assumes" panel that states draft demand rather than the format label.
 make quarterbacks *more* valuable, which is the reverse of the intent, while
 silently returning 20 undraftable keepers to the board.
 
+## 12. The tiebreak was ADP — 2026-08-14
+
+Zach, on the shipped board: *"why is Henry above Cook? Why are the elite WRs so
+far down over low end RB1s? replacement value can't be the sole driver here?"*
+
+Both correct, and the first is a defect.
+
+**Henry above Cook had no justification.** Identical PAR (72.6), identical
+replacement, same indistinguishable group. `board_rank` was
+`rank("ordinal", descending=True)` over `par`, and an ordinal rank breaks ties by
+**row order** — which traces straight back to the ADP the pool arrived in. Henry
+led because the market drafts him at 12.8 and Cook at 18.8. *A tool whose entire
+purpose is to disagree with the market was resolving every tie by deferring to
+it.*
+
+And the board already carried the number that contradicted it. Inside that
+nine-player "indistinguishable" group `quality_pct` ran from 13.6 to 100:
+
+| old rank | player | par | quality_pct | value_gap |
+|---|---|---|---|---|
+| 4 | McCaffrey | 72.6 | 27.3 | −65.9 |
+| 7 | Achane | 70.5 | **100.0** | +13.6 |
+| 8 | Barkley | 67.4 | **13.6** | −70.5 |
+| 11 | Josh Jacobs | 53.9 | 56.8 | −22.7 |
+| 12 | Ja'Marr Chase | 52.2 | **91.1** | −7.1 |
+
+A 57th-percentile player ranked above a 91st-percentile one.
+
+**On the second question, the decomposition backs him up.** The RB1-vs-WR1 PAR
+gap is 14.4, of which **9.8 (68%) is replacement level** and only 4.6 is
+projected points (181.8 against 177.2 — nearly a wash). Replacement is not the
+sole driver but it is the dominant one. That said it is not arbitrary: flex
+demand comes from `scoring._greedy_flex`, which assigns each flex slot to
+whichever eligible position is best at its margin. **PAR is working as designed;
+the design answers a narrower question than a big board implies**, and `drop`
+is the corrective rather than a change to PAR.
+
+### Shipped: `board.rank_board`
+
+Lexicographic on two keys — **not a blend**, because PAR alone decides the block
+and quality is consulted only where PAR is provably indifferent:
+
+1. **`block`** — dense rank of the *group's* PAR. If the pooled standard error
+   cannot separate nine backs, they share one block and the board stops
+   pretending otherwise.
+2. **`quality_pct` within a block** — an independent read rather than a circular
+   one.
+
+`par` no longer falls monotonically down the board, which is the fix rather than
+a bug, and the UI says so.
+
+**The caveat ships with it, in the docstring, the glossary and on screen:**
+`quality_pct` is last season's per-opportunity efficiency, and this repo has
+twice measured that such signals do not beat ADP out of sample (`breakout.py`
++0.035 AUC, `projection.py` +0.002 Spearman, both covering zero). The claim made
+here is *not* "quality beats ADP" — it is "where the ADP curve has no resolution,
+an independent read beats the order rows happened to arrive in." **The block is
+measured; the order inside it is not**, and displaying the block rather than a
+dense 1..159 rank is what keeps that distinction visible.
+
+Also fixed while in there: `build` ended with `sort("par", descending=True)` and
+no `nulls_last` — the documented trap, latent only because no PAR is null today.
+
 ## 11. Landscape, cut — 2026-08-13
 
 Zach: *"leaning towards canning it as it's not really bringing any valuable info

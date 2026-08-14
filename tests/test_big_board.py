@@ -175,6 +175,108 @@ def test_signal_survives_a_board_with_no_vegas_column_at_all() -> None:
     assert out.get_column("signal").item() is None
 
 
+# --- ranking: the block is measured, the order inside it is not -------------
+
+
+def _ranked(rows: list[tuple[str, str, float, int, float | None]]) -> pl.DataFrame:
+    """(name, position, par, indist_group, quality_pct) -> a rankable frame."""
+    return pl.DataFrame(
+        [
+            {"name": n, "position": p, "par": v, "indist_group": g, "quality_pct": q}
+            for n, p, v, g, q in rows
+        ],
+        schema={
+            "name": pl.Utf8, "position": pl.Utf8, "par": pl.Float64,
+            "indist_group": pl.Int32, "quality_pct": pl.Float64,
+        },
+    )
+
+
+def test_players_the_curve_cannot_separate_share_a_block() -> None:
+    """The measured half. Different PAR, same group, therefore one block."""
+    board = _ranked(
+        [("A", "RB", 72.6, 1, 90.0), ("B", "RB", 67.4, 1, 50.0),
+         ("C", "RB", 40.0, 2, 99.0)]
+    )
+
+    out = bd.rank_board(board)
+    block = dict(zip(out.get_column("name"), out.get_column("block")))
+
+    assert block["A"] == block["B"], "same indistinguishable group, different block"
+    assert block["C"] != block["A"]
+
+
+def test_a_tie_is_broken_by_quality_not_by_row_order() -> None:
+    """The defect this function exists for.
+
+    `rank("ordinal")` broke PAR ties by row order, and row order is the ADP the
+    pool arrived in — so the board deferred to the market inside every tie. Henry
+    outranked Cook on identical PAR because the market drafts Henry earlier.
+    """
+    board = _ranked(
+        [("Henry", "RB", 72.6, 1, 84.1), ("Cook", "RB", 72.6, 1, 93.2)]
+    )
+
+    out = bd.rank_board(board).sort("board_rank")
+
+    assert out.get_column("name").to_list() == ["Cook", "Henry"]
+
+
+def test_the_block_outranks_quality_across_groups() -> None:
+    """Lexicographic, not blended — PAR alone decides the block.
+
+    A brilliant player in a lower block must stay below a poor one in a higher
+    block, or this has quietly become the composite that `BIG_BOARD_SPEC.md` §3
+    declined on the grounds that it double-counts ADP.
+    """
+    board = _ranked(
+        [("Poor but valuable", "RB", 72.6, 1, 13.6),
+         ("Great but cheap", "WR", 58.2, 1, 100.0)]
+    )
+
+    out = bd.rank_board(board).sort("board_rank")
+
+    assert out.get_column("name").to_list() == ["Poor but valuable", "Great but cheap"]
+
+
+def test_an_unscored_player_sorts_last_inside_his_block() -> None:
+    """"Not measured" is not "worst", but it cannot open the board either.
+
+    Polars sorts descending with nulls FIRST by default, so without the guard the
+    top of every block is the players nothing is known about.
+    """
+    board = _ranked(
+        [("Unscored", "RB", 72.6, 1, None), ("Scored", "RB", 72.6, 1, 20.0)]
+    )
+
+    out = bd.rank_board(board).sort("board_rank")
+
+    assert out.get_column("name").to_list() == ["Scored", "Unscored"]
+
+
+def test_ranking_survives_a_board_with_no_quality_at_all() -> None:
+    """A cold clone has no valuation frame. It must still get a board."""
+    board = pl.DataFrame(
+        {"name": ["A", "B"], "position": ["RB", "RB"], "par": [72.6, 40.0]},
+        schema={"name": pl.Utf8, "position": pl.Utf8, "par": pl.Float64},
+    )
+
+    out = bd.rank_board(board).sort("board_rank")
+
+    assert out.get_column("name").to_list() == ["A", "B"]
+    assert out.get_column("block").to_list() == [1, 2]
+
+
+def test_every_player_keeps_a_rank() -> None:
+    """Row count and rank coverage, because a reorder is where players vanish."""
+    board = _ranked([(f"P{i}", "WR", float(i), 1, float(i)) for i in range(12)])
+
+    out = bd.rank_board(board)
+
+    assert out.height == 12
+    assert sorted(out.get_column("board_rank").to_list()) == list(range(1, 13))
+
+
 # --- the drop column, which is the shape next to PAR's level ----------------
 
 
