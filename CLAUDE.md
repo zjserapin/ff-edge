@@ -243,6 +243,34 @@ worst at the position a superflex league is most sensitive about.
 `board.blend_par` standardizes each side before blending and maps the result
 back onto the `par` scale. Scale first, then weight.
 
+**And center per position, not globally — the two are separable and conflating
+them was a live bug.** Standardizing on one global center is right about the
+*spread* (rescaling each position to a common width would assert the best tight
+end is worth the best quarterback) and wrong about the *level*. The two sources
+disagree about where a whole position sits: on the 2026 board the median
+`ffb_par` minus `par` ran **+8.7 at TE against -16.2 at QB**, -9.2 at RB and
+-6.6 at WR. A global center leaves that intact and it lands on the blend as a
+uniform per-position shift — which is by construction not an opinion about any
+player. So the center comes from each position's own median, handing the
+cross-position level to `par` alone, and the scale stays global so positions
+keep their own spreads.
+
+The scale is then taken from **position-centered residuals**, not the raw
+columns, or the same offset leaks back through the denominator after being
+removed from the numerator.
+
+Note the offset survives `attach_footballers` already subtracting each system's
+own replacement level, because the two replacement levels sit at different
+points on differently shaped curves and the board holds each position to a
+different depth — 18 TEs against 67 WRs.
+
+**This did not fix the tight-end promotion, and do not re-tune the weight trying
+to.** Measured before and after: median TE shift against ADP **+47.5 either
+way**; QB improved from -18.0 to -12.0. Ranking on raw `par` alone already
+shifts TEs **+47.0**, so the cause is PAR comparing positions the board cuts to
+unequal depth, and the fix belongs where the pool is cut — roster demand, not
+blending.
+
 Related, and the reason that standardization uses median/IQR rather than
 mean/sd: **the two sources are censored differently in the tail.** A backup
 quarterback really is ~270 points below a superflex replacement and the

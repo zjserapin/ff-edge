@@ -470,3 +470,166 @@ def test_blend_orders_by_the_footballers_exactly_at_weight_one() -> None:
     )
 
     assert by_ffb == by_blend
+
+
+# --- the positional level bias ----------------------------------------------
+#
+# Every test above blends a single position, which is exactly why the bias below
+# survived them. The board blends four at once, and the two sources disagree
+# about each position's *level* as well as each player's rank.
+
+
+def _multi(rows: list[tuple[str, str, float, float | None]]) -> pl.DataFrame:
+    """(name, position, par, ffb_par) -> a frame `blend_par` will act on."""
+    return pl.DataFrame(
+        [
+            {"name": n, "position": p, "par": a, "ffb_par": f}
+            for n, p, a, f in rows
+        ],
+        schema={
+            "name": pl.Utf8,
+            "position": pl.Utf8,
+            "par": pl.Float64,
+            "ffb_par": pl.Float64,
+        },
+    )
+
+
+def _four_positions(te_offset: float = 0.0) -> pl.DataFrame:
+    """Four positions whose two sources agree, except TE is offset by a constant.
+
+    `te_offset` is the whole point: it is a level disagreement and nothing else.
+    Every player's rank inside his own position is identical in both columns, so
+    a blend that respects position must not move anybody.
+    """
+    rows: list[tuple[str, str, float, float | None]] = []
+    for pos, base in (("QB", 40.0), ("RB", 10.0), ("WR", -10.0), ("TE", -30.0)):
+        for i in range(6):
+            par = base - i * 8.0
+            ffb = par + (te_offset if pos == "TE" else 0.0)
+            rows.append((f"{pos}{i}", pos, par, ffb))
+    return _multi(rows)
+
+
+def test_weight_zero_reproduces_par_exactly_across_positions() -> None:
+    """A control, and deliberately one the old implementation also passed.
+
+    Whatever center is used cancels at `weight=0`, so this held under global
+    centering too and is not evidence the bias is gone — see the two tests below
+    for that. It is here because the per-position center is applied twice, once
+    to standardize and once to map back, and a sign or join error in either would
+    break the identity while leaving every blended board still plausible.
+    """
+    df = _four_positions(te_offset=25.0)
+
+    out = bd.blend_par(df, weight=0.0)
+
+    assert out.get_column("blend_par_exact").to_list() == pytest.approx(
+        df.get_column("par").to_list()
+    )
+
+
+def test_a_pure_level_disagreement_does_not_move_a_position() -> None:
+    """The regression this whole change exists for.
+
+    On the 2026 board the Footballers sat a median +8.7 above the ADP curve at
+    tight end and -16.2 below it at quarterback. Centering both sources on one
+    global median leaves that offset in place, so it lands on the blend as a
+    uniform per-position shift — every tight end up, every quarterback down,
+    regardless of what either source thought of any individual player.
+
+    Here the two sources agree about every player's rank within his position and
+    disagree only about where tight end sits. Nothing should move.
+    """
+    flat = bd.blend_par(_four_positions(te_offset=0.0), weight=0.5)
+    offset = bd.blend_par(_four_positions(te_offset=25.0), weight=0.5)
+
+    order_flat = (
+        flat.sort("blend_par_exact", descending=True).get_column("name").to_list()
+    )
+    order_offset = (
+        offset.sort("blend_par_exact", descending=True).get_column("name").to_list()
+    )
+
+    assert order_flat == order_offset
+    # And the level itself is unmoved, not merely the order.
+    assert offset.filter(pl.col("position") == "TE").get_column(
+        "blend_par_exact"
+    ).median() == pytest.approx(
+        flat.filter(pl.col("position") == "TE").get_column("blend_par_exact").median()
+    )
+
+
+def test_each_position_keeps_pars_level_at_full_footballers_weight() -> None:
+    """Cross-position level is `par`'s job; the panel only orders within a position.
+
+    `par` is the only column here with a defensible cross-position reading — it
+    prices a slot against this format's replacement levels. So even when the
+    Footballers own the ordering entirely, they must not be able to decide that
+    tight end as a whole outranks quarterback.
+    """
+    df = _four_positions(te_offset=60.0)
+
+    out = bd.blend_par(df, weight=1.0)
+
+    for pos in ("QB", "RB", "WR", "TE"):
+        sub = out.filter(pl.col("position") == pos)
+        assert sub.get_column("blend_par_exact").median() == pytest.approx(
+            sub.get_column("par").median()
+        )
+
+
+def test_positions_keep_their_own_spreads() -> None:
+    """The argument the old docstring got right, and which this change preserves.
+
+    Centering moved per position; scaling did not. A position that spreads twice
+    as wide as another in both sources must still spread twice as wide after the
+    blend — otherwise the board asserts the best tight end is worth the best
+    quarterback.
+    """
+    rows: list[tuple[str, str, float, float | None]] = []
+    for i in range(6):
+        rows.append((f"WIDE{i}", "QB", 60.0 - i * 20.0, 60.0 - i * 20.0))
+        rows.append((f"TIGHT{i}", "TE", 6.0 - i * 2.0, 6.0 - i * 2.0))
+    out = bd.blend_par(_multi(rows), weight=0.5)
+
+    def spread(pos: str) -> float:
+        s = out.filter(pl.col("position") == pos).get_column("blend_par_exact")
+        return float(s.max() - s.min())
+
+    assert spread("QB") == pytest.approx(spread("TE") * 10.0, rel=1e-6)
+
+
+def test_a_thin_position_falls_back_to_the_shared_center() -> None:
+    """A median over two players is not a level.
+
+    Below `_BLEND_MIN_POSITION_ROWS` the position takes the global center rather
+    than one computed from a handful of rows, and it must still produce a number
+    rather than a null.
+    """
+    rows: list[tuple[str, str, float, float | None]] = [
+        (f"WR{i}", "WR", 30.0 - i * 6.0, 25.0 - i * 5.0) for i in range(8)
+    ]
+    rows.append(("LONE", "TE", 5.0, 40.0))
+
+    out = bd.blend_par(_multi(rows), weight=0.5)
+
+    lone = out.filter(pl.col("name") == "LONE").row(0, named=True)
+    assert lone["blend_par_exact"] is not None
+    assert out.get_column("blend_par_exact").null_count() == 0
+
+
+def test_a_position_with_no_projections_at_all_keeps_its_par() -> None:
+    """A whole position the panel never published must survive the join."""
+    rows: list[tuple[str, str, float, float | None]] = [
+        (f"WR{i}", "WR", 30.0 - i * 6.0, 25.0 - i * 5.0) for i in range(8)
+    ]
+    rows += [(f"K{i}", "TE", -40.0 - i, None) for i in range(3)]
+
+    out = bd.blend_par(_multi(rows), weight=0.5)
+    kept = out.filter(pl.col("position") == "TE")
+
+    assert kept.height == 3
+    assert kept.get_column("blend_par_exact").to_list() == pytest.approx(
+        kept.get_column("par").to_list()
+    )

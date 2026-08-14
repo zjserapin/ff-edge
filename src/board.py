@@ -559,6 +559,14 @@ def attach_footballers(
     ).drop("_ffb_repl")
 
 
+# Below this many blendable rows there is no scale to standardize on and the
+# blend degrades to `par`. Per position the same floor guards the *center*: a
+# median over three players is noise, and a wrong per-position center is worse
+# than the shared one it would replace.
+_BLEND_MIN_ROWS = 4
+_BLEND_MIN_POSITION_ROWS = 4
+
+
 def blend_par(
     players: pl.DataFrame, weight: float = FOOTBALLERS_WEIGHT
 ) -> pl.DataFrame:
@@ -600,11 +608,61 @@ def blend_par(
     calibrate the whole board's blend on, so the scale is taken from the body of
     the distribution instead.
 
-    Standardization is global rather than per position, deliberately. PAR's only
-    job is cross-position comparison; standardizing within position would rescale
-    every position to the same spread and assert that the best tight end is worth
-    the best quarterback. The two sources genuinely disagree about how far a
-    position spreads, and that disagreement is a real opinion worth keeping.
+    **Centered per position, scaled globally, and the split between those two is
+    the whole correction.** An earlier version centered globally as well, on the
+    argument that PAR's only job is cross-position comparison and that
+    standardizing within position would rescale every position to the same spread
+    — asserting the best tight end is worth the best quarterback. That argument is
+    right about the *spread* and was wrongly extended to the *center*. The two are
+    separable, and conflating them let this function decide where a whole position
+    sits, which is not a thing three analysts' projections should be able to do.
+
+    Measured on the 2026 board under global centering, the median `ffb_par` minus
+    `par` ran **+8.7 at tight end against -16.2 at quarterback**, -9.2 at running
+    back and -6.6 at receiver. A single global center leaves that offset intact,
+    so it lands on the blend as a uniform per-position shift — and a shift applied
+    uniformly to a whole position is by construction not an opinion about players.
+
+    The offset survives `attach_footballers` already subtracting each system's own
+    replacement level, because the two replacement levels sit at different points
+    on differently shaped curves and the board holds each position to a different
+    depth: 18 tight ends against 67 receivers, cut at different distances from
+    their own replacement. So it is a pool-composition artifact rather than a
+    considered cross-position opinion, and it does not belong in the ordering.
+
+    So: the **center** comes from each position's own median, which hands the
+    cross-position level to `par` alone — the one thing `par` is documented to be
+    good at, and its only non-tautological content. The **scale** stays global, so
+    a position that spreads widely in both sources still spreads widely here and
+    nothing is rescaled to a common width. The original spread argument survives
+    untouched; only the center moved.
+
+    At `weight=1.0` the Footballers now set the entire ordering *within* each
+    position and none of the ordering *between* them. `weight=0.0` reproduces
+    `par` exactly, as it did before — the center cancels at zero, so that identity
+    is a control on the arithmetic here rather than evidence about the bias.
+
+    **What this does not fix, and the measurement is the point of saying so.**
+    On the 2026 board the correction moved the median quarterback six places
+    (-18.0 to -12.0 against ADP) and the median tight end **not at all**: +47.5
+    before and +47.5 after.
+
+    The tight-end promotion is therefore not this function's doing. Ranking on
+    raw `par` alone already shifts tight ends **+47.0** places, and every layer
+    downstream inherits it — `blend_par` +50.0, `par_env` +53.0, the final board
+    +47.5. It is PAR comparing positions the board holds to unequal depth: 67
+    receivers against 18 tight ends, so the deep receivers sit far below receiver
+    replacement while the deep tight ends sit barely below theirs, and a
+    cross-position sort on points-over-replacement interleaves them accordingly.
+
+    That is a replacement-and-roster-demand question, not a blending one. **Do
+    not re-tune this weight trying to cancel it** — doing so would trade a real
+    correction for a cosmetic one and hide the cause. The fix belongs where the
+    pool is cut.
+
+    A position with fewer than `_BLEND_MIN_POSITION_ROWS` blendable players falls
+    back to the global center: a median taken over two players is not a level, and
+    a wrong center is worse than a shared one.
     """
     if "ffb_par" not in players.columns or "par" not in players.columns:
         return players
@@ -612,18 +670,68 @@ def blend_par(
     both = players.filter(
         pl.col("par").is_not_null() & pl.col("ffb_par").is_not_null()
     )
-    if both.height < 4:
+    if both.height < _BLEND_MIN_ROWS:
         return players.with_columns(
             pl.col("par").alias("blend_par"),
             pl.col("par").alias("blend_par_exact"),
         )
 
-    def _center_scale(col: str) -> tuple[float, float]:
-        s = both.get_column(col)
-        return float(s.median()), float(s.quantile(0.75) - s.quantile(0.25))
+    par_mid = float(both.get_column("par").median())
+    ffb_mid = float(both.get_column("ffb_par").median())
 
-    par_mid, par_scale = _center_scale("par")
-    ffb_mid, ffb_scale = _center_scale("ffb_par")
+    # Frames without a position column blend as one pool, which is the old
+    # behaviour and the right answer when there is nothing to be biased between.
+    if "position" not in players.columns:
+        centers = None
+    else:
+        centers = (
+            both.group_by("position")
+            .agg(
+                pl.len().alias("_n"),
+                pl.col("par").median().alias("_par_mid"),
+                pl.col("ffb_par").median().alias("_ffb_mid"),
+            )
+            .with_columns(
+                pl.when(pl.col("_n") >= _BLEND_MIN_POSITION_ROWS)
+                .then(pl.col("_par_mid"))
+                .otherwise(pl.lit(par_mid))
+                .alias("_par_mid"),
+                pl.when(pl.col("_n") >= _BLEND_MIN_POSITION_ROWS)
+                .then(pl.col("_ffb_mid"))
+                .otherwise(pl.lit(ffb_mid))
+                .alias("_ffb_mid"),
+            )
+            .select("position", "_par_mid", "_ffb_mid")
+        )
+
+    def _with_centers(frame: pl.DataFrame) -> pl.DataFrame:
+        if centers is None:
+            return frame.with_columns(
+                pl.lit(par_mid).alias("_par_mid"), pl.lit(ffb_mid).alias("_ffb_mid")
+            )
+        # A position with no blendable rows never reaches `centers`, so the join
+        # leaves nulls rather than dropping him. Shared center for those.
+        return frame.join(centers, on="position", how="left").with_columns(
+            pl.col("_par_mid").fill_null(par_mid),
+            pl.col("_ffb_mid").fill_null(ffb_mid),
+        )
+
+    # **The scale is taken from position-centered residuals, not from the raw
+    # columns, and that is not a refinement.** A raw global IQR is inflated by
+    # exactly the between-position level differences this function exists to
+    # remove, so a source that sits high at one position would shrink its own
+    # z-scores everywhere — the bias leaking back in through the denominator
+    # after being removed from the numerator. Pooling the residuals measures
+    # within-position dispersion, which is the only thing the weight should be
+    # trading off, and makes the whole blend invariant to a per-position offset.
+    centered = _with_centers(both)
+
+    def _iqr(value: str, center: str) -> float:
+        residual = centered.get_column(value) - centered.get_column(center)
+        return float(residual.quantile(0.75) - residual.quantile(0.25))
+
+    par_scale = _iqr("par", "_par_mid")
+    ffb_scale = _iqr("ffb_par", "_ffb_mid")
 
     # A degenerate spread on either side makes the standardization undefined.
     # Falling back to par alone is the honest answer; a blend nobody can scale
@@ -634,11 +742,12 @@ def blend_par(
             pl.col("par").alias("blend_par_exact"),
         )
 
+    out = _with_centers(players)
     w = float(weight)
-    z_par = (pl.col("par") - par_mid) / par_scale
-    z_ffb = (pl.col("ffb_par") - ffb_mid) / ffb_scale
+    z_par = (pl.col("par") - pl.col("_par_mid")) / par_scale
+    z_ffb = (pl.col("ffb_par") - pl.col("_ffb_mid")) / ffb_scale
     blended = pl.when(pl.col("ffb_par").is_null()).then(pl.col("par")).otherwise(
-        par_mid + (w * z_ffb + (1.0 - w) * z_par) * par_scale
+        pl.col("_par_mid") + (w * z_ffb + (1.0 - w) * z_par) * par_scale
     )
 
     # Rounded for display, exact for ranking, and the pair is not redundant.
@@ -649,10 +758,10 @@ def blend_par(
     # at weight 1.0 it visibly reversed Pittman and Pollard against their own
     # ffb_par. Ranking the exact value keeps the order faithful and
     # reproducible; the tenth is a display convention, not the number.
-    return players.with_columns(
+    return out.with_columns(
         blended.alias("blend_par_exact"),
         blended.round(1).alias("blend_par"),
-    )
+    ).drop("_par_mid", "_ffb_mid")
 
 
 def attach_ecr(
