@@ -43,6 +43,7 @@ from src.config import (
     DEFAULT_SCORING,
     DEFAULT_TEAMS,
     CURRENT_SEASON,
+    ENV_WEIGHT,
     FANTASY_POSITIONS,
     FEATURE_SEASONS,
     OUTPUT_DIR,
@@ -2290,16 +2291,42 @@ def _screen_sections(dark: bool) -> None:
 # long enough that clicking between picks does not refetch Sleeper each time.
 @st.cache_data(ttl=60, show_spinner="Building the draft board…")
 def _draft_board() -> dict[str, Any]:
-    """The board, with team environment attached.
+    """The board. **One ranking, for every tab that shows one.**
 
-    `board.build` deliberately stops before the environment join so its own
-    tests do not depend on Vegas lines being reachable. The app wants both — the
-    board shows `env_swing` as a column and `value_gap` as its second opinion —
-    so the two are composed here rather than widening the module's contract.
+    `board.build` deliberately stops before the environment and Vegas joins so
+    its own tests do not depend on either being reachable, so the full chain is
+    composed here rather than widening the module's contract.
+
+    **This function exists in this shape because splitting it was a real bug.**
+    When `rank_board` shipped on 2026-08-13 it was applied only to the Big Board,
+    while Draft Day kept the raw ordinal-on-PAR whose ties break by row order.
+    The two tabs then disagreed about the top of the board — Draft Day opened
+    with Gibbs, Bijan, Taylor; Big Board with Achane, Bijan, Cook — from the same
+    data, eight days before a draft. Two rankings is worse than either ranking.
+
+    So the order below is the contract, and it is order-dependent throughout:
+    environment before `apply_env_weight` (which needs `env_swing`), quality
+    before `rank_board` (which breaks ties on it), and `indistinguishable`
+    recomputed on `par_env` so the environment weight can move a player between
+    blocks rather than only within one.
     """
     out = bd.build()
-    if out["players"].height:
-        out["players"] = bd.attach_quality(bd.attach_environment(out["players"]))
+    players = out["players"]
+    if not players.height:
+        return out
+
+    players = bd.attach_quality(bd.attach_environment(players))
+    players = bd.attach_vegas(players, _valuation())
+    players = bd.signal(players)
+    players = bd.apply_env_weight(players)
+    # Blocks are cut on the environment-adjusted value, so `se` — the standard
+    # error of the ADP curve — is being applied to a number the curve did not
+    # produce on its own. That understates the uncertainty by whatever error
+    # `env_swing` carries, which is unmodelled. Erring toward wider blocks would
+    # be the conservative choice; this errs toward using the adjustment at all.
+    players = bd.indistinguishable(players, value_col="par_env")
+    players = bd.positional_drop(players)
+    out["players"] = bd.rank_board(players, value_col="par_env")
     return out
 
 
@@ -3015,11 +3042,8 @@ def _tab_big_board(p: dict[str, Any]) -> None:
         )
         return
 
-    # rank_board runs last and after attach_quality, because it needs
-    # `quality_pct` to break ties the PAR curve cannot. Order matters here.
-    players = bd.rank_board(
-        bd.positional_drop(bd.signal(bd.attach_vegas(players, _valuation())))
-    )
+    # Already enriched and ranked by `_draft_board`. Doing any of it a second
+    # time here is how the two tabs came to disagree in the first place.
 
     # Same treatment the draft board gives it: a column of 1s reads as a rating,
     # and the only useful signal is the groups bigger than one.
@@ -3082,8 +3106,8 @@ def _tab_big_board(p: dict[str, Any]) -> None:
     columns = [
         c for c in (
             "block", "name", "position", "team", "bye", "tier", "same",
-            "adp", "adj_adp", "par", "drop", "quality_pct", "value_gap",
-            "vegas_gap", "signal", "env_swing", "board_rank",
+            "adp", "adj_adp", "par", "env_swing", "par_env", "drop",
+            "quality_pct", "value_gap", "vegas_gap", "signal", "board_rank",
         ) if c in view.columns
     ]
     # `nulls_last` on every sort in this file, ascending included: polars
@@ -3100,6 +3124,18 @@ def _tab_big_board(p: dict[str, Any]) -> None:
     )
     table(view.head(shown))
 
+    st.caption(
+        f"**The board is ordered on `par_env` — PAR plus {ENV_WEIGHT:g} of the "
+        "offence a player plays in.** That weight is the one asserted number in "
+        "this project. It is above zero because `env_swing` spans −31 to +47 "
+        "here against a PAR range of −65 to +73, so more than half the board's "
+        "spread sat in a column that carried no weight at all until 2026-08-14. "
+        "It is below one because ADP already prices some of the offence — a good "
+        "player on a bad team is drafted later — and `env_swing` cannot tell how "
+        "much, so adding it whole would double count. **Measure it before "
+        "trusting the exact figure**; it may well come back null like the last "
+        "two things measured here."
+    )
     st.caption(
         "**`par` deliberately does not fall monotonically down this board, and "
         "that is the fix rather than a bug.** Rows are ordered by `block` — "

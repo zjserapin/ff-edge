@@ -277,6 +277,83 @@ def test_every_player_keeps_a_rank() -> None:
     assert sorted(out.get_column("board_rank").to_list()) == list(range(1, 13))
 
 
+# --- the team-environment weight --------------------------------------------
+
+
+def _env(rows: list[tuple[str, str, float, float | None]]) -> pl.DataFrame:
+    """(name, position, par, env_swing) -> an environment-adjustable frame."""
+    return pl.DataFrame(
+        [{"name": n, "position": p, "par": v, "env_swing": e} for n, p, v, e in rows],
+        schema={
+            "name": pl.Utf8, "position": pl.Utf8,
+            "par": pl.Float64, "env_swing": pl.Float64,
+        },
+    )
+
+
+def test_env_weight_moves_a_player_by_a_stated_fraction() -> None:
+    board = _env([("A", "RB", 70.0, -30.0), ("B", "WR", 60.0, 40.0)])
+
+    out = bd.apply_env_weight(board, weight=0.5)
+    got = dict(zip(out.get_column("name"), out.get_column("par_env")))
+
+    assert got["A"] == pytest.approx(55.0)
+    assert got["B"] == pytest.approx(80.0)
+
+
+def test_a_weight_of_zero_reproduces_par_exactly() -> None:
+    """The old behaviour has to remain reachable, and reachable *exactly*.
+
+    `ENV_WEIGHT` is the one asserted number in `config.py`. If measuring it ever
+    returns an interval covering zero, setting it back to 0.0 must restore the
+    previous board rather than something close to it.
+    """
+    board = _env([("A", "RB", 70.0, -30.0), ("B", "WR", 60.0, 40.0)])
+
+    out = bd.apply_env_weight(board, weight=0.0)
+
+    assert out.get_column("par_env").to_list() == out.get_column("par").to_list()
+
+
+def test_a_missing_environment_costs_a_correction_not_a_row() -> None:
+    """An unreachable Vegas feed must not drop a player off the board."""
+    board = _env([("Priced", "RB", 70.0, 20.0), ("Unpriced", "RB", 60.0, None)])
+
+    out = bd.apply_env_weight(board, weight=0.5)
+    got = dict(zip(out.get_column("name"), out.get_column("par_env")))
+
+    assert out.height == 2
+    assert got["Unpriced"] == pytest.approx(60.0)
+
+
+def test_env_weight_survives_a_board_with_no_environment_column() -> None:
+    board = pl.DataFrame(
+        {"name": ["A"], "position": ["RB"], "par": [70.0]},
+        schema={"name": pl.Utf8, "position": pl.Utf8, "par": pl.Float64},
+    )
+
+    out = bd.apply_env_weight(board)
+
+    assert out.get_column("par_env").to_list() == [70.0]
+
+
+def test_the_environment_weight_can_move_a_player_between_blocks() -> None:
+    """The reason `rank_board` takes a `value_col` at all.
+
+    Achane and Nacua sit in different blocks, so an adjustment that only reordered
+    players *within* a block could never reach the comparison being asked about.
+    Ranking on `par_env` is what lets a bad offence cost a player his tier.
+    """
+    board = _env(
+        [("Bad offence", "RB", 70.0, -40.0), ("Good offence", "WR", 58.0, 40.0)]
+    ).with_columns(pl.lit(1, dtype=pl.Int32).alias("indist_group"))
+
+    out = bd.rank_board(bd.apply_env_weight(board, weight=0.5), value_col="par_env")
+    order = out.sort("board_rank").get_column("name").to_list()
+
+    assert order == ["Good offence", "Bad offence"], "env never crossed a block"
+
+
 # --- the drop column, which is the shape next to PAR's level ----------------
 
 
@@ -398,6 +475,36 @@ def test_sorting_the_board_puts_unranked_players_last() -> None:
 
     assert ordered[0] == "Also ranked"
     assert ordered[-1] == "Unranked", "a null rank opened the board"
+
+
+# --- one ranking, not two ---------------------------------------------------
+
+
+def test_the_app_ranks_the_board_in_exactly_one_place() -> None:
+    """The regression that shipped two contradictory boards.
+
+    `rank_board` landed on 2026-08-13 applied only to the Big Board, while Draft
+    Day kept the raw ordinal-on-PAR whose ties break by row order. Same data, two
+    orderings, eight days before a draft: Draft Day opened Gibbs/Bijan/Taylor and
+    the Big Board opened Achane/Bijan/Cook.
+
+    A source-level check, deliberately. The failure is *architectural* — an
+    enrichment step applied in one tab and not another — and by the time it shows
+    up in rendered output you are comparing two tables by eye, which is the thing
+    that let it through the first time. Every ranking step belongs in
+    `_draft_board` so both tabs read the same frame.
+    """
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[1] / "app.py"
+    text = source.read_text()
+
+    for step in ("rank_board(", "apply_env_weight(", "attach_quality("):
+        assert text.count(step) == 1, (
+            f"app.py calls {step} {text.count(step)} times — the board is being "
+            "enriched in more than one place, which is how the tabs came to "
+            "disagree. It belongs in _draft_board only."
+        )
 
 
 # --- driving the tab --------------------------------------------------------

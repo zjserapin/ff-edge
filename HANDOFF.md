@@ -4,7 +4,7 @@
 **Branch:** `dropoff-and-landscape`, off `main`. **`main` is finally current** —
 `measure-what-repeats` merged and pushed on 08-13 (fast-forward, `673f148`), so
 the 07-27 gap is closed and `main` no longer carries the preseason crash.
-**State:** 324 tests pass with a league, 318 pass and 8 skip without one.
+**State:** 330 tests pass with a league, 324 pass and 8 skip without one.
 **The Shiva Bowl draft is 2026-08-22 at 19:00.** Nine days. **Two more drafts
 follow it** — see the calendar below.
 
@@ -317,8 +317,8 @@ seasons.
 ## Commands
 
 ```bash
-uv run pytest                                                  # 318 pass, 8 skip
-FF_EDGE_LEAGUE_ID=... FF_EDGE_SLEEPER_USER=... uv run pytest    # 324 pass, 2 skip
+uv run pytest                                                  # 324 pass, 8 skip
+FF_EDGE_LEAGUE_ID=... FF_EDGE_SLEEPER_USER=... uv run pytest    # 330 pass, 2 skip
 FF_EDGE_LEAGUE_ID=... uv run streamlit run app.py
 FF_EDGE_PROFILE=standard_12 uv run python -c "from src import board; print(board.build()['players'].head())"
 uv run python -m src.peek                                      # the screens, still unreached from the UI

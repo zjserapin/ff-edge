@@ -372,6 +372,40 @@ Found while building: the board's `player_id` is FFC's Int64 and `scores` keys o
 the String gsis_id. Joining them without an alias let polars suffix the newcomer
 and handed back the wrong namespace. Written up in `CLAUDE.md`.
 
+## 14. One board, and the offence gets a weight — 2026-08-14
+
+Two of Zach's six points, and the first was a regression I introduced.
+
+**The tabs disagreed.** §12's `rank_board` was applied only to the Big Board;
+Draft Day kept the raw ordinal-on-PAR. Same data, two orderings, eight days out —
+Draft Day opened Gibbs/Bijan/Taylor, the Big Board Achane/Bijan/Cook. The whole
+enrichment chain now lives in `_draft_board` and both tabs read that one frame.
+`test_the_app_ranks_the_board_in_exactly_one_place` pins it at the source, because
+the failure is architectural and by the time it reaches rendered output you are
+comparing two tables by eye — which is what let it through.
+
+**`env_swing` was not "weighted too low". It was weighted zero.** Computed,
+displayed, and read by nothing. It spans −31.5 to +47.0 against a PAR range of
+−65 to +72.6, so more than half the board's spread sat in an unused column.
+Achane leads Nacua by 12.3 PAR and trails him by 67.5 points of offence.
+
+`config.ENV_WEIGHT = 0.35`, and **it is the only asserted number in `config.py`**.
+Above zero because the column is too big to ignore; below one because ADP already
+prices some of the offence and `env_swing` cannot tell how much, so adding it
+whole double counts — `attach_environment` has always called it "the size of the
+argument" rather than a correction to subtract. The right value is strictly
+inside (0, 1) and nobody has measured where.
+
+Blocks are cut on `par_env`, not `par`, so the offence can move a player *between*
+tiers — Achane and Nacua are in different blocks, so a within-block adjustment
+could never have reached the comparison being asked about. Achane falls from
+block 1 to block 4, rank 12; Nacua rises to rank 8, ahead of him.
+
+Known soft spot: `indistinguishable` uses `se`, the standard error of the ADP
+curve, and it is now applied to a number the curve did not produce alone. That
+understates uncertainty by whatever error `env_swing` carries, which is
+unmodelled.
+
 ## 11. Landscape, cut — 2026-08-13
 
 Zach: *"leaning towards canning it as it's not really bringing any valuable info

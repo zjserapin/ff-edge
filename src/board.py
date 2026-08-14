@@ -44,6 +44,7 @@ from src import profiles as pf
 from src import scoring as sc
 from src import sleeper
 from src.config import (
+    ENV_WEIGHT,
     FANTASY_POSITIONS,
     LEAGUE_ADP_TEAMS,
     SEASON,
@@ -1044,7 +1045,42 @@ def signal(
     )
 
 
-def rank_board(players: pl.DataFrame) -> pl.DataFrame:
+def apply_env_weight(
+    players: pl.DataFrame, weight: float = ENV_WEIGHT
+) -> pl.DataFrame:
+    """`par` adjusted for the offence a player actually plays in.
+
+    **Until 2026-08-14 `env_swing` was computed, displayed, and given a weight of
+    exactly zero.** That was never decided; it was where the column landed. And
+    it is not a small omission — `env_swing` spans -31.5 to +47.0 on the 2026
+    board against a PAR range of -65 to +72.6, so more than half the board's
+    total spread sat in a column nothing read. De'Von Achane leads Puka Nacua by
+    12.3 PAR and trails him by 67.5 points of offensive environment.
+
+    `weight` comes from `config.ENV_WEIGHT` and is **asserted rather than
+    measured** — the only such number in this project. It is below 1.0 because
+    ADP already prices some of the environment (a good player on a bad offence is
+    drafted later) and `env_swing` cannot tell how much, so adding it whole would
+    double count. It is above 0.0 because the column is too large to keep
+    ignoring by default. See the long note in `config.py`, and measure it before
+    trusting the exact figure.
+
+    Adds `par_env`. Falls back to `par` where the environment join found nothing,
+    so an unreachable Vegas feed costs a correction rather than a row.
+    """
+    if not players.height or "par" not in players.columns:
+        return players
+    if "env_swing" not in players.columns:
+        return players.with_columns(pl.col("par").alias("par_env"))
+
+    return players.with_columns(
+        (pl.col("par") + weight * pl.col("env_swing").fill_null(0.0))
+        .round(1)
+        .alias("par_env")
+    )
+
+
+def rank_board(players: pl.DataFrame, value_col: str = "par") -> pl.DataFrame:
     """Order the board by what the curve can actually resolve, then by quality.
 
     **This replaces an ordering that was, inside a tie, just ADP.** `board_rank`
@@ -1084,18 +1120,24 @@ def rank_board(players: pl.DataFrame) -> pl.DataFrame:
     is why `block` is displayed rather than a dense 1..N rank: the block is
     measured, the order inside it is not.
 
+    `value_col` is what the blocks are cut on. The app passes `par_env` so the
+    team-environment weight moves a player between blocks rather than only inside
+    one — Achane and Nacua sit in different blocks, so an adjustment confined to
+    within-block ordering could never have reached the comparison being asked
+    about.
+
     Adds `block` and rewrites `board_rank`. Players with no quality score sort
     last inside their block — "not measured" is not "worst".
     """
-    if not players.height or "par" not in players.columns:
+    if not players.height or value_col not in players.columns:
         return players
 
-    # Without a group the block degenerates to the player's own PAR, which is the
-    # pre-2026-08-13 behaviour minus the ADP tiebreak. Better than raising.
+    # Without a group the block degenerates to the player's own value, which is
+    # the pre-2026-08-13 behaviour minus the ADP tiebreak. Better than raising.
     group_key = (
-        pl.col("par").max().over(["position", "indist_group"])
+        pl.col(value_col).max().over(["position", "indist_group"])
         if "indist_group" in players.columns
-        else pl.col("par")
+        else pl.col(value_col)
     )
     quality = (
         pl.col("quality_pct")

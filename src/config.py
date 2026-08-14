@@ -218,6 +218,36 @@ LEAGUE_ADP_TEAMS = 10
 # in it.
 SUPERFLEX_ADP_SCORING = "2qb"
 
+# --- Team environment weight ------------------------------------------------
+
+# How much of `env_swing` enters the board's ordering. **This number is asserted,
+# not measured, and it is the only number in this file of which that is true.**
+#
+# The case for it being above zero: `env_swing` is large. It spans -31.5 to +47.0
+# on the 2026 board against a PAR range of -65 to +72.6, so more than half the
+# board's total spread comes from a column that carried no weight at all until
+# 2026-08-14. De'Von Achane leads Puka Nacua by 12.3 PAR and trails him by 67.5
+# points of offensive environment. Leaving it at zero is as much a choice as any
+# other value, and it was never a deliberate one.
+#
+# The case for it being below one: `expected.py` maps *positional ADP rank* to
+# points, so the curve is blind to team — but ADP itself is not. A good player on
+# a bad offence is drafted later, so part of the environment discount is already
+# in the price and `env_swing` cannot tell how much. Adding it whole double
+# counts. `board.attach_environment` says this out loud and calls the number "the
+# size of the argument" rather than a correction to subtract.
+#
+# So the honest reading is: the right weight is strictly between 0 and 1 and
+# nobody here has measured where. 0.35 leans toward the conservative half of that
+# interval on the reasoning that ADP is efficient and has probably priced most of
+# what is knowable about an offence.
+#
+# **To measure it properly**, run env_swing as a feature against next-season
+# points controlling for ADP, season-forward, and report the interval — the M1-M4
+# treatment in RESEARCH_SPEC.md §5.3. It may well come back null like the last
+# two, in which case this returns to 0.0 and that is a result.
+ENV_WEIGHT = 0.35
+
 # Seasons FFC publishes no board for at any scoring x team-count combination,
 # and which therefore cannot be label seasons no matter how much production data
 # exists for them.

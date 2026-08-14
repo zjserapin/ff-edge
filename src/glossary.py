@@ -595,6 +595,17 @@ TERMS: dict[str, Term] = {
         not monotone, so the tiering pools ranks the data cannot order instead of
         forcing one. A tier break is a real cliff; inside a tier, take the cheaper
         player.""", "Board"),
+    "par_env": _t(
+        "PAR + offence", "PAR plus a stated fraction of the offensive environment. What the board is ordered on.",
+        """`par` prices a draft slot and is blind to the team a player joins —
+        the expected-points curve maps positional ADP rank to points and never
+        sees a logo. `env_swing` estimates what the offence is worth and, until
+        2026-08-14, carried a weight of exactly zero despite spanning more than
+        half the board's total range. This is the two combined at
+        `config.ENV_WEIGHT`. **That weight is asserted, not measured** — below
+        one because ADP already prices some of the offence and this cannot tell
+        how much, above zero because the column is too large to keep ignoring.
+        It is the only number in `config.py` of which that is true.""", "Board"),
     "block": _t(
         "Block", "Players the PAR curve genuinely cannot tell apart. Order inside a block is a tiebreak, not a measurement.",
         """The board's honest unit. PAR is printed to a tenth of a point off a
