@@ -664,6 +664,35 @@ TERMS: dict[str, Term] = {
         with. Players inside a block are one asset; **take the one you want for
         other reasons** — price, the drop column, your own read. Between blocks
         the difference is real.""", "Board"),
+    "demand": _t(
+        "Roster demand", "How many of this position the draft still has to fill. The line the board is cut at.",
+        """Not a number anyone chose. It is the league's own starter demand read
+        off the roster shape — dedicated slots plus the flex slots allocated from
+        real scoring — **less the players already kept**, which is why 2026
+        quarterback demand is 7 rather than 20 and tight end is 8 rather than 10.
+        The first player past it *is* the replacement, by construction, so
+        `demand` and replacement level are the same statement counted two ways.
+        Above the line the board ranks across positions on PAR; below it, PAR has
+        nothing left to say and the order is ADP's.""", "Board"),
+    "pos_rank": _t(
+        "Position rank", "His rank at his own position on this board — not on ADP.",
+        """Taken on the board's own ranking column, so it is where *this tool*
+        has him rather than where the market does. That is the point: the
+        roster-demand line governs **how many** of a position get ranked across
+        positions, never **which** ones, so a player the board rates well above
+        his price can still sit inside the line. Read it against `demand` — "5 of
+        8" is the sentence that decides whether to take him now.""", "Board"),
+    "in_demand": _t(
+        "Inside demand", "True where `pos_rank` is inside `demand`. Below it the board defers to ADP.",
+        """The board's own statement about where it stops having an opinion.
+        Under replacement a player is worth zero starting-lineup points no matter
+        how negative his PAR, because you would start the freely available
+        replacement instead — so ranking -15 above -35 asserts a distinction the
+        number cannot support. It was not harmless: it promoted every tight end
+        on the 2026 board a median **47 places** over ADP, because the board holds
+        67 receivers to 18 tight ends and the deep receivers fall much further
+        below their own replacement. `block` is blank wherever this is false.""",
+        "Board"),
     "drop": _t(
         "Drop (next 5)", "PAR you give up by falling five places at his position. High means do not wait.",
         """The shape of the positional curve, next to PAR's level — and the two

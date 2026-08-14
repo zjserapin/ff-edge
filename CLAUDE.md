@@ -267,9 +267,39 @@ different depth — 18 TEs against 67 WRs.
 **This did not fix the tight-end promotion, and do not re-tune the weight trying
 to.** Measured before and after: median TE shift against ADP **+47.5 either
 way**; QB improved from -18.0 to -12.0. Ranking on raw `par` alone already
-shifts TEs **+47.0**, so the cause is PAR comparing positions the board cuts to
-unequal depth, and the fix belongs where the pool is cut — roster demand, not
-blending.
+shifts TEs **+47.0**, so the cause was PAR comparing positions the board cuts to
+unequal depth. That is fixed separately, below.
+
+**PAR below replacement is not an ordering, and sorting on it across positions
+was the board's largest distortion.** A player under his position's replacement
+contributes **zero** starting-lineup points no matter how negative the number —
+you would start the freely available replacement instead. So -15 and -35 are the
+same decision, and ranking one above the other asserts a distinction PAR cannot
+support.
+
+It was not harmless. The board holds **67 receivers to 18 tight ends**, cut at
+different distances from their own replacement: median `par` -17.9 at WR against
+**0.0** at TE. A cross-position sort therefore interleaved TE15 ahead of WR55 and
+promoted *every* tight end a median **+47.5 places** over ADP, never fewer than
++23, putting all 18 inside the top 100 of a league that rosters about 13.
+
+`board.roster_demand` cuts the board at the line and **asserts no new constant**:
+`replacement()` already derives `replacement_rank` per position from the roster
+shape and the keepers, and the first player past it *is* the replacement. Above
+the line the board ranks across positions; below it the order is **ADP's**, and
+`block` is null so the reader can see where the tool stops claiming. Measured
+after: TE median shift **0.0**, and the 8 tight ends inside demand land at board
+ranks 22-60 with the next at 105 — "get one by pick 60 or punt", which is a
+draft plan rather than a distortion.
+
+`pos_rank` is taken on the ranking column, not ADP: the cap governs **how many**
+of a position get compared across positions, never **which**.
+
+Read the correlation honestly. Whole-board Spearman against ADP *rose* from
++0.885 to +0.963, because 98 of 158 rows are now ADP by construction. Inside the
+line it is **+0.820**. The board gave up an opinion it could not support about
+the bottom two thirds and kept its disagreement where picks are decided; a
+falling headline correlation would have been the wrong thing to optimize.
 
 Related, and the reason that standardization uses median/IQR rather than
 mean/sd: **the two sources are censored differently in the tail.** A backup

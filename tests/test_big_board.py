@@ -192,6 +192,181 @@ def _ranked(rows: list[tuple[str, str, float, int, float | None]]) -> pl.DataFra
     )
 
 
+# --- roster demand ----------------------------------------------------------
+#
+# The board's largest measured distortion. Ranking across positions on PAR
+# promoted every tight end on the 2026 board a median +47.5 places against ADP,
+# because the board holds 67 receivers to 18 tight ends: the deep receivers sit
+# far below receiver replacement while the deep tight ends sit at theirs, so a
+# cross-position sort interleaves TE15 at -15 ahead of WR55 at -35. Both are
+# worth zero starting-lineup points, so the comparison is arithmetically fine
+# and decision-useless.
+
+
+def _demand(rows: list[tuple[str, int]]) -> pl.DataFrame:
+    """(position, replacement_rank) -> what `replacement()` hands `roster_demand`."""
+    return pl.DataFrame(
+        [{"position": p, "replacement_rank": r} for p, r in rows],
+        schema={"position": pl.Utf8, "replacement_rank": pl.Int32},
+    )
+
+
+def _deep_and_shallow() -> pl.DataFrame:
+    """A deep position and a shallow one, the shape that caused the bug.
+
+    Six receivers falling steeply past replacement, four tight ends barely
+    falling at all. Under a plain cross-position PAR sort the below-replacement
+    tight ends outrank the below-replacement receivers: TE4 at -15 beats WR5 at
+    -35 even though neither would ever start.
+
+    **ADP deliberately disagrees with PAR below the line**, the way the real
+    market does — it drafts the deep receivers well before the deep tight ends
+    (WR5 at 80, TE4 at 110). Without that the "ordered by ADP" assertion would be
+    satisfied by PAR order too and would prove nothing.
+    """
+    rows = [
+        ("WR1", "WR", 40.0, 12.0), ("WR2", "WR", 20.0, 25.0),
+        ("WR3", "WR", -5.0, 55.0), ("WR4", "WR", -20.0, 70.0),
+        ("WR5", "WR", -35.0, 80.0), ("WR6", "WR", -50.0, 95.0),
+        ("TE1", "TE", 12.0, 40.0), ("TE2", "TE", 1.0, 60.0),
+        ("TE3", "TE", -8.0, 100.0), ("TE4", "TE", -15.0, 110.0),
+    ]
+    return pl.DataFrame(
+        [
+            {"name": n, "position": p, "par": v, "adp": a}
+            for n, p, v, a in rows
+        ],
+        schema={"name": pl.Utf8, "position": pl.Utf8, "par": pl.Float64, "adp": pl.Float64},
+    )
+
+
+def test_the_line_is_replacement_rank_and_asserts_no_new_number() -> None:
+    board = _deep_and_shallow()
+    repl = _demand([("WR", 3), ("TE", 3)])
+
+    out = bd.roster_demand(board, repl, value_col="par")
+    inside = set(out.filter(pl.col("in_demand")).get_column("name"))
+
+    # replacement_rank 3 means the third player *is* the replacement, so two
+    # are inside the demand the draft has to fill.
+    assert inside == {"WR1", "WR2", "TE1", "TE2"}
+
+
+def test_a_below_replacement_tight_end_no_longer_outranks_a_worse_receiver() -> None:
+    """The regression. This is the +47.5 in one assertion.
+
+    TE4 at -15 and WR5 at -35 are both below their own replacement, so neither is
+    worth a starting-lineup point. Ordering them by PAR asserts a distinction PAR
+    cannot support, and it is what put eighteen tight ends in the top hundred.
+    Below the line the market decides, and the market has WR5 first.
+    """
+    board = _deep_and_shallow()
+    repl = _demand([("WR", 3), ("TE", 3)])
+
+    out = bd.rank_board(
+        bd.roster_demand(board, repl, value_col="par"), value_col="par"
+    ).sort("board_rank")
+    order = out.get_column("name").to_list()
+
+    assert order.index("WR5") < order.index("TE4"), "PAR still ordering below the line"
+    # And the below-the-line group is exactly ADP order.
+    beyond = out.filter(~pl.col("in_demand"))
+    assert beyond.get_column("adp").to_list() == sorted(
+        beyond.get_column("adp").to_list()
+    )
+
+
+def test_the_block_is_null_below_the_line() -> None:
+    """`block` is the board's claim to have resolved something.
+
+    Printing a number below replacement would extend the claim past where it
+    holds, so the column goes blank and the reader can see where the tool stops.
+    """
+    out = bd.rank_board(
+        bd.roster_demand(_deep_and_shallow(), _demand([("WR", 3), ("TE", 3)]), value_col="par"),
+        value_col="par",
+    )
+
+    assert out.filter(pl.col("in_demand")).get_column("block").null_count() == 0
+    beyond = out.filter(~pl.col("in_demand"))
+    assert beyond.height == 6
+    assert beyond.get_column("block").null_count() == 6
+
+
+def test_the_board_still_decides_which_players_fill_the_slots() -> None:
+    """The cap governs *how many*, never *which*.
+
+    `pos_rank` is taken on the ranking column, not on ADP, so a player the board
+    rates above his price is still allowed inside the line — which is the whole
+    point of having a board. Here the market's third receiver is the board's
+    first, and he must be inside.
+    """
+    board = pl.DataFrame(
+        {
+            "name": ["Cheap", "Chalk", "Bust"],
+            "position": ["WR", "WR", "WR"],
+            "par": [50.0, 20.0, -30.0],
+            "adp": [90.0, 10.0, 20.0],
+        }
+    )
+
+    out = bd.roster_demand(board, _demand([("WR", 3)]), value_col="par")
+    inside = set(out.filter(pl.col("in_demand")).get_column("name"))
+
+    assert inside == {"Cheap", "Chalk"}
+
+
+def test_a_position_the_replacement_frame_never_saw_stays_inside() -> None:
+    """Not measured is not worst — the `rank_board` lesson, applied to the cap.
+
+    A data gap must not quietly demote a whole position sixty places.
+    """
+    board = _deep_and_shallow()
+
+    out = bd.roster_demand(board, _demand([("WR", 3)]), value_col="par")
+    tes = out.filter(pl.col("position") == "TE")
+
+    assert tes.get_column("in_demand").to_list() == [True] * 4
+
+
+def test_a_player_the_ranking_column_could_not_score_stays_inside() -> None:
+    board = pl.DataFrame(
+        {
+            "name": ["A", "B", "Unscored"],
+            "position": ["WR", "WR", "WR"],
+            "par": [40.0, 20.0, None],
+            "adp": [10.0, 20.0, 30.0],
+        },
+        schema={"name": pl.Utf8, "position": pl.Utf8, "par": pl.Float64, "adp": pl.Float64},
+    )
+
+    out = bd.roster_demand(board, _demand([("WR", 3)]), value_col="par")
+
+    assert out.filter(pl.col("name") == "Unscored").get_column("in_demand")[0] is True
+
+
+def test_the_cap_is_a_no_op_without_a_replacement_frame() -> None:
+    """An unreachable baseline costs the split, not the board."""
+    board = _deep_and_shallow()
+
+    assert "in_demand" not in bd.roster_demand(board, None, value_col="par").columns
+    assert "in_demand" not in bd.roster_demand(
+        board, pl.DataFrame(), value_col="par"
+    ).columns
+    # And `rank_board` still ranks a frame that never went through the cap.
+    assert bd.rank_board(board, value_col="par").height == board.height
+
+
+def test_every_player_keeps_a_rank_across_the_split() -> None:
+    out = bd.rank_board(
+        bd.roster_demand(_deep_and_shallow(), _demand([("WR", 3), ("TE", 3)]), value_col="par"),
+        value_col="par",
+    )
+
+    assert out.height == 10
+    assert sorted(out.get_column("board_rank").to_list()) == list(range(1, 11))
+
+
 def test_players_the_curve_cannot_separate_share_a_block() -> None:
     """The measured half. Different PAR, same group, therefore one block."""
     board = _ranked(
