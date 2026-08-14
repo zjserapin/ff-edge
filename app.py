@@ -2776,6 +2776,139 @@ def _placeholder(name: str, phase: str) -> None:
     st.info(f"Not built yet — {phase}.", icon="🚧")
 
 
+# --- Big Board tab ------------------------------------------------------------
+
+# The four signal levels, in the order they should be read. `None` is a real
+# level here and not an oversight — see `board.signal` on why "no line posted"
+# stays distinct from "a line was posted and it agrees".
+_SIGNAL_ORDER = ["both up", "split", "both down", "quiet"]
+
+
+def _tab_big_board(p: dict[str, Any]) -> None:
+    """One ranked list, ordered by PAR, annotated by the two independent reads.
+
+    **The point of this tab is that it is the only one with a whole opinion on
+    it.** Everything here was already computed; it was computed in two frames
+    that never met — `_draft_board` carries `par`, tiers and `value_gap` but no
+    line, `_valuation` carries the line but no tier and no keeper adjustment. So
+    answering "who should I take" meant reading two tabs and joining by eye,
+    which is exactly what does not work on a clock.
+
+    **Ordered by `par`, annotated by the rest, and deliberately not blended.**
+    Only two of the three numbers on this board are independent of ADP — `par` is
+    derived from the curve — so a composite would count the market twice. Worse,
+    an average turns the disagreements into zeros, and the disagreements are the
+    reason to have two opinions at all. See `BIG_BOARD_SPEC.md` §2-3.
+    """
+    st.subheader("Big board")
+    st.caption(
+        "Every player still draftable in your league, ranked across positions "
+        "by points above replacement, with the two reads that are *not* derived "
+        "from ADP shown next to the price rather than folded into it."
+    )
+
+    data = _draft_board()
+    for warning in data.get("warnings", []):
+        st.warning(warning)
+
+    players = data["players"]
+    if not players.height:
+        st.info(
+            "No board yet. This tab needs an ADP board for the season and a "
+            "league to price it against — run with `FF_EDGE_LEAGUE_ID` set.",
+            icon="🗒️",
+        )
+        return
+
+    players = bd.signal(bd.attach_vegas(players, _valuation()))
+
+    # Same treatment the draft board gives it: a column of 1s reads as a rating,
+    # and the only useful signal is the groups bigger than one.
+    if "indist_n" in players.columns:
+        players = players.with_columns(
+            pl.when(pl.col("indist_n") > 1)
+            .then(pl.col("indist_n"))
+            .otherwise(None)
+            .alias("same")
+        )
+
+    kept, priced = data["kept"].height, players.get_column("vegas_gap").drop_nulls().len()
+    left, mid, right = st.columns(3)
+    left.metric("Draftable", players.height)
+    mid.metric("Off the board (kept)", kept)
+    right.metric("With a book line", priced)
+
+    st.caption(
+        f"**{players.height - priced} of {players.height} players have no "
+        "posted line, and that is construction rather than breakage** — FanDuel "
+        "prices about 92 players season-long, top of the board only. A blank "
+        "Vegas gap means *not measured*, never *no edge*. The same holds for "
+        "quality on a player whose last season fell under the volume floor."
+    )
+
+    positions = st.multiselect(
+        "Positions",
+        list(FANTASY_POSITIONS),
+        default=list(FANTASY_POSITIONS),
+        key="big_board_positions",
+    )
+    signals = st.multiselect(
+        "Signal",
+        _SIGNAL_ORDER,
+        default=[],
+        key="big_board_signals",
+        help=(
+            "Leave empty for the whole board. `split` is the one worth opening — "
+            "it is where the two independent reads disagree."
+        ),
+    )
+
+    view = players.filter(
+        pl.col("position").is_in(positions or list(FANTASY_POSITIONS))
+    )
+    if signals:
+        view = view.filter(pl.col("signal").is_in(signals))
+
+    columns = [
+        c for c in (
+            "board_rank", "name", "position", "team", "bye", "tier", "same",
+            "adp", "adj_adp", "par", "value_gap", "vegas_gap", "signal",
+            "env_swing",
+        ) if c in view.columns
+    ]
+    # `nulls_last` on every sort in this file, ascending included: polars
+    # defaults it to False, so an unscored player would otherwise open the board.
+    view = view.sort("board_rank", nulls_last=True).select(columns)
+
+    if not view.height:
+        st.info("No players match those filters.", icon="🔍")
+        return
+
+    shown = st.slider(
+        "Players shown", 25, max(25, view.height), min(75, view.height), step=25,
+        key="big_board_rows",
+    )
+    table(view.head(shown))
+
+    chart_note(
+        ["par", "value_gap", "vegas_gap", "signal"],
+        "<strong style='color:#c3c2b7'>same</strong> — how many players the "
+        "curve cannot tell apart from this one. Inside a group, take the "
+        "cheaper.",
+    )
+
+    # There is no other export in this app, and a board you cannot mark up is not
+    # a board you can prepare with. The full filtered view, not the truncated
+    # one — the slider is a reading control, not a selection.
+    st.download_button(
+        "Download this board (CSV)",
+        data=view.write_csv(),
+        file_name=f"ff-edge-big-board-{SEASON}.csv",
+        mime="text/csv",
+        help="The full filtered board, not just the rows shown above.",
+    )
+
+
 def _tab_research(p: dict[str, Any]) -> None:
     """The measured nulls and the supporting work, collapsed.
 
@@ -2817,10 +2950,17 @@ def main() -> None:
     st.title("ff-edge")
     p = _sidebar()
 
-    # Draft Day leads because it is the only tab with a deadline on it, and Board
-    # follows it because "who is actually good" is the question the draft board is
-    # worst at — `par` reproduces ADP's order within a position, so the second
-    # opinion needs to be one click away rather than four.
+    # Big Board leads as of 2026-08-13. It is the only surface carrying a whole
+    # opinion — one list, ordered across positions, with both market-independent
+    # reads on it — and everything behind it is preparation for reading that list
+    # or an argument about whether to trust it. See BIG_BOARD_SPEC.md; it is also
+    # the first brick of the Rankings surface in RESEARCH_SPEC.md §6, so the
+    # Phase 1 restructure inherits it rather than replacing it.
+    #
+    # Draft Day follows because it is the only tab with a deadline on it, and
+    # Board follows that because "who is actually good" is the question the draft
+    # board is worst at — `par` reproduces ADP's order within a position, so the
+    # second opinion needs to be one click away rather than four.
     #
     # The Board tab is `valuation.py` — quality against price — and is
     # deliberately *not* the draft board, which lives under Draft Day. That trap
@@ -2830,9 +2970,11 @@ def main() -> None:
     # Players and Strategy merged into Research on 2026-08-10. See
     # DASHBOARD_SPEC_v2.md; the short version is that neither is read on the
     # clock and both were sitting in front of the two that are.
-    draft_day, board, landscape, research, reference = st.tabs(
-        ["Draft Day", "Board", "Landscape", "Research", "Glossary"]
+    big_board, draft_day, board, landscape, research, reference = st.tabs(
+        ["Big Board", "Draft Day", "Board", "Landscape", "Research", "Glossary"]
     )
+    with big_board:
+        _tab_big_board(p)
     with draft_day:
         _tab_draft_day(p)
     with board:

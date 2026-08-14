@@ -1,245 +1,295 @@
 # ff-edge — handoff
 
-**Session date:** 2026-08-12
-**Branch:** `measure-what-repeats`, 27 commits ahead of `main`, and **pushed**.
-`origin/main` is still at `5da50ec` from 07-27 — the branch is backed up, main
-is not caught up. Those are different problems and the previous handoff conflated
-them; see §1.
-**State:** 272 tests pass with a league, 269 pass and 5 skip without one. App
-renders and, as of this session, *survives being driven*.
-**The draft is 2026-08-22 at 19:00.** Ten days.
+**Session date:** 2026-08-13 (two sessions, this is the second)
+**Branch:** `measure-what-repeats`, pushed through commit 27. `origin/main` still
+at `5da50ec` (07-27), so everything lives only on the branch. That is a merge
+decision, not a backup problem.
+**State:** 283 tests pass with a league, 278 pass and 7 skip without one.
+**The Shiva Bowl draft is 2026-08-22 at 19:00.** Nine days. **Two more drafts
+follow it** — see the calendar below.
 
-Read this before doing anything else. It is written to be the whole context.
+Read `RESEARCH_SPEC.md` for direction and `BIG_BOARD_SPEC.md` for what was just
+built. This file is the state around them.
 
 ---
 
 ## The one-paragraph version
 
-The dashboard build is finished. Both spec rounds and all six v2 decisions
-shipped, plus the sportsbook layer that v2 had recommended declining. What was
-left on the list was one item nobody had done: **actually drive the Draft Day
-tab instead of rendering it once.** Doing that found a crash that would have
-killed the app mid-draft — not a wrong number, a dead process — and it was
-invisible to 270 passing tests. That is the whole session.
+The earlier session retired the app's premise and wrote `RESEARCH_SPEC.md`. This
+one verified that spec against live data and **found it wrong in three places
+that mattered**, then built the thing Zach actually needed. `SUPER_FLEX` is real
+and still on the roster. The ADP history the spec described as "accumulating
+daily" held exactly one snapshot per market. And there are **three leagues, not
+one**, across 24 days. Then, while building the Big Board, an
+**app-killing crash** turned up that had gone live earlier the same day.
 
-The thing to carry forward is the same lesson as last session, sharper:
-**rendering once is not testing.** The previous session's version was "look at
-the output, don't read the code." This session's is **"drive it repeatedly, in
-the order a human would."** The crash needed nine renders and only fired in one
-direction.
+The thing to carry forward is the ADP-independence point, because it is now
+load-bearing in code: **only two of the three numbers on the board are
+independent of the market.** `par` is derived from the ADP curve, so a composite
+that averages `par`, `value_gap` and `vegas_gap` counts ADP twice and calls the
+result a second opinion. That is why the Big Board annotates rather than blends,
+and it is a correction to `RESEARCH_SPEC.md` §5.2.
+
+---
+
+## The calendar, which the spec did not know about
+
+`bootstrap` reported `my_leagues -> 3`. All confirmed live from Sleeper.
+
+| league | draft | format | status |
+|---|---|---|---|
+| **Shiva Bowl** | **08-22** | 10T, superflex, 2 keepers, 0.5 PPR | supported |
+| **The Jungle** | **08-30** | 10T superflex **dynasty startup**, full PPR, 12 BN, no K/DEF | **out of scope, by decision** |
+| **828 Omegle Chat** | **09-06** | 12T, one FLEX, 1 keeper, full PPR | not built yet |
+
+**The Jungle stays out.** Zach's call, and it holds the line `CLAUDE.md` and
+`profiles.py` both draw: nothing here estimates an age curve, and a startup
+draft is the *worst* case to break that on, since startup pricing is where age
+matters most. Do not quietly add a dynasty profile.
+
+**828 is cheap and unbuilt.** It is `standard_12` with `rec: 1.0`. FFC `ppr`/12
+ADP is already cached for all eight seasons (2019-2026), so both the board and
+the historical curve come from a matching market. It needs the profile selector,
+which is the one Phase 0 item still outstanding.
 
 ---
 
 ## What this session did
 
-| file | what changed |
+| file | what |
 |---|---|
-| `pyproject.toml` | `pyarrow != 25.0.0` — load bearing, see below. `polars >= 1.43.2`, off two yanked releases. |
-| `tests/test_draft_day.py` | **New.** The dry run, as a test. Drives the pick selector through all 15 picks and times each. |
-| `tests/test_display.py` | Guard that fails loudly if pyarrow 25.0.0 returns through a stale lock. |
-| `CLAUDE.md` | The trap, how it hid, and the `--no-sync` / `FF_EDGE_SLEEPER_USER` notes. |
-
-No application code changed. The bug was never in this repo.
-
----
-
-## The crash, because it is the only thing here that mattered
-
-`HANDOFF.md` asked for a draft-day dry run and said why: the tab *"has never
-been driven under time pressure, only rendered … that is a different test from
-renders without exceptions, and it is the only one that matters on the 22nd."*
-
-That was right, and more literally than intended.
-
-Walking the pick selector through the fifteen picks Zach owns — 4, 17, 24, 37 …
-— **killed the interpreter on the ninth render.** SIGSEGV. No traceback, no
-Streamlit error page, no log line. On draft night the tab would simply have
-stopped existing, and it would have looked like a laptop problem.
-
-Three properties made it invisible:
-
-- **It needed repetition, not an input.** One render passed. It died in the
-  *picks* table, whose contents are byte-identical on every rerun.
-- **It was order dependent.** The same fifteen picks walked in reverse never
-  crashed, across every attempt. That is heap layout, not data.
-- **The suite was green.** 270 unit tests passed against a build that could not
-  survive a draft.
-
-**Cause: pyarrow 25.0.0.** Every table in `app.py` is polars, and `st.dataframe`
-round-trips each one through pandas and back into Arrow bytes for the browser.
-On 25.0.0 that round trip corrupts memory inside `pandas_compat`.
-
-Ruled out by measurement, in this order, because the first three were the
-obvious suspects and all three were wrong:
-
-| tried | result |
-|---|---|
-| Hand Streamlit polars directly, skipping `to_pandas` | crash moved to `st.dataframe`, which converts internally |
-| `pd.set_option("mode.string_storage", "python")` | fixed the arrow→pandas leg; crash moved to pandas→arrow |
-| pandas 3.0.5 → 2.3.3 | **worse** — died on the 5th render instead of the 9th |
-| polars 1.43.1 → 1.43.2 (1.43.1 is yanked) | no change, 6/6 still crashed |
-| **pyarrow 25.0.0 → 25.0.1** | **0 crashes in 8 forward runs + a reverse pass** |
-
-Against 9/9 crashes on 25.0.0. Fixed upstream, so `pyproject.toml` excludes the
-one release rather than holding the floor down.
-
-**Both guards were verified against the real failure**, by reinstalling 25.0.0
-under `uv run --no-sync`: the version guard fails with its explanation, and
-`tests/test_draft_day.py` segfaults pytest to exit 139. Plain `uv run` re-syncs
-from the lock every time, which is what keeps the exclusion enforced in practice.
-
-### And the tab is fast enough
-
-The other half of the dry run. Cold start ≈10s; **every pick change resolves in
-about 0.3 seconds**, all fifteen, against a budget of ten. `test_draft_day.py`
-asserts the 10s bound so a moved cache boundary fails a test rather than
-surfacing on the clock.
+| `src/nflverse.py` | **The fix that mattered.** `_played()` filters future seasons before the cache key, turning a fatal raise into an empty frame. Applied to all 11 game-data wrappers. |
+| `src/board.py` | `attach_vegas` and `signal` — the two ADP-independent reads, joined and labelled. |
+| `src/glossary.py` | 8 new terms. `vegas_gap` had been displayed on the Board tab with no definition at all. |
+| `app.py` | `_tab_big_board`, now first in the tab strip. |
+| `tests/test_big_board.py` | **New.** 9 unit + 2 driven-tab, the latter ported from `test_draft_day.py`. |
+| `BIG_BOARD_SPEC.md` | **New.** Spec, then build, then the results written back into it. |
+| `CLAUDE.md` | The future-season trap, and why it was invisible. |
+| `RESEARCH_SPEC.md` | Unchanged so far — **its §3 and §5.2 both need correcting**, see below. |
 
 ---
 
-## Corrections to the previous handoff
+## The findings, compressed
 
-It was written at `3795973` and four commits landed after it. If you read it,
-read these too.
+Full reasoning is in `RESEARCH_SPEC.md`. The load-bearing ones:
 
-**Priority #1 "push" — still open and now larger.** 26 commits, not 11. Origin
-is at 07-27, not 08-06.
+**Three sharp tools are built and unreachable.** `app.py` imports 16 modules and
+**`peek` and `adp` are not among them.** So `peek.regression_candidates` (points
+over expected — the canonical buy-low screen), `peek.market_disagreement`,
+`peek.snap_trend`, and `adp.movement` (risers/fallers off the `adp_history_*`
+snapshots that bootstrap has been accumulating daily) have never been visible in
+the dashboard. Same failure as `board.py` sitting unreachable two weeks before
+a draft. Cheapest wins available.
 
-**Priority #2 "draft-day dry run" — done.** It is `tests/test_draft_day.py` now.
-It found the crash above.
+**`profiles.py` cannot reach the sidebar.** The multi-league pivot rides on it,
+and it already does the hard part — binding a roster format to the ADP market
+that prices it. But `app.py` never imports it. The sidebar reads one live league
+and exposes teams / points-per-reception / passing-TD only. **Roster shape is
+not selectable**, which means the thing that moves replacement level cannot be
+changed in the UI.
 
-**Priority #3 "fill `data/win_totals_2026.csv`" — strike it. It buys nothing.**
-The file is 32 rows and 0 filled, and all 32 teams already resolve on `basis =
-lines`. `src/expected.py:53` has the measurement: actual wins → team fantasy
-points is 0.615, and the game lines already there are 0.619. Actual wins is the
-*ceiling* a preseason win total could reach and the free data already matches
-it. The file is inert; deleting it is optional tidying, not a task.
+**`board.py` is two modules.** ~500 of its 1,111 lines are keeper and
+pick-ownership plumbing that is genuinely finished. The other ~600 —
+`replacement`, `cost_of_waiting`, `tier_map`, `indistinguishable`,
+`attach_quality` — is the format-general ranking spine and is what Rankings
+would sit on. **Split it; do not delete it.**
 
-**"225 tests pass" — 272 now** (269 + 3 that need a league and a handle).
+**`par`'s within-position ordering is tautological with ADP.** It is derived
+from the ADP curve. Its only non-tautological content is cross-position — what a
+QB1 is worth against an RB1 at this format's replacement levels — which is
+exactly what a multi-league tool needs. Keep it, stop calling it a player
+ranking. `app.py:main` already says this in a comment.
 
-**The props layer is not in it at all.** Two commits after it was written, and
-they reverse its "player props are not free" position — see below.
-
----
-
-## What is built, as of now
-
-Both dashboard specs are complete. `DASHBOARD_SPEC.md` (08-08) and
-`DASHBOARD_SPEC_v2.md` (08-10) each carry a "what actually shipped" section
-recording where the spec was wrong; those are worth reading before re-proposing
-anything they declined.
-
-Five tabs: `Draft Day | Board | Landscape | Research | Glossary`.
-
-Shipped since the last handoff, beyond v2's six decisions:
-
-- **Quarterbacks are scored.** `valuation.SKILL_POSITIONS` → `VALUED_POSITIONS`
-  with QB added, gated on a season-forward measurement taken *before* any code:
-  QB n=163, rho +0.367, CI [+0.213, +0.493]. The gate also caught a live bug —
-  a QB's `routes` value is *dropbacks*, so the `routes >= 100` filter waved
-  quarterbacks through on a column that means something else at their position,
-  and Taysom Hill scored at the 25th percentile off six pass attempts.
-- **PAR stopped printing precision it never had.** `board.indistinguishable`
-  groups players whose PAR gaps sit inside the pooled standard error. On the
-  live board the top five receivers are one group.
-- **The board notices the draft is happening** — live picks come off it.
-- **FanDuel season-long props**, 145 markets across 92 players. This reverses
-  v2's D2 ("decline for 2026") on the grounds that its premise was wrong: the
-  API is genuinely public. `vegas_gap` is a third opinion, and it is least
-  trustworthy exactly where it looks most exciting — see the trap list.
+**`simulate.py` is 741 lines and should come out of the product.** Pinned to a
+format the league does not use, templates that do not match the board, a
+headline result inside the noise, and it simulates drafting when the edge is in
+managing. The finding survives as a sentence in Method.
 
 ---
 
 ## Where to pick up
 
-### 1. Decide what happens to `main`. The push itself is done.
+### 1. Run `bootstrap` every day until 09-06. This is the only item with an expiry.
 
-The previous handoff said "11 unpushed" and this one initially said 26, both
-measured against `origin/main`. That was the wrong ruler: the branch has its own
-upstream and was already pushed. **Nothing is at risk of being lost.**
+`RESEARCH_SPEC.md` §3 says the ADP history has "been accumulating in the cache
+since bootstrap started running daily." **It had not.** Each of the three
+history files held exactly one snapshot — 07-27, 07-27, and 08-03 — so
+`adp.movement` returned an empty frame, and surfacing it would have rendered the
+empty table `CLAUDE.md` warns reads as a network blip.
 
-What is actually outstanding is that `origin/main` has not moved since 07-27, so
-every one of these 27 commits lives only on `measure-what-repeats`. That is a
-merge or a PR, not a push, and it is a judgement call rather than a deadline —
-the app runs off the branch either way. Measure against `@{u}` before claiming
-anything is unpushed again.
+There are now two snapshots each, so it returns real rows, but the window is
+10-17 days wide rather than the labelled 7.
 
-### 2. Sit with the tab yourself
+**ADP history cannot be backfilled.** August drift is camp news made numeric and
+the fortnight before a draft is the highest-information stretch of the year. A
+day not pulled is gone.
 
-The machine dry run proves it does not crash and answers in 0.3s. It cannot
-tell you whether the *answer* arrives in ten seconds — whether you can look at
-Draft Day on the clock and know what to do. That is a human test and it is still
-unrun.
+```bash
+uv run python -m src.bootstrap --light      # ~90s, all three markets
+```
 
-### 3. Contextual scoring on Reddit — still unstarted, still wanted
+Worth setting up as a real cron rather than remembering. Ask before installing
+one.
 
-Unchanged from the last handoff. The user wants to **learn** this, so build it
-slowly and explain first, and spec it before writing code. `claims.py` has the
-scoring spine; a 5-10 player WR subset makes resolution tractable. Season one is
-labeled-data collection — do not promise predictive validation before there is a
-corpus.
+### 2. The superflex question is settled, and the answer has a wrinkle
 
-### 4. After the draft, by decision
+**Confirmed live on 08-13:** the roster is
+`QB/RB/RB/WR/WR/TE/FLEX/SUPER_FLEX/K/DEF` + 5 BN. The 2024 and 2025 rosters both
+ran two FLEX; 2026 swapped one for `SUPER_FLEX` and dropped a bench slot. That
+is a deliberate settings change, so `RESEARCH_SPEC.md` §0 is right: the mocks
+pricing it like a 1QB league is the edge existing, not evaporating.
 
-- `app.py` module split. 2,849 lines, violates the `Projects/CLAUDE.md`
-  standard, invisible to the user. Deliberately not done ten days out.
-- **L3** — concentration, deeper. Pick one direction, it needs scoping.
-- **L4** — concentration into rankings. Measure first, build only if the
-  interval clears zero. Note this is *not* the same refusal as positional
-  scarcity, which is already in `par` by construction.
-- **Weekly props.** `props.weekly()` returns empty by design — FanDuel does not
-  post per-game markets until game week. The parser is shared and ready.
-- **Strategy → 2027.** Needs 2QB ADP and new templates.
-- **Dynasty.** Out of scope: needs an age curve this project does not have.
+**The wrinkle, found while building the board: the edge is mostly already
+spent.** 13 of the top quarterbacks are keepers. QB draft demand is therefore 7,
+not 20, and replacement lands at **QB8 among the available** rather than QB21.
+No quarterback appears until board rank 30.
 
-### 5. The open research question, unchanged and still the best thread
+Both things are true and they are not in tension: the format really is
+superflex, and Zach's league-mates already took most of what that was worth by
+keeping quarterbacks. The board computes this correctly and always has —
+`board.py`'s module docstring describes exactly this case. What needed the
+qualifier was the *reading* of §0, which implies an edge still lying around.
 
-The project measures *ranking* accuracy and is blind to *payoff asymmetry*. The
-spread around the ADP curve is more than five times the step between ranks, so
-which players land at the top of their tier's distribution is worth far more
-than nailing the order — and nothing here has tested whether that is
-predictable. Better than re-running a measured null with more parameters.
+### 3. Phase 0 — what is left before 08-22
+
+Additive, no restructure. Rebuilding a 2,900-line app in nine days is how you
+arrive at a draft with a broken tool.
+
+- ~~Confirm the Sleeper roster.~~ Done, above.
+- ~~One ranked list to prepare from.~~ Done — the Big Board tab.
+- **Surface the remaining `peek` screens** — `regression_candidates`,
+  `market_disagreement`, `snap_trend` — in an expander on the Research tab.
+  `adp.movement` should wait for a few more days of snapshots. Zero risk.
+- **Add the profile selector**, which now has a concrete customer: 828 drafts
+  09-06 and cannot be priced without it. `RESEARCH_SPEC.md` §7.1.
+- **Sit with the Big Board and mark it up.** It exports CSV for this.
+- Draft.
+
+Everything else — the `board.py` split, the cuts, the three-surface rebuild — is
+Phase 1. The four measurements (M1-M4) are Phase 2.
+
+### 4. Corrections `RESEARCH_SPEC.md` still needs
+
+Not yet applied to that file. All three are established:
+
+- **§3 is wrong about ADP history** accumulating daily. It was not. See item 1.
+- **§5.2 counts three independent opinions. There are two.** `par` is derived
+  from the ADP curve, so a blend of all three double-counts the market. The Big
+  Board resolves this by annotating rather than blending; see
+  `BIG_BOARD_SPEC.md` §2.
+- **§9 Q1 and Q2 are answered** — three leagues, listed above, with settings
+  read live rather than asked for. Q3 (Zach's tab ideas) and Q4 (composite
+  weighting) are still open, and Q4 now has a shipped answer to react to.
+
+### 5. Still open, unchanged
+
+- **Sit with the Draft Day tab yourself.** The machine dry run proves it does
+  not crash and answers in 0.3s. It cannot tell you whether the *answer* arrives
+  in ten seconds. Human test, still unrun, and it expires on the 22nd.
+- **Contextual scoring on Reddit.** Unstarted, still wanted, and Zach wants to
+  **learn** it — build slowly, explain first, spec before code. `claims.py` has
+  the scoring spine; a 5-10 player WR subset makes resolution tractable. Season
+  one is labeled-data collection; do not promise predictive validation before
+  there is a corpus.
+- **`app.py` module split.** Now 2,991 lines and getting worse, not better —
+  violates the `Projects/CLAUDE.md` standard. Folds naturally into the Phase 1
+  restructure, and the Big Board tab is the natural first thing to lift out
+  since it has no dependants.
+- **Decide what happens to `main`.** The branch is still the only place this
+  work exists.
+- **The claims ledger now has 150 rows and every one resolves *pending*** — the
+  2026 games do not exist yet, which is correct and documented behaviour. It
+  starts producing labels once the season begins, and next August is when the
+  layer gets judged. Nothing to do now; do not mistake the pending column for a
+  bug, and note that the code path behind it was untested until those rows
+  arrived (see `CLAUDE.md`).
+
+---
+
+## What was true before this session and still is
+
+The last session's work stands and is format-independent.
+
+**pyarrow 25.0.0 segfaults the app**, and 270 tests passed against it. Every
+table in `app.py` is polars and `st.dataframe` round-trips each through pandas
+and back into Arrow; on 25.0.0 that corrupts memory inside `pandas_compat`. No
+traceback, no error page — the server is simply gone. It died on the **ninth**
+forward render of the pick selector, every time, and never once when the same
+fifteen picks were walked in reverse. Heap layout, not data.
+
+Excluded in `pyproject.toml` (fixed upstream in 25.0.1), with two guards both
+verified against the real failure by reinstalling 25.0.0 under
+`uv run --no-sync`. **Plain `uv run` re-syncs from the lock on every invocation,
+which is what keeps the exclusion enforced. Never use `--no-sync` to work around
+a dependency problem.**
+
+The general lesson, which outlives the release: **rendering once is not
+testing.** The crash needed repetition, not an input, and only fired in one
+direction. `tests/test_draft_day.py` is the answer to that class — it drives the
+real widget, forward, the whole list. That file is tied to the pick selector and
+goes wherever the selector goes, but **port the pattern, do not delete it.**
 
 ---
 
 ## Things to be careful about
 
-**Read `CLAUDE.md` first.** Every silent-failure trap lives there, including the
-new pyarrow entry and *how it hid*, which is the part that generalises.
+**Read `CLAUDE.md` first.** Every silent-failure trap lives there — team codes
+that disagree across sources, `sort(descending=True)` putting nulls first,
+FanDuel hiding lines in runner names, the duplicate `ff_opportunity` expectation
+columns. None of them raise.
 
 **Never push without asking.**
 
-**`data/` is gitignored and must stay that way.** The repo is public.
+**`data/` is gitignored and must stay that way.** The repo is public and a league
+id exposes nine other people's Sleeper data.
 
-**Shell exports do not reach the Bash tool.** Prefix commands instead — and set
-`FF_EDGE_SLEEPER_USER` alongside `FF_EDGE_LEAGUE_ID`. Without the handle the
+**Shell exports do not reach the Bash tool.** Prefix commands, and set
+`FF_EDGE_SLEEPER_USER` alongside `FF_EDGE_LEAGUE_ID` — without the handle the
 Draft Day pick selector never renders and its tests skip, so the tab's most
 important control goes untested while the suite reports green.
 
 **Season-forward validation only.** Never a random split.
 
-**Numbers from before 2026-08-09 are stale** — the label window changed to seven
-seasons.
-
-**Verify by driving, not by rendering.** Last session's rule was to look at
-output rather than read code; this session sharpens it. Render once and you
-learn nothing about a draft. `streamlit.testing.v1.AppTest` walking a widget
-forward, repeatedly, is what caught a crash that 270 tests missed. For charts,
-render to PNG and *look* — `uv add vl-convert-python`, then remove it again.
+**A negative result is a result.** `breakout.py` and `projection.py` stay.
+Do not quietly re-run a measured null with more parameters until it flips — and
+note that three of the four new measurements in `RESEARCH_SPEC.md` may well come
+back null too. A null ships as a null.
 
 **A vanished test run is a red result**, not a flake. If the pyarrow class of
 bug returns, pytest exits 139 with no summary at all.
 
+**Numbers from before 2026-08-09 are stale** — the label window changed to seven
+seasons.
+
 ---
 
-## Where to pick up
+## Commands
 
 ```bash
-uv run pytest                                                  # 269 pass, 5 skip
-FF_EDGE_LEAGUE_ID=... FF_EDGE_SLEEPER_USER=... uv run pytest    # 272 pass, 2 skip
+uv run pytest                                                  # 278 pass, 7 skip
+FF_EDGE_LEAGUE_ID=... FF_EDGE_SLEEPER_USER=... uv run pytest    # 283 pass, 2 skip
 FF_EDGE_LEAGUE_ID=... uv run streamlit run app.py
 FF_EDGE_PROFILE=standard_12 uv run python -c "from src import board; print(board.build()['players'].head())"
+uv run python -m src.peek                                      # the screens, still unreached from the UI
+uv run python -m src.bootstrap --light                         # DAILY. see "where to pick up" §1
 ```
 
-The claims ledger fills going forward only — `uv run python -m src.bootstrap
---light` daily during camp is what accumulates it.
+The claims ledger and the ADP history both fill going forward only — the daily
+bootstrap is what accumulates them, and **neither can be backfilled.** As of
+08-13 the ledger has 150 rows and the ADP histories have two snapshots each.
+
+---
+
+## The docs, and what each is for
+
+| file | read it when |
+|---|---|
+| `RESEARCH_SPEC.md` | **Current plan.** The critique, the cuts, the build order. Three corrections outstanding — see "where to pick up" §4. |
+| `BIG_BOARD_SPEC.md` | The Big Board tab: spec, then what shipped. Why nothing is blended. |
+| `HANDOFF.md` | Start of a session. State around the plan. |
+| `CLAUDE.md` | Before touching code. Every silent-failure trap. |
+| `README.md` | Setup, module map, what the analysis verified. |
+| `ANALYSIS_SPEC.md` | The analytical contract. Built; five assumptions corrected inline. |
+| `CLAIMS_SPEC.md` | Claims ledger design. Built. |
+| `DASHBOARD_SPEC.md`, `_v2.md` | **Product direction superseded** by `RESEARCH_SPEC.md`. Their "what actually shipped" sections are still authoritative and worth reading before re-proposing anything they declined. |
+| `src/config.py` | Any question about seasons, paths, league format, TTLs. |

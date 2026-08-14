@@ -15,6 +15,8 @@ one, columns that look like duplicates but aren't. None of it raises.
 | file | read it when |
 |---|---|
 | `HANDOFF.md` | Start of a session. Current state, findings, what's next. |
+| `RESEARCH_SPEC.md` | Current product direction (2026-08-13). Supersedes both dashboard specs on layout and scope; their "what shipped" sections still stand. |
+| `BIG_BOARD_SPEC.md` | The Big Board tab. Built 2026-08-13. Why there is no blended score, and why only two of the three numbers are independent of ADP. |
 | `README.md` | Setup, module map, what the analysis has verified. |
 | `ANALYSIS_SPEC.md` | The analytical contract — what gets measured and how. |
 | `CLAIMS_SPEC.md` | Design contract for the claims ledger. Marked built. |
@@ -28,8 +30,8 @@ one, columns that look like duplicates but aren't. None of it raises.
 the user's terminal is invisible here. Prefix every command that needs it:
 
 ```bash
-uv run pytest                                          # 269 pass, 5 skip w/o a league
-FF_EDGE_LEAGUE_ID=... FF_EDGE_SLEEPER_USER=... uv run pytest   # 272 pass, 2 skip
+uv run pytest                                          # 278 pass, 7 skip w/o a league
+FF_EDGE_LEAGUE_ID=... FF_EDGE_SLEEPER_USER=... uv run pytest   # 283 pass, 2 skip
 FF_EDGE_LEAGUE_ID=... uv run streamlit run app.py
 FF_EDGE_LEAGUE_ID=... uv run python -c "from src import board; print(board.build())"
 uv run python -m src.bootstrap --light                 # daily cache refresh

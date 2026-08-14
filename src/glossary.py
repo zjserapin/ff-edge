@@ -574,6 +574,50 @@ TERMS: dict[str, Term] = {
     "bonferroni_hi": _t("Corrected CI high", "Upper bound, widened for multiple comparisons.",
                         "See corrected CI low.", "Simulation"),
     # --- Board -------------------------------------------------------------
+    "board_rank": _t(
+        "Board rank", "The board's order — by points above replacement, best first.",
+        """An ordering *across* positions, which is the one thing ADP cannot give
+        you: it says what a quarterback is worth against a running back at your
+        format's replacement levels. Within a position it inherits the market's
+        order rather than improving on it, because `par` is derived from the ADP
+        curve. Read it as "what is this draft slot worth", not "how good is this
+        player" — that is what the value gap is for.""", "Board"),
+    "adj_adp": _t(
+        "Keeper-adjusted ADP", "ADP with kept players removed from the pool.",
+        """Public ADP prices a draft nobody in a keeper league is having. Once
+        thirteen quarterbacks are kept, the players left move up by however many
+        selections went with them. Compare this against other players, not
+        against your pick numbers — a keeper leaves the pool *and* spends a pick,
+        so `exp_pick` is the one to hold against a pick number.""", "Board"),
+    "tier": _t(
+        "Tier", "Players the expected-points curve groups together.",
+        """An empirical result rather than a presentation choice. The ADP curve is
+        not monotone, so the tiering pools ranks the data cannot order instead of
+        forcing one. A tier break is a real cliff; inside a tier, take the cheaper
+        player.""", "Board"),
+    "vegas_gap": _t(
+        "Vegas gap", "The book's line percentile minus his price percentile. Positive means the book likes him more than the draft does.",
+        """A second opinion that is not derived from ADP and has real money behind
+        it. Worth having next to the value gap precisely because the two disagree
+        for unrelated reasons — one is per-opportunity quality measured here, the
+        other is a number a bookmaker will take bets on. Null for roughly two
+        thirds of the board, because FanDuel posts season-long markets for about
+        92 players; a null is "no line posted", never "no edge". Weakest at
+        quarterback, where the main market is passing yards and fantasy scoring
+        concentrates in rushing.""", "Board"),
+    "signal": _t(
+        "Signal", "Whether the two market-independent reads agree, oppose, or say nothing.",
+        """Deliberately a label and not a score. The board carries three numbers
+        that look like opinions, but `par` is a function of price — so only the
+        value gap and the Vegas gap are independent of ADP, and averaging all
+        three would count the market twice. "Both up" means two unrelated methods
+        agree he is underpriced, which is the strongest statement here. "Split"
+        means they oppose, and is the interesting case: a blend would turn it into
+        a zero indistinguishable from "nothing here". Blank means one of the two
+        was never measured.""", "Board"),
+    "line": _t("Book line", "The season-long total FanDuel posted for him.", "", "Board"),
+    "line_pct": _t("Line percentile", "Where that line ranks within his position. 100 is highest.", "", "Board"),
+    "bye": _t("Bye", "His team's bye week.", "", "Board"),
     "p_available": _t(
         "Chance he lasts to your pick", "Probability he is still there when you next pick.",
         """From his ADP and its dispersion, treating his draft slot as normal.

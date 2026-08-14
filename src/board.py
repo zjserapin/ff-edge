@@ -913,6 +913,128 @@ def attach_quality(
     )
 
 
+# The columns `attach_vegas` carries across. `market` travels with `vegas_gap`
+# because the gap's meaning depends on which prop it came from — a receiving
+# yards line says something much closer to fantasy value than a passing yards
+# line does. See `props.against_price` on why QB is the weakest case.
+_VEGAS_COLUMNS = ["market", "line", "line_pct", "vegas_gap"]
+
+
+def attach_vegas(players: pl.DataFrame, priced: pl.DataFrame) -> pl.DataFrame:
+    """Add the sportsbook's read, carried across from an already-priced frame.
+
+    **`priced` is required rather than fetched, and that is the point.** Every
+    other `attach_*` here can build its own input; this one cannot, because the
+    input comes from FanDuel over the network. Defaulting it to `None` and
+    quietly returning a column of nulls would make "the book is down" and "the
+    book has no line on him" the same value, and this module's tests would start
+    depending on a bookmaker being reachable. The app composes it instead — the
+    same division `attach_environment` and `props.against_price` already use.
+
+    **The value is carried, never recomputed, and that constraint is load
+    bearing.** `vegas_gap` is one percentile minus another, and `against_price`
+    requires both be taken over the *same population* — the ~143 players
+    `valuation.board` scores. Re-deriving it against this board's ~159 would
+    change every number by shifting the denominator under one side only. It is
+    also why `against_price` cannot simply be called here: the board frame
+    carries `player_id`, not the `gsis_id` that function keys on.
+
+    **Expect nulls for roughly two thirds of the board.** FanDuel posts
+    season-long markets for about 92 players, top of the board only. A null is
+    "no line posted", never "no edge".
+
+    Joined on the normalized name, deduped to one row per *player* before the
+    join — `ids.normalize` strips generational suffixes, so Michael Pittman Jr.
+    and Sr. collapse to a single key and a join without the dedupe fans rows out
+    without raising. That is not hypothetical; it took the props join from 145
+    rows to 151.
+    """
+    if not players.height:
+        return players
+
+    have = [c for c in _VEGAS_COLUMNS if c in priced.columns]
+    if not priced.height or "vegas_gap" not in have:
+        return players.with_columns(
+            pl.lit(None, dtype=pl.Utf8).alias("market"),
+            pl.lit(None, dtype=pl.Float64).alias("line"),
+            pl.lit(None, dtype=pl.Float64).alias("line_pct"),
+            pl.lit(None, dtype=pl.Float64).alias("vegas_gap"),
+        )
+
+    keys = priced.select(
+        ids.normalize("name").alias("_norm"),
+        *[pl.col(c) for c in have],
+    ).unique(subset=["_norm"], keep="first")
+
+    return (
+        players.with_columns(ids.normalize("name").alias("_norm"))
+        .join(keys, on="_norm", how="left")
+        .drop("_norm")
+    )
+
+
+def signal(
+    players: pl.DataFrame,
+    quality_edge: float = 15.0,
+    vegas_edge: float = 10.0,
+) -> pl.DataFrame:
+    """Label where the two ADP-independent reads agree, oppose, or say nothing.
+
+    **Why this is a label and not a score.** The board carries three numbers that
+    look like opinions — `par`, `value_gap`, `vegas_gap` — but only two of them
+    are independent of the market. `par` is a function of price: `exp_points`
+    maps a player's *positional ADP rank* to what that rank historically scored,
+    so within a position it reproduces ADP's ordering by construction. Averaging
+    all three into a composite would count the market twice and call the result a
+    second opinion.
+
+    So the two that genuinely disagree for unrelated reasons are `value_gap`
+    (per-opportunity quality measured here, weighted by how much each metric
+    repeats) and `vegas_gap` (a line a bookmaker will take money on). This
+    reports their relationship and leaves the ordering to `par`.
+
+    Four levels, thresholds inherited from the agreement panel already on the
+    Board tab:
+
+    - **both up** — each past its threshold, both saying underpriced. Two
+      unrelated methods agreeing is the strongest statement available here.
+    - **both down** — the same, in reverse.
+    - **split** — they oppose, each past threshold. **The interesting one**, and
+      the reason no blend ships: an average turns this into a zero and the zero
+      is indistinguishable from "nothing here".
+    - **quiet** — both measured, neither past threshold.
+
+    **A null stays null, and that is deliberate.** If either input is missing the
+    label is null rather than `quiet`, because "the book posted no line" and "the
+    book posted a line and it agrees with ADP" are different facts. Folding the
+    first into `quiet` would overstate how much of this board has actually been
+    checked — see `BIG_BOARD_SPEC.md` §8, which asked the question and is
+    answered here.
+    """
+    if not players.height:
+        return players
+    if "value_gap" not in players.columns or "vegas_gap" not in players.columns:
+        return players.with_columns(pl.lit(None, dtype=pl.Utf8).alias("signal"))
+
+    quality, vegas = pl.col("value_gap"), pl.col("vegas_gap")
+    measured = quality.is_not_null() & vegas.is_not_null()
+
+    return players.with_columns(
+        pl.when(~measured)
+        .then(pl.lit(None, dtype=pl.Utf8))
+        .when((quality >= quality_edge) & (vegas >= vegas_edge))
+        .then(pl.lit("both up"))
+        .when((quality <= -quality_edge) & (vegas <= -vegas_edge))
+        .then(pl.lit("both down"))
+        .when((quality >= quality_edge) & (vegas <= -vegas_edge))
+        .then(pl.lit("split"))
+        .when((quality <= -quality_edge) & (vegas >= vegas_edge))
+        .then(pl.lit("split"))
+        .otherwise(pl.lit("quiet"))
+        .alias("signal")
+    )
+
+
 def indistinguishable(players: pl.DataFrame, value_col: str = "par") -> pl.DataFrame:
     """Group players the expected-points curve cannot actually tell apart.
 
