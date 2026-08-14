@@ -45,6 +45,35 @@ handle, `board.picks` resolves no owner, the Draft Day pick selector never
 renders, and `tests/test_draft_day.py` skips — so the tab's most important
 control goes untested while the suite reports green. Set both vars together.
 
+### The daily bootstrap runs itself — check it, don't re-add it
+
+A launchd agent runs `bootstrap --light` at **08:00 and 17:00 daily**. It lives
+at `~/Library/LaunchAgents/com.zjserapin.ff-edge.bootstrap.plist` — **outside
+the repo, deliberately**, because it carries the Sleeper handle and this repo is
+public. Nothing about it is committed, so a fresh clone has no agent and a
+future session should not assume one.
+
+```bash
+launchctl print gui/$UID/com.zjserapin.ff-edge.bootstrap | grep -E "runs|last exit"
+tail -40 output/bootstrap-daily.log     # gitignored; last run's full inventory
+launchctl kickstart -k gui/$UID/com.zjserapin.ff-edge.bootstrap   # run it now
+launchctl bootout   gui/$UID/com.zjserapin.ff-edge.bootstrap      # stop it
+```
+
+**launchd rather than cron, for one specific reason:** cron silently skips a run
+if the laptop is asleep at the scheduled minute, and `adp_history_*` cannot be
+backfilled — a missed day is gone permanently. launchd runs a missed calendar
+job when the machine next wakes. The twice-daily schedule is insurance on top of
+that; `adp.snapshot` replaces the same-day row rather than appending, so the
+second run refreshes the day with fresher numbers and never double-counts.
+
+It needs **only `FF_EDGE_SLEEPER_USER`** — `bootstrap` discovers every league
+from `sleeper.my_leagues()`, so no league id is stored anywhere on disk.
+
+A run that logs anything other than `N/N ok` is a real failure. The most likely
+causes are no network and an expired Sleeper handle, and both are silent in the
+app rather than loud: the cache simply goes stale.
+
 **Never use `uv run --no-sync` to work around a dependency problem.** Plain
 `uv run` re-syncs from the lock on every invocation, which is the mechanism that
 keeps the pyarrow exclusion below actually enforced. `--no-sync` exists here for

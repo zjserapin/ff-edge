@@ -125,12 +125,23 @@ There are now two snapshots each, so it returns real rows, but the window is
 the fortnight before a draft is the highest-information stretch of the year. A
 day not pulled is gone.
 
+**This is now automated.** A launchd agent runs it at 08:00 and 17:00 daily —
+`~/Library/LaunchAgents/com.zjserapin.ff-edge.bootstrap.plist`, outside the repo
+because it carries the Sleeper handle. Verified end to end on 08-13: 58/58 ok,
+and the same-day snapshot was replaced rather than duplicated. See `CLAUDE.md`
+→ *The daily bootstrap runs itself*.
+
+**It is not committed and cannot be**, so it exists on this machine only. Check
+it rather than re-adding it:
+
 ```bash
-uv run python -m src.bootstrap --light      # ~90s, all three markets
+launchctl print gui/$UID/com.zjserapin.ff-edge.bootstrap | grep -E "runs|last exit"
+tail -40 output/bootstrap-daily.log
+uv run python -m src.bootstrap --light      # ~90s, by hand if needed
 ```
 
-Worth setting up as a real cron rather than remembering. Ask before installing
-one.
+**Still worth a manual run on the morning of each draft**, since the 17:00 job
+lands two hours before the Shiva Bowl's 19:00 start and ADP moves all day.
 
 ### 2. The superflex question is settled, and the answer has a wrinkle
 
