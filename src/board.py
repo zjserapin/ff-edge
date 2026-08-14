@@ -1695,8 +1695,19 @@ def rank_board(players: pl.DataFrame, value_col: str = "par") -> pl.DataFrame:
     column is the board's claim to have resolved something; printing a number
     there would extend the claim past where it holds.
 
-    Adds `block` and rewrites `board_rank`. Players with no quality score sort
-    last inside their block — "not measured" is not "worst".
+    **The order inside a block is three keys, not two**, and the middle one
+    carries an imputation:
+
+      1. the block's PAR, as above;
+      2. `quality_pct`, with **the block's median standing in where it is
+         missing** — see the note at the fill;
+      3. `value_col` itself, so the final tiebreak is stated rather than
+         inherited from whatever order the frame arrived in.
+
+    Adds `block` and rewrites `board_rank`. A player with no quality score is
+    placed among his block's typical members rather than beneath all of them:
+    "not measured" is not "worst", and until 2026-08-14 this function said that
+    and did the opposite.
     """
     if not players.height or value_col not in players.columns:
         return players
@@ -1713,15 +1724,48 @@ def rank_board(players: pl.DataFrame, value_col: str = "par") -> pl.DataFrame:
         if "quality_pct" in players.columns
         else pl.lit(None, dtype=pl.Float64)
     )
-    keyed = players.with_columns(group_key.alias("_group_par"), quality.alias("_q"))
+    # **Unscored players take the block's median quality, not the bottom of it.**
+    # `nulls_last` on this key used to demote them, which is precisely what the
+    # paragraph above promises not to do: on the 2026 board all seven unscored
+    # players inside roster demand sat last in their block, and Brock Purdy —
+    # the *highest* `par_env` in his — sat third of three. A missing quality
+    # score is a coverage gap in last season's volume floor, not a finding about
+    # the player. The median says "assume he is typical here", which is the only
+    # thing the absence of evidence supports.
+    group_cols = [c for c in ("position", "indist_group") if c in players.columns]
+    quality_filled = (
+        quality.fill_null(quality.median().over(group_cols))
+        if group_cols
+        else quality.fill_null(quality.median())
+    )
+    keyed = players.with_columns(
+        group_key.alias("_group_par"),
+        quality_filled.alias("_q"),
+        # Last key, and it only ever fires on an exact tie in all three above.
+        # Imputing the median can make an unscored player *equal* to a measured
+        # one, and where the board genuinely cannot separate them the measured
+        # player goes first. That keeps the old guard's point — nothing unknown
+        # opens a block — without its overreach of sending him to the bottom.
+        quality.is_not_null().alias("_measured"),
+    )
 
     # nulls_last on every key. Polars defaults descending sorts to nulls FIRST, so
     # an unscored player would otherwise open the board — the exact trap CLAUDE.md
     # documents, and the reason a "best N" query here returns the N rows that
     # could not be scored.
+    # `value_col` is the third key so the last tiebreak is **stated rather than
+    # inherited**. Polars sorts stably, so equal keys previously kept whatever
+    # order the frame arrived in — which happens to be `blend_par` today and is
+    # an invariant nothing enforces. `blend_par` already found the sharp edge of
+    # relying on that: rounding collapsed two players into one displayed value
+    # and row order then reversed them against their own projections. A board
+    # whose ordering can change because an upstream join reordered rows is not
+    # reproducible, and the fix is cheap.
     def _ranked(frame: pl.DataFrame) -> pl.DataFrame:
         return frame.sort(
-            ["_group_par", "_q"], descending=[True, True], nulls_last=True
+            ["_group_par", "_q", value_col, "_measured"],
+            descending=[True, True, True, True],
+            nulls_last=True,
         ).with_columns(
             pl.col("_group_par").rank("dense", descending=True).cast(pl.Int32).alias("block")
         )
@@ -1741,7 +1785,7 @@ def rank_board(players: pl.DataFrame, value_col: str = "par") -> pl.DataFrame:
 
     return ordered.with_columns(
         pl.int_range(1, pl.len() + 1).cast(pl.Int32).alias("board_rank")
-    ).drop("_group_par", "_q")
+    ).drop("_group_par", "_q", "_measured")
 
 
 def positional_drop(players: pl.DataFrame, spots: int = 5) -> pl.DataFrame:
