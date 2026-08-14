@@ -48,6 +48,7 @@ from src.config import (
     FEATURE_SEASONS,
     OUTPUT_DIR,
     SEASON,
+    SLEEPER_USERNAME,
 )
 
 st.set_page_config(page_title="ff-edge", page_icon="🏈", layout="wide")
@@ -2337,6 +2338,18 @@ def _draft_board() -> dict[str, Any]:
     # the board first and then cut a line through an ordering that had already
     # interleaved the positions, which is the distortion this is here to remove.
     players = bd.roster_demand(players, out.get("replacement"), value_col="par_env")
+    # `need` rides along on every row rather than filtering any of them out. A
+    # position you cannot start is not worthless — it has bench and trade value,
+    # and knowing where the quarterbacks sit tells you what your leaguemates are
+    # about to spend picks on. What it must not do is silently rank alongside the
+    # positions that can still improve your lineup, which is what it was doing.
+    need = bd.roster_need()
+    if need.height and "slots_open" in need.columns:
+        players = players.join(
+            need.select("position", pl.col("slots_open").alias("need")),
+            on="position",
+            how="left",
+        )
     out["players"] = bd.rank_board(players, value_col="par_env")
     return out
 
@@ -2344,6 +2357,11 @@ def _draft_board() -> dict[str, Any]:
 @st.cache_data(ttl=60, show_spinner="Reading your picks…")
 def _my_picks() -> pl.DataFrame:
     return bd.picks()
+
+
+@st.cache_data(ttl=60, show_spinner="Reading your roster…")
+def _my_need() -> pl.DataFrame:
+    return bd.roster_need()
 
 
 def _tab_draft_day(p: dict[str, Any]) -> None:
@@ -3029,6 +3047,26 @@ def _cost_of_waiting_panel(players: pl.DataFrame, data: dict[str, Any]) -> None:
         "cost_of_waiting", descending=True, nulls_last=True
     )
 
+    # **The recommendation is restricted to positions you can still start**, and
+    # leaving that out was a real miss rather than a refinement. League scarcity
+    # and personal need are different quantities, and they diverge hardest for
+    # the manager whose own keepers caused the scarcity: 13 of 20 quarterback
+    # slots are kept league-wide, two of them Zach's, against a roster with
+    # exactly two quarterback-capable slots. So the panel ranked quarterback
+    # first — the one position he cannot start another of — and said "take QB"
+    # at pick 4. See `board.roster_need`.
+    need = _my_need()
+    filled: list[str] = []
+    if need.height and "slots_open" in need.columns:
+        open_positions = set(
+            need.filter(pl.col("slots_open") > 0).get_column("position")
+        )
+        filled = sorted(
+            set(at_first.get_column("position").to_list()) - open_positions
+        )
+        if open_positions:
+            at_first = at_first.filter(pl.col("position").is_in(list(open_positions)))
+
     if at_first.height >= 2:
         top = at_first.row(0, named=True)
         nxt = at_first.row(1, named=True)
@@ -3063,6 +3101,42 @@ def _cost_of_waiting_panel(players: pl.DataFrame, data: dict[str, Any]) -> None:
             "not a licence to reach — a position can be expensive to wait on and "
             "still be worth less than another, so read the two together."
         )
+
+    if filled:
+        kept_names = ""
+        my_keepers = _draft_board().get("kept", pl.DataFrame())
+        if my_keepers.height and {"owner", "player_name", "position"} <= set(
+            my_keepers.columns
+        ):
+            names = (
+                my_keepers.filter(
+                    (pl.col("owner") == SLEEPER_USERNAME)
+                    & pl.col("position").is_in(filled)
+                )
+                .get_column("player_name")
+                .to_list()
+            )
+            if names:
+                kept_names = f" — you keep {' and '.join(names)}"
+        st.caption(
+            f"**{', '.join(filled)} is left out of that recommendation because "
+            f"your starting slots there are already full**{kept_names}. League "
+            "scarcity and your own need are different numbers, and they diverge "
+            "hardest for the manager who caused the scarcity: the teams that "
+            "make a position scarce by keeping it are exactly the teams that "
+            "must not draft it. The board below still ranks those players — they "
+            "have bench and trade value — but they cannot improve your starting "
+            "lineup."
+        )
+
+    remaining = need.filter(pl.col("slots_open") > 0) if need.height else need
+    if remaining.height:
+        slots = ", ".join(
+            f"{r['position']} {r['open_dedicated']}"
+            + (f"+{r['open_flex']}flex" if r["open_flex"] else "")
+            for r in remaining.iter_rows(named=True)
+        )
+        st.caption(f"**Starting slots you still have to fill:** {slots}.")
 
     with st.expander("Every pick, every position — the numbers behind it"):
         st.slider(
@@ -3215,8 +3289,8 @@ def _tab_big_board(p: dict[str, Any]) -> None:
     # roster-demand line is drawn on.
     columns = [
         c for c in (
-            "block", "name", "position", "pos_rank", "demand", "team", "bye",
-            "tier", "same", "adp", "adj_adp", "par", "ffb_par", "ecr", "ecr_sd",
+            "block", "name", "position", "need", "pos_rank", "demand", "team",
+            "bye", "tier", "same", "adp", "adj_adp", "par", "ffb_par", "ecr", "ecr_sd",
             "blend_par", "env_swing", "par_env", "drop", "quality_pct",
             "value_gap", "vegas_gap", "signal", "board_rank",
         ) if c in view.columns

@@ -50,9 +50,11 @@ from src.config import (
     ECR_WEIGHT,
     ENV_WEIGHT,
     FANTASY_POSITIONS,
+    FLEX_SLOTS,
     FOOTBALLERS_MIN_ANALYSTS,
     FOOTBALLERS_WEIGHT,
     LEAGUE_ADP_TEAMS,
+    NON_STARTING_SLOTS,
     SEASON,
     SLEEPER_USERNAME,
 )
@@ -1562,6 +1564,114 @@ def apply_env_weight(
         .round(1)
         .alias("par_env")
     )
+
+
+def roster_need(
+    kept: pl.DataFrame | None = None,
+    owner: str | None = None,
+    profile: LeagueProfile | None = None,
+) -> pl.DataFrame:
+    """Which starting slots **you** still have to fill, after your own keepers.
+
+    **The gap this closes is the difference between scarcity and need, and the
+    board had only ever modelled the first.** `roster_demand` prices what the
+    *league* is short of: it subtracts league-wide keepers from league-wide
+    demand, which on the 2026 board leaves quarterback at 7 slots against 20 and
+    therefore screaming scarce. That is true and it is not Zach's problem. Thirteen
+    of those twenty are kept, and **two of them are his** — Jayden Daniels and
+    Trevor Lawrence, against a roster carrying exactly two quarterback-capable
+    slots, `QB` and `SUPER_FLEX`. His quarterback need is zero.
+
+    The failure was not a bad weight. League scarcity is *maximally* misleading
+    to the manager who caused it: the teams that make quarterback scarce by
+    keeping one are precisely the teams that then must not draft one. So a board
+    that reports only league demand tells every keeper-holder to buy the thing
+    they already own, and it told him so at pick 4.
+
+    Slots are filled **most restrictive first**, which is exactly optimal here
+    for the reason `config.FLEX_SLOTS` gives: dedicated ⊂ FLEX ⊂ SUPER_FLEX
+    nests, so a greedy pass cannot strand a player who had a better home. His two
+    quarterbacks land in `QB` and then `SUPER_FLEX`, closing both. A roster
+    carrying `REC_FLEX` *and* `WRRB_FLEX` would not nest and this would become a
+    heuristic; that combination does not exist here, and `starter_demand` and the
+    simulator's optimizer both say the same thing at the same volume.
+
+    Returns one row per fantasy position: `starters` (dedicated slots at that
+    position), `kept`, `open_dedicated`, `open_flex` (open flex slots this
+    position is *eligible* for) and `slots_open`.
+
+    **`slots_open` deliberately double counts a flex slot across every position
+    that can fill it**, because the question it answers is "can this player still
+    improve my starting lineup", not "how many of these should I draft". One open
+    FLEX shows as an open slot for RB, WR and TE alike — exactly one of them will
+    take it. Read `starters_left` off the frame's attrs for the honest total.
+    """
+    profile = profile or pf.resolve()
+    owner = owner or SLEEPER_USERNAME
+    kept = kept if kept is not None else kept_players(profile=profile)
+
+    mine: list[str] = []
+    if kept is not None and kept.height and "owner" in kept.columns:
+        mine = (
+            kept.filter(pl.col("owner") == owner)
+            .get_column("position")
+            .drop_nulls()
+            .to_list()
+        )
+
+    slots = [s for s in profile.roster_positions if s not in NON_STARTING_SLOTS]
+    dedicated: dict[str, int] = {}
+    flex_open: dict[str, int] = {}
+    for slot in slots:
+        if slot in FLEX_SLOTS:
+            flex_open[slot] = flex_open.get(slot, 0) + 1
+        else:
+            dedicated[slot] = dedicated.get(slot, 0) + 1
+
+    pool: dict[str, int] = {}
+    for position in mine:
+        pool[position] = pool.get(position, 0) + 1
+
+    # Dedicated slots first — the most restrictive of all, eligibility set of one.
+    open_dedicated = dict(dedicated)
+    for position, count in list(pool.items()):
+        take = min(count, open_dedicated.get(position, 0))
+        if take:
+            open_dedicated[position] -= take
+            pool[position] -= take
+
+    # Then flex slots, narrowest eligibility first.
+    for slot in sorted(flex_open, key=lambda s: len(FLEX_SLOTS[s])):
+        for position in FLEX_SLOTS[slot]:
+            while flex_open[slot] and pool.get(position, 0):
+                flex_open[slot] -= 1
+                pool[position] -= 1
+
+    rows = []
+    for position in FANTASY_POSITIONS:
+        eligible_flex = sum(
+            n for slot, n in flex_open.items() if position in FLEX_SLOTS[slot]
+        )
+        rows.append(
+            {
+                "position": position,
+                "starters": dedicated.get(position, 0),
+                "kept": sum(1 for p in mine if p == position),
+                "open_dedicated": open_dedicated.get(position, 0),
+                "open_flex": eligible_flex,
+                "slots_open": open_dedicated.get(position, 0) + eligible_flex,
+            }
+        )
+
+    out = pl.DataFrame(rows)
+    # The un-double-counted total, which is the number that answers "how many
+    # starters am I actually drafting".
+    out = out.with_columns(
+        pl.lit(
+            sum(open_dedicated.values()) + sum(flex_open.values())
+        ).cast(pl.Int32).alias("starters_left")
+    )
+    return out
 
 
 def roster_demand(

@@ -28,7 +28,7 @@ import polars as pl
 import pytest
 
 from src import board as bd
-from src.config import SLEEPER_USERNAME
+from src.config import FANTASY_POSITIONS, SLEEPER_USERNAME
 
 
 def _players(rows: list[tuple[str, str, float | None]]) -> pl.DataFrame:
@@ -192,6 +192,134 @@ def _ranked(rows: list[tuple[str, str, float, int, float | None]]) -> pl.DataFra
             "indist_group": pl.Int32, "quality_pct": pl.Float64,
         },
     )
+
+
+# --- personal roster need ---------------------------------------------------
+#
+# League scarcity and personal need are different quantities, and the board only
+# ever modelled the first. They diverge hardest for the manager whose own keepers
+# caused the scarcity — which is exactly the case that shipped.
+
+
+def _superflex_profile(keepers: bool = True):
+    from src import profiles as pf
+
+    return pf.customize(
+        "shiva_bowl",
+        roster_positions=[
+            "QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "SUPER_FLEX",
+            "K", "DEF", "BN", "BN", "BN", "BN", "BN", "BN",
+        ],
+        keepers=keepers,
+    )
+
+
+def _kept(rows: list[tuple[str, str, str]]) -> pl.DataFrame:
+    """(owner, player_name, position) -> the frame `kept_players` returns."""
+    return pl.DataFrame(
+        [{"owner": o, "player_name": n, "position": p} for o, n, p in rows],
+        schema={"owner": pl.Utf8, "player_name": pl.Utf8, "position": pl.Utf8},
+    )
+
+
+def _open(need: pl.DataFrame, position: str) -> int:
+    return int(
+        need.filter(pl.col("position") == position).get_column("slots_open")[0]
+    )
+
+
+def test_two_kept_quarterbacks_close_both_quarterback_slots() -> None:
+    """The miss, in one assertion.
+
+    Zach keeps Jayden Daniels and Trevor Lawrence against a roster carrying
+    exactly two quarterback-capable slots, `QB` and `SUPER_FLEX`. His
+    quarterback need is zero — and the board, reading league-wide scarcity
+    (7 slots against 20, because 13 are kept), recommended one at pick 4.
+    """
+    need = bd.roster_need(
+        kept=_kept([("me", "Jayden Daniels", "QB"), ("me", "Trevor Lawrence", "QB")]),
+        owner="me",
+        profile=_superflex_profile(),
+    )
+
+    assert _open(need, "QB") == 0
+    assert _open(need, "RB") > 0 and _open(need, "WR") > 0 and _open(need, "TE") > 0
+
+
+def test_one_kept_quarterback_leaves_the_superflex_open() -> None:
+    """The other side of it — a single QB keeper does not close superflex."""
+    need = bd.roster_need(
+        kept=_kept([("me", "Some QB", "QB")]), owner="me", profile=_superflex_profile()
+    )
+
+    assert _open(need, "QB") == 1, "SUPER_FLEX should still accept a quarterback"
+
+
+def test_keepers_fill_dedicated_slots_before_flex() -> None:
+    """Most restrictive first, which is exactly optimal because the sets nest.
+
+    Two kept backs must consume the two RB slots and leave FLEX open, not land
+    in FLEX and leave a dedicated slot showing as empty.
+    """
+    need = bd.roster_need(
+        kept=_kept([("me", "A", "RB"), ("me", "B", "RB")]),
+        owner="me",
+        profile=_superflex_profile(),
+    )
+    rb = need.filter(pl.col("position") == "RB").row(0, named=True)
+
+    assert rb["open_dedicated"] == 0
+    assert rb["open_flex"] >= 1, "FLEX and SUPER_FLEX both still accept a back"
+
+
+def test_a_third_back_spills_into_the_flex() -> None:
+    need = bd.roster_need(
+        kept=_kept([("me", n, "RB") for n in ("A", "B", "C")]),
+        owner="me",
+        profile=_superflex_profile(),
+    )
+    rb = need.filter(pl.col("position") == "RB").row(0, named=True)
+
+    assert rb["open_dedicated"] == 0
+    # FLEX consumed by the third back; SUPER_FLEX still open to him.
+    assert rb["open_flex"] == 1
+
+
+def test_another_managers_keepers_are_not_yours() -> None:
+    """The frame is league-wide; the need is not."""
+    need = bd.roster_need(
+        kept=_kept([("someone_else", "Josh Allen", "QB")]),
+        owner="me",
+        profile=_superflex_profile(),
+    )
+
+    assert _open(need, "QB") == 2, "QB and SUPER_FLEX both still mine to fill"
+
+
+def test_no_keepers_leaves_every_slot_open() -> None:
+    need = bd.roster_need(
+        kept=pl.DataFrame(), owner="me", profile=_superflex_profile()
+    )
+
+    assert _open(need, "QB") == 2
+    # QB, RB, RB, WR, WR, TE, FLEX, SUPER_FLEX, K, DEF.
+    assert int(need.get_column("starters_left")[0]) == 10
+
+
+def test_slots_open_double_counts_flex_but_starters_left_does_not() -> None:
+    """The documented asymmetry, pinned so nobody "fixes" one of the two.
+
+    `slots_open` answers "can he still start for me", so one open FLEX shows for
+    RB, WR and TE alike. `starters_left` answers "how many am I drafting", and
+    counts that FLEX once.
+    """
+    need = bd.roster_need(
+        kept=pl.DataFrame(), owner="me", profile=_superflex_profile()
+    )
+
+    assert need.get_column("slots_open").sum() > int(need.get_column("starters_left")[0])
+    # All ten starting slots, K and DEF included.
+    assert int(need.get_column("starters_left")[0]) == 10
 
 
 # --- roster demand ----------------------------------------------------------
@@ -873,6 +1001,29 @@ def test_the_recommendation_renders_before_the_board(board_tab) -> None:
     headings = [m.value for m in at.markdown if m.value.startswith("#### At pick ")]
     assert headings, "no cost-of-waiting recommendation rendered"
     assert "come back for" in headings[0]
+
+
+def test_the_recommendation_never_names_a_position_you_cannot_start(board_tab) -> None:
+    """End to end, on the real league — the miss this whole change exists for.
+
+    League-wide the 2026 board makes quarterback look scarce, because 13 of 20
+    slots are kept. Two of those are Zach's, against a roster with exactly two
+    quarterback-capable slots, so his quarterback need is zero and the panel
+    still ranked it first and said "take QB" at pick 4.
+    """
+    at = board_tab
+    if not [s for s in at.slider if s.key == "big_board_horizon"]:
+        pytest.skip("no pick list — cost-of-waiting panel not rendered")
+
+    need = bd.roster_need()
+    full = set(need.filter(pl.col("slots_open") == 0).get_column("position"))
+    if not full:
+        pytest.skip("every position still has an open starting slot")
+
+    headings = [m.value for m in at.markdown if m.value.startswith("#### At pick ")]
+    assert headings
+    named = {p for p in FANTASY_POSITIONS if p in headings[0]}
+    assert not (named & full), f"recommended {named & full}, which cannot start"
 
 
 def test_driving_the_horizon_does_not_warn_about_the_default() -> None:

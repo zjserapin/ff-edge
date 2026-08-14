@@ -331,6 +331,32 @@ draft plan rather than a distortion.
 `pos_rank` is taken on the ranking column, not ADP: the cap governs **how many**
 of a position get compared across positions, never **which**.
 
+**League scarcity is not personal need, and modelling only the first told the
+user to draft the position he already owned.** `roster_demand` subtracts
+league-wide keepers from league-wide demand. On the 2026 board that leaves
+quarterback at 7 slots against 20 — genuinely scarce, and completely irrelevant
+to Zach, who **keeps Jayden Daniels and Trevor Lawrence** against a roster
+carrying exactly two quarterback-capable slots (`QB` and `SUPER_FLEX`). His
+quarterback need is zero. The cost-of-waiting panel ranked quarterback first and
+recommended one at **pick 4**.
+
+The failure mode generalises and it is nastier than it looks: **league scarcity
+is maximally misleading to the manager who caused it.** The teams that make a
+position scarce by keeping it are exactly the teams that must not draft it, so a
+tool reporting only league demand gives its worst advice to the person holding
+the keepers — which in a keeper league is every user of it.
+
+`board.roster_need` is the second quantity: starting slots filled most
+restrictive first from *your* keepers, leaving `slots_open` per position. It
+feeds the `need` column on the board and gates which positions the
+cost-of-waiting recommendation will name. **Never gate the board's rows on it** —
+a position you cannot start still carries bench and trade value, and where the
+quarterbacks sit is what your leaguemates are about to spend picks on.
+
+`slots_open` double counts a flex slot across every eligible position on purpose,
+because it answers "can he start for me". `starters_left` is the un-double-counted
+total. Do not "fix" either into the other.
+
 Read the correlation honestly. Whole-board Spearman against ADP *rose* from
 +0.885 to +0.963, because 98 of 158 rows are now ADP by construction. Inside the
 line it is **+0.820**. The board gave up an opinion it could not support about

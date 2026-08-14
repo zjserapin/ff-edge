@@ -664,6 +664,24 @@ TERMS: dict[str, Term] = {
         with. Players inside a block are one asset; **take the one you want for
         other reasons** — price, the drop column, your own read. Between blocks
         the difference is real.""", "Board"),
+    "need": _t(
+        "Your need", "Starting slots *you* can still fill at this position. 0 means he cannot start for you.",
+        """**League scarcity and your own need are different numbers, and this is
+        the second one.** `demand` says what the draft is short of; this says what
+        *your* roster is short of, after your own keepers. They diverge hardest
+        for the manager who caused the scarcity: 13 of 20 quarterback slots are
+        kept in 2026, which makes quarterback look scarce league-wide — and two of
+        those keepers are yours, against a roster with exactly two
+        quarterback-capable slots. So quarterback reads `need = 0` here while
+        reading desperately scarce over there, and both are correct.
+
+        Counts a flex slot for every position that can fill it, because the
+        question is "can he start for me", not "how many should I draft" — one
+        open FLEX shows for RB, WR and TE, and exactly one of them will take it.
+        A zero is not a reason to ignore a player: he still has bench and trade
+        value, and where the quarterbacks sit tells you what your leaguemates are
+        about to spend picks on. It is a reason not to spend a starting pick.""",
+        "Board"),
     "demand": _t(
         "Roster demand", "How many of this position the draft still has to fill. The line the board is cut at.",
         """Not a number anyone chose. It is the league's own starter demand read
