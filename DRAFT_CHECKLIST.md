@@ -18,6 +18,25 @@ corrected.
 
 ## Block A — before 08-22. Do these in order.
 
+> **Merge order, verified 2026-08-16.** Three branches need to land and all
+> three are safe. A1 and A2 are clean fast-forwards from `origin/main` with zero
+> divergence. The docs branch from this audit merges cleanly against A2 —
+> test-merged, no conflicts — but is a regular merge rather than a
+> fast-forward once A2 is in, since both branch off `origin/main`.
+>
+> ```bash
+> cd /Users/zacharyserapin/basecamp/Projects/ff-edge
+> git merge --ff-only origin/main                        # A1
+> git merge --ff-only worktree-promote-cost-of-waiting   # A2
+> git merge worktree-doc-cleanup-preflight               # the docs
+> uv run pytest
+> ```
+>
+> **Nothing here is pushed.** `CLAUDE.md` forbids pushing without approval in
+> the conversation, so the remote is untouched and `worktree-promote-cost-of-waiting`
+> in particular exists **only on this machine** — it has no upstream and no
+> remote branch contains it.
+
 ### A1. Fast-forward local `main`. Nothing else is safe until this is done.
 
 **Status: blocking. Two minutes.**
