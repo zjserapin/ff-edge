@@ -261,6 +261,31 @@ this board assumes" panel that states draft demand rather than the format label.
 make quarterbacks *more* valuable, which is the reverse of the intent, while
 silently returning 20 undraftable keepers to the board.
 
+## 11. Landscape, cut — 2026-08-13
+
+Zach: *"leaning towards canning it as it's not really bringing any valuable info
+to the table. The one thing that is kind of interesting is the drop off
+visuals."*
+
+Agreed, and split three ways rather than deleted wholesale — the tab had four
+sections and exactly one was shaped like a decision.
+
+| section | went | why |
+|---|---|---|
+| The shape of the dropoff | **Big Board** | The picture behind `drop`. The only decision-shaped thing in the tab. |
+| PAR per starting slot | Research | PAR's derivation. Settled once, revisited rarely, and useful for auditing a surprise on the board. |
+| Who occupies the top of the board | Research | Context. **Counts level only** — it would have counted all six identical RBs as top-24 players and missed the receiver behind them. |
+| Are the top players taking a bigger slice? | **deleted** | A good article. Changes no pick. |
+
+The deletion is the part to defend, and the finding is preserved rather than
+lost: over 2018-2025 concentration is flat for QB/RB/WR, and **tight end moved
+the other way** — top five from 31.7% of the position to 23.9%. That is a real
+result and it is recorded in `landscape.concentration`'s docstring, which also
+says out loud that the function is deliberately unreachable so a future session
+neither re-surfaces it nor deletes it as an orphan.
+
+Five tabs, down from six. `app.py` fell ~90 lines despite gaining three panels.
+
 ## 12. The tiebreak was ADP — 2026-08-14
 
 Zach, on the shipped board: *"why is Henry above Cook? Why are the elite WRs so
@@ -452,30 +477,92 @@ than passed in: FantasyPros' superflex board (`redraft-op`) and 1QB board
 (`redraft-overall`) disagree about quarterbacks by tens of ranks, so reading the
 wrong one is the 2026 superflex bug in different clothes.
 
-## 11. Landscape, cut — 2026-08-13
+## 16. The blend centers per position — 2026-08-14
 
-Zach: *"leaning towards canning it as it's not really bringing any valuable info
-to the table. The one thing that is kind of interesting is the drop off
-visuals."*
+Recorded here 2026-08-16. These last three sections were written into
+`CLAUDE.md` when they shipped but never into this file, which is otherwise the
+numbered record of every change to the board.
 
-Agreed, and split three ways rather than deleted wholesale — the tab had four
-sections and exactly one was shaped like a decision.
+**Standardizing the blend on one global center is right about the *spread* and
+wrong about the *level*, and the two are separable.** Rescaling each position to
+a common width would assert the best tight end is worth the best quarterback, so
+the scale stays global. But the two sources disagree about where a whole
+position *sits*: median `ffb_par` minus `par` ran **+8.7 at TE against −16.2 at
+QB**, −9.2 at RB and −6.6 at WR. A global center leaves that intact and it lands
+on the blend as a uniform per-position shift — which is by construction not an
+opinion about any individual player.
 
-| section | went | why |
-|---|---|---|
-| The shape of the dropoff | **Big Board** | The picture behind `drop`. The only decision-shaped thing in the tab. |
-| PAR per starting slot | Research | PAR's derivation. Settled once, revisited rarely, and useful for auditing a surprise on the board. |
-| Who occupies the top of the board | Research | Context. **Counts level only** — it would have counted all six identical RBs as top-24 players and missed the receiver behind them. |
-| Are the top players taking a bigger slice? | **deleted** | A good article. Changes no pick. |
+So the center comes from each position's own median, handing the cross-position
+level to `par` alone. The scale is then taken from **position-centered
+residuals**, not the raw columns, or the same offset leaks back through the
+denominator after being removed from the numerator.
 
-The deletion is the part to defend, and the finding is preserved rather than
-lost: over 2018-2025 concentration is flat for QB/RB/WR, and **tight end moved
-the other way** — top five from 31.7% of the position to 23.9%. That is a real
-result and it is recorded in `landscape.concentration`'s docstring, which also
-says out loud that the function is deliberately unreachable so a future session
-neither re-surfaces it nor deletes it as an orphan.
+The offset survives `attach_footballers` already subtracting each system's own
+replacement level, because the two replacement levels sit at different points on
+differently shaped curves and the board holds each position to a different depth
+— 18 TEs against 67 WRs.
 
-Five tabs, down from six. `app.py` fell ~90 lines despite gaining three panels.
+**This did not fix the tight-end promotion, and do not re-tune the weight trying
+to.** Median TE shift against ADP was **+47.5 either way**; QB improved from
+−18.0 to −12.0. Ranking on raw `par` alone already shifts TEs +47.0, so the
+cause is PAR comparing positions the board cuts to unequal depth. The fix
+belongs where the pool is cut — §17.
+
+## 17. The board is cut at roster demand — 2026-08-14
+
+**PAR below replacement is not an ordering, and sorting on it across positions
+was the board's largest measured distortion.** A player under his position's
+replacement contributes **zero** starting-lineup points no matter how negative
+the number — you would start the freely available replacement instead. So −15
+and −35 are the same decision, and ranking one above the other asserts a
+distinction PAR cannot support.
+
+It was not harmless. The board holds **67 receivers to 18 tight ends**, cut at
+different distances from their own replacement: median `par` −17.9 at WR against
+**0.0** at TE. A cross-position sort therefore interleaved TE15 ahead of WR55 and
+promoted *every* tight end a median **+47.5 places** over ADP, never fewer than
++23, putting all 18 inside the top 100 of a league that rosters about 13.
+
+`board.roster_demand` cuts the board at the line and **asserts no new constant**:
+`replacement()` already derives `replacement_rank` per position from the roster
+shape and the keepers, and the first player past it *is* the replacement. Above
+the line the board ranks across positions; below it the order is **ADP's**, and
+`block` is null so the reader can see where the tool stops claiming.
+
+Measured after: TE median shift **0.0**, and the 8 tight ends inside demand land
+at board ranks 22-60 with the next at 105 — *"get one by pick 60 or punt"*, which
+is a draft plan rather than a distortion.
+
+`pos_rank` is taken on the ranking column, not ADP: the cap governs **how many**
+of a position get compared across positions, never **which**.
+
+**Read the correlation honestly.** Whole-board Spearman against ADP *rose* from
++0.885 to +0.963, because 98 of 158 rows are now ADP by construction. Inside the
+line it is **+0.820**. The board gave up an opinion it could not support about
+the bottom two thirds and kept its disagreement where picks are decided; a
+falling headline correlation would have been the wrong thing to optimize.
+
+## 18. An unmeasured player belongs in the middle, not last — 2026-08-14
+
+`nulls_last=True` is correct on a primary sort and **silently demotes on a
+tiebreak key**. The two uses look identical and are opposites: on a primary sort
+it keeps unscored rows off the top; on a secondary key it ranks *"we did not
+measure him"* as *"worst of his group"* — which `rank_board` promised in its own
+docstring not to do while doing exactly that.
+
+All seven unscored players inside the 2026 roster-demand line sat last in their
+block, and Brock Purdy, the **highest** `par_env` in his, sat third of three.
+
+The fix is to **impute rather than sink**: `rank_board` fills a missing
+`quality_pct` with its block's median, so an unmeasured player lands among the
+block's typical members. Only an exact tie in every key falls back to preferring
+the measured player. **Ask which claim the null is making** — *"not on the
+board"* belongs last, *"not measured"* belongs in the middle.
+
+Related, same function: **a stable sort makes incoming row order the real last
+tiebreak**, which is an invariant nothing enforces. `rank_board` now names
+`value_col` as an explicit final key, so an upstream join that reorders rows
+cannot reorder the board.
 
 ---
 

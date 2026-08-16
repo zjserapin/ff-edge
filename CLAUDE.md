@@ -14,12 +14,14 @@ one, columns that look like duplicates but aren't. None of it raises.
 
 | file | read it when |
 |---|---|
-| `HANDOFF.md` | Start of a session. Current state, findings, what's next. |
-| `RESEARCH_SPEC.md` | Current product direction (2026-08-13). Supersedes both dashboard specs on layout and scope; their "what shipped" sections still stand. |
-| `BIG_BOARD_SPEC.md` | The Big Board tab. Built 2026-08-13. Why there is no blended score, and why only two of the three numbers are independent of ADP. |
+| `DRAFT_CHECKLIST.md` | **What to do next.** Ordered by deadline, not by value. |
+| `HANDOFF.md` | Start of a session. Current state around the checklist. |
+| `RESEARCH_SPEC.md` | Product direction (2026-08-13) and the Phase 0/1/2 build order. **Read its correction block first** — three of its claims have been overtaken. |
+| `BIG_BOARD_SPEC.md` | The Big Board tab. Spec, then eighteen numbered records of what each change to the board found. Why only two of the three original numbers are independent of ADP. |
+| `FOOTBALLERS_SPEC.md` | The Fantasy Footballers layer. Data built, display half built. |
+| `CLAIMS_SPEC.md` | Design contract for the claims ledger. Built; a 2027 asset. |
 | `README.md` | Setup, module map, what the analysis has verified. |
-| `ANALYSIS_SPEC.md` | The analytical contract — what gets measured and how. |
-| `CLAIMS_SPEC.md` | Design contract for the claims ledger. Marked built. |
+| `docs/archive/` | `ANALYSIS_SPEC.md`, `DASHBOARD_SPEC.md`, `DASHBOARD_SPEC_v2.md` — superseded on direction and layout. **Their findings sections still stand** and are worth reading before re-proposing anything they declined. |
 | `src/config.py` | Any question about seasons, paths, league format, TTLs. It is heavily commented and is the source of truth. |
 
 ---

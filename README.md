@@ -14,12 +14,13 @@ data onto your disk so you can ask your own questions.
 uv sync
 uv run python -m src.bootstrap --light   # ~2 min cold, hydrates everything but pbp
 uv run python -m src.simulate --sims 4000  # ~3s, writes the strategy artifact
-uv run streamlit run app.py              # the app: Landscape / Players / Strategy / Board / Glossary
+uv run streamlit run app.py              # the app: Big Board / Draft Day / Board / Research / Glossary
 ```
 
 `uv run python -m src.bootstrap --light --analysis` does the cache and the
-derived artifacts in one command. `uv run pytest` runs the suite (128 tests,
-~10s); it reads the local cache and skips cleanly when cold.
+derived artifacts in one command. `uv run pytest` runs the suite (**361 tests,
+~22s**, or 367 with a league id and Sleeper handle set); it reads the local
+cache and skips cleanly when cold.
 
 To pull your own league data, export your Sleeper **display name** (not your
 email) and re-run bootstrap. Both of these are read from the shell rather than

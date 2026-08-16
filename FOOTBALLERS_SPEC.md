@@ -1,10 +1,33 @@
 # The Fantasy Footballers on the dashboard — spec
 
-**Status:** data layer built and tested. **App surface not built** — `app.py` is
-a spec exercise before it is a build exercise (CLAUDE.md), so this is the thing
-to agree on before anything touches the dashboard.
+**Status:** data layer built and tested. **App surface half built.**
 
-**Written:** 2026-08-10. Draft is 2026-08-22.
+**Written:** 2026-08-10. **Status re-checked against `app.py` on 2026-08-16.**
+Draft is 2026-08-22.
+
+> ### What shipped, and what did not — 2026-08-16
+>
+> The header used to read *"App surface not built."* Part of it since has been.
+>
+> **Built:** `ffb_par` is a display column on the Big Board and the blend is
+> live at `FOOTBALLERS_WEIGHT = 0.5`. It is also **centered per position**
+> rather than globally — a refinement this spec did not anticipate, because the
+> two sources disagree about where a whole position sits (+8.7 at TE against
+> −16.2 at QB) and a global center would land that on the blend as a shift that
+> is by construction not an opinion about any player. See `BIG_BOARD_SPEC.md`
+> §16.
+>
+> **Not built, all three from the proposed surface below:**
+>
+> - **§4, the staleness caption.** This spec marks it **"required, not
+>   optional"** and it is the one element here that is not cosmetic.
+>   `stalest_days` appears nowhere in `app.py`. With the blend now carrying half
+>   the board's say, a 90-day-old May opinion is being presented as current.
+> - **§2, the disagreement panel** (`board.compare_footballers`).
+> - **§3, `ffb_spread` as an uncertainty read.** This is the thing no other
+>   source in the project can do.
+>
+> Tracked as B3 in `DRAFT_CHECKLIST.md`.
 
 ---
 
