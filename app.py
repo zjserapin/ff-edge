@@ -3438,12 +3438,13 @@ def main() -> None:
     #
     # The Board tab is `valuation.py` — quality against price — and is
     # deliberately *not* the draft board, which lives under Draft Day. That trap
-    # is inherited from DASHBOARD_SPEC.md and is still live: an edit meant for
-    # `src/board.py` belongs in `_tab_draft_day`, not `_tab_board`.
+    # is inherited from docs/archive/DASHBOARD_SPEC.md and is still live: an
+    # edit meant for `src/board.py` belongs in `_tab_draft_day`, not
+    # `_tab_board`.
     #
     # Players and Strategy merged into Research on 2026-08-10. See
-    # DASHBOARD_SPEC_v2.md; the short version is that neither is read on the
-    # clock and both were sitting in front of the two that are.
+    # docs/archive/DASHBOARD_SPEC_v2.md; the short version is that neither is
+    # read on the clock and both were sitting in front of the two that are.
     #
     # Landscape was cut on 2026-08-13 and split three ways rather than deleted,
     # because exactly one of its four sections was shaped like a decision:

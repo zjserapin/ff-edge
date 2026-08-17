@@ -1,11 +1,38 @@
 # ff-edge research spec — rankings first, many leagues
 
-**Written 2026-08-13. Status: proposed. Nothing here is built.**
-Supersedes the product direction in `DASHBOARD_SPEC.md` and
-`DASHBOARD_SPEC_v2.md`, which both assumed one league, one format, and a draft
-board as the organizing surface. Their *findings* sections stay authoritative —
-they record where a spec was wrong against real data, and that is still the
-most useful thing in either file.
+**Written 2026-08-13. Status as of 2026-08-16: partly built — see the
+correction block below before reading further.**
+Supersedes the product direction in `docs/archive/DASHBOARD_SPEC.md` and
+`docs/archive/DASHBOARD_SPEC_v2.md`, which both assumed one league, one format,
+and a draft board as the organizing surface. Their *findings* sections stay
+authoritative — they record where a spec was wrong against real data, and that
+is still the most useful thing in either file.
+
+> ### Corrections — applied 2026-08-16
+>
+> The header used to read *"Nothing here is built."* That is no longer true and
+> three claims below have been overtaken. Left inline rather than rewritten, so
+> the original reasoning stays legible.
+>
+> 1. **§3 is wrong that ADP history had been "accumulating daily."** It had not
+>    — each history file held exactly one snapshot, so `adp.movement` returned
+>    an empty frame. A launchd agent has run twice daily since 08-13 and it
+>    returns real rows now. **ADP history cannot be backfilled**; a day not
+>    pulled is gone permanently.
+> 2. **§5.2 counts three independent opinions. There are two.** `par` is derived
+>    from the ADP curve, so a blend of all three double-counts the market. See
+>    `BIG_BOARD_SPEC.md` §2. This is the single most load-bearing correction in
+>    this file.
+> 3. **§9 Q1 and Q2 are answered.** Three leagues, read live from Sleeper rather
+>    than asked for — Shiva Bowl 08-22, The Jungle 08-30 (out of scope), 828
+>    Omegle Chat 09-06. The roster is confirmed superflex. Q3 and Q4 remain
+>    open, and Q4 now has a shipped answer to react to.
+>
+> **What has since been built**, against §8's phasing: the Big Board tab (§5.2
+> pulled forward from Phase 1), the Footballers and ECR blend, the team-
+> environment weight, and the roster-demand cut. **Phase 0 items 2 and 3 —
+> surfacing the `peek` screens and adding the profile selector — are still not
+> done.** `app.py` imports neither module. See `DRAFT_CHECKLIST.md`.
 
 This document answers four questions Zach asked directly:
 
@@ -341,7 +368,7 @@ about this guy" means visiting four tabs and joining by eye.
 
 **Method is credibility, archived not deleted.** The audience for this repo is
 Zach plus people evaluating his work, and the honest negative results are the
-most credible thing in it. `DASHBOARD_SPEC_v2.md` made that call and it stands.
+most credible thing in it. `docs/archive/DASHBOARD_SPEC_v2.md` made that call and it stands.
 
 ---
 
