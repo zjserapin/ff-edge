@@ -20,6 +20,8 @@ one, columns that look like duplicates but aren't. None of it raises.
 | `BIG_BOARD_SPEC.md` | The Big Board tab. Spec, then eighteen numbered records of what each change to the board found. Why only two of the three original numbers are independent of ADP. |
 | `FOOTBALLERS_SPEC.md` | The Fantasy Footballers layer. Data built, display half built. |
 | `CLAIMS_SPEC.md` | Design contract for the claims ledger. Built; a 2027 asset. |
+| `HOW_IT_WORKS.md` | The pipeline's shape, stage by stage. **Its tab walkthrough describes the old six-tab app** and carries a status block saying so; the pipeline half is current. |
+| `FANTASYPROS_IDEAS.md` | Brainstorm, not a plan. Its lead finding shipped (ECR is live); the seven-years-of-dispersion one has not been touched. |
 | `README.md` | Setup, module map, what the analysis has verified. |
 | `docs/archive/` | `ANALYSIS_SPEC.md`, `DASHBOARD_SPEC.md`, `DASHBOARD_SPEC_v2.md` — superseded on direction and layout. **Their findings sections still stand** and are worth reading before re-proposing anything they declined. |
 | `src/config.py` | Any question about seasons, paths, league format, TTLs. It is heavily commented and is the source of truth. |

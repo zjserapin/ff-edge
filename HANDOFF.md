@@ -1,27 +1,34 @@
 # ff-edge — handoff
 
-**Session date:** 2026-08-16. **Shiva Bowl drafts 08-22 at 19:00 — six days.**
-**State:** 361 tests pass, 8 skip, without a league. 367 / 2 with both env vars.
+**Session date:** 2026-08-17. **Shiva Bowl drafts 08-22 at 19:00 — five days.**
+**State:** 385 tests pass, 11 skip. **`main` is the only branch.**
 
 **→ The action list is `DRAFT_CHECKLIST.md`.** This file is the state around it.
 Read `CLAUDE.md` before touching code; every silent-failure trap lives there.
 
 ---
 
-## Read this first: the working tree is behind the work
+## The branch cleanup is done, and one merge mattered a lot
 
-Two pieces of finished, tested work exist outside local `main`, and both are
-fast-forwards.
+Nine branches merged into `main` and deleted, four worktrees removed. Every
+delete used `git branch -d`, which refuses on unmerged work — so nothing was
+lost, verified structurally rather than by inspection.
 
-1. **`main` is three commits behind `origin/main`.** The board in the working
-   tree still ranks all 18 tight ends inside the top 100 of a league that
-   rosters about 13 — fixed on the remote, not locally.
-2. **Two commits are stranded in the `promote-cost-of-waiting` worktree**, on no
-   merged branch and pushed nowhere. ~575 lines of tested draft-day surface.
+**The stranded `promote-cost-of-waiting` commits carried `board.roster_need`,
+and it fixed a board that was giving actively bad advice.** The board had only
+ever modelled *league scarcity*, never *your need*. On the 2026 board quarterback
+reads as 7 slots against 20 and therefore screaming scarce — true, and not your
+problem, because **two of the thirteen kept quarterbacks are yours** (Jayden
+Daniels, Trevor Lawrence) against a roster with exactly two QB-capable slots.
 
-`DRAFT_CHECKLIST.md` A1 and A2 have the commands. **Nothing else in this repo is
-worth doing before those two merges**, because everything else is judged against
-a board that is three changes stale.
+The inversion is the part to remember: **league scarcity is maximally misleading
+to the manager who caused it.** Teams that make a position scarce by keeping one
+are precisely the teams that must not draft one. The board was telling you to
+buy the thing you already own, at pick 4.
+
+**Two remote branches survive** and `main` is **10 commits ahead of
+`origin/main`**, all unpushed — `CLAUDE.md` gates every push on explicit
+approval and none was given.
 
 ---
 
@@ -96,19 +103,21 @@ draft. See `DRAFT_CHECKLIST.md` B1, B2 and C1.
 
 ## The docs, and what each is for
 
-Reduced from ten files to seven this session. Three superseded specs moved to
-`docs/archive/` — they are history, and their findings sections are still
-worth reading before re-proposing anything they declined.
+Three superseded specs moved to `docs/archive/` on 08-16 — they are history, and
+their findings sections are still worth reading before re-proposing anything
+they declined. Two more docs arrived on 08-17 with the branch merges.
 
 | file | read it when |
 |---|---|
-| **`DRAFT_CHECKLIST.md`** | **What to do next.** Ordered by deadline. |
+| **`DRAFT_CHECKLIST.md`** | **What to do next.** Ordered by deadline. Block E is the research-readiness list. |
 | `HANDOFF.md` | Start of a session. State around the checklist. |
 | `CLAUDE.md` | Before touching code. Every silent-failure trap. |
-| `BIG_BOARD_SPEC.md` | The Big Board: spec, then eight numbered records of what each change found. |
-| `RESEARCH_SPEC.md` | Direction and the build order. Phase 0/1/2. |
+| `BIG_BOARD_SPEC.md` | The Big Board: spec, then eighteen numbered records of what each change found. |
+| `RESEARCH_SPEC.md` | Direction and the build order. Phase 0/1/2. Read its correction block first. |
 | `FOOTBALLERS_SPEC.md` | The Footballers layer. Data built, display half-built. |
 | `CLAIMS_SPEC.md` | The claims ledger. Built; a 2027 asset. |
+| `HOW_IT_WORKS.md` | **New 08-17.** The pipeline's shape. Its tab walkthrough is stale and says so at the top. |
+| `FANTASYPROS_IDEAS.md` | **New 08-17.** Brainstorm. Holds the unused seven-years-of-ECR finding. |
 | `README.md` | Setup, module map, what the analysis verified. |
 | `docs/archive/` | `ANALYSIS_SPEC.md`, `DASHBOARD_SPEC.md`, `DASHBOARD_SPEC_v2.md` — history. |
 | `src/config.py` | Any question about seasons, paths, league format, TTLs. |

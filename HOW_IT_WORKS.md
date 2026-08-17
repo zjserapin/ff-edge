@@ -4,19 +4,46 @@ A guided walkthrough, not a reference — for when you've been away from this
 project and need to rebuild the mental model before touching code again.
 README.md has the numbers; this file has the shape.
 
+> ### Status — merged 2026-08-17, and the tab half is out of date
+>
+> Written against the **six-tab** app (Landscape / Players / Screen / Strategy /
+> Board / Glossary). That layout no longer exists. **The pipeline half of this
+> file — the ingest → join → transform → measure → model chain, and every
+> argument about why each stage exists — is still accurate and is the reason the
+> file was kept.** The tab-by-tab walkthrough below is history.
+>
+> Where the old tabs went:
+>
+> | this file says | where it lives now |
+> |---|---|
+> | Landscape | **cut 08-13.** Dropoff curves → Big Board; PAR-per-slot and positional mix → Research; concentration-over-time deleted, finding preserved in `landscape.concentration`'s docstring |
+> | Players | folded into **Research** as expanders |
+> | Screen | folded into **Board** / Research; the claims ledger still backs it |
+> | Strategy | folded into **Research**, labelled as pinned to the old format |
+> | Board | still **Board** — `valuation.py`, quality against price |
+> | — | **Big Board** and **Draft Day** are both new since this was written, and Big Board is now the front door |
+>
+> Current strip: **Big Board / Draft Day / Board / Research / Glossary.**
+
 ## The map of the docs, so you know where to look
 
-This project accumulated four markdown files because each was written for a
-different moment. Knowing which is which saves you from reading a dated
-decision log when you wanted the current picture, or vice versa.
+Knowing which doc is which saves you from reading a dated decision log when you
+wanted the current picture, or vice versa. **Corrected 2026-08-17** — the list
+below used to name four files, three of which have since moved or been renamed.
 
 | File | What it's for | When to open it |
 |---|---|---|
+| `DRAFT_CHECKLIST.md` | What to do next, ordered by deadline. | Start here if you are picking work up. |
 | `README.md` | The reference. Setup, the module table, findings with real numbers, verified checks. | "What does module X do" / "what did the analysis actually find." |
-| `HOW_IT_WORKS.md` | This file. Why the pipeline is shaped the way it is, what question each stage and app tab answers, how the pieces hand off. | You've lost the thread and need to reorient before changing anything. |
-| `ANALYSIS_SPEC.md` | The design agreement for the three original analysis tracks (Landscape / Players / Strategy), written *before* the build, with a correction block at the top for where reality disagreed with the plan. | "Why does this module exist" / "what was the original reasoning." History, not current state — check the correction block first. |
-| `CLAIMS_SPEC.md` | The build contract for the claims ledger (the news layer behind the Screen tab): schema, scoring formula, failure modes it's guarded against. | Working on `claims.py`, `news.py`, `llm.py`, or `prompts.py`. |
-| `HANDOFF.md` | A dated snapshot from one working session (2026-08-02) — the most detailed account of the finding that the promotion screen was built to act on. | Understanding *why* the Screen tab exists and works the way it does. Its "proposed next build" section is already built; read it as history. |
+| `HOW_IT_WORKS.md` | This file. Why the pipeline is shaped the way it is and how the stages hand off. | You've lost the thread and need to reorient before changing anything. |
+| `CLAUDE.md` | Every silent-failure trap in the repo. | **Before touching code.** Not optional. |
+| `BIG_BOARD_SPEC.md` | The Big Board, plus eighteen numbered records of what each change to the board found. | Working on ranking, blending, or the board's ordering. |
+| `RESEARCH_SPEC.md` | Direction and the Phase 0/1/2 build order. | Deciding what to build. Read its correction block first. |
+| `FOOTBALLERS_SPEC.md` | The Fantasy Footballers layer. Data built, display half built. | Working on the blend or its display. |
+| `CLAIMS_SPEC.md` | The build contract for the claims ledger: schema, scoring formula, failure modes. | Working on `claims.py`, `news.py`, `llm.py`, or `prompts.py`. |
+| `FANTASYPROS_IDEAS.md` | Brainstorm. Its lead finding shipped; the seven-years-of-ECR-history one has not. | Looking for the next measurement. |
+| `HANDOFF.md` | Current state around the checklist. | Start of a session. |
+| `docs/archive/` | `ANALYSIS_SPEC.md` and both dashboard specs — superseded on direction, findings sections still stand. | Before re-proposing something they declined. |
 
 ## The one-sentence version
 
