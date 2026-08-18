@@ -134,40 +134,47 @@ FF_EDGE_SLEEPER_USER=... uv run python -m src.bootstrap --light
 
 ---
 
-## Block B — cheap, additive, zero risk. Do if A finishes early.
+## ~~Block B — surface the unreachable tools~~ **DONE 2026-08-17**
 
-**Re-verified after the merge: none of these closed.** `app.py` imports 17
-modules and `peek`, `adp` and `profiles` are still not among them.
+`peek` and `adp` are now imported by `app.py` and there is a **Screens**
+expander on Research, first and open by default. **425 tests pass, 2 skip.**
 
-### B1. Surface the `peek` screens
+| item | shipped |
+|---|---|
+| **B1** `peek.regression_candidates`, `market_disagreement`, `snap_trend` | yes — with the caption saying a screen is a question generator, not a ranking input |
+| **B2** `adp.movement` | yes — **read in the profile's market**, see below |
+| **B3** Footballers `ffb_spread` + `stalest_days` on the big board | yes. The disagreement panel (`compare_footballers`) is still unbuilt |
 
-`peek.regression_candidates` (points over expected — the canonical buy-low
-screen), `peek.market_disagreement`, `peek.snap_trend`.
+**Two silent defects turned up in the wiring, and both are the reason this was
+worth doing rather than just displaying something.**
 
-**Caveat that must ship with it:** a screen is a question generator, not a
-ranking input. Promoting `pts_over_exp` to a ranking needs measurement M3, which
-has not been made and may come back null like the last two.
+*The season was a literal.* All four `peek` entry points defaulted to
+`season=2025` while `config.SEASON` said 2026 — right today, wrong the first
+August nobody re-reads them, and invisible either way because a screen against
+the wrong year returns a full plausible table. Now `LAST_PLAYED = SEASON - 1`,
+and the test asserts against that rather than a number so it cannot rot back
+into the literal it forbids.
 
-**Note `peek` has no test file** — unlike `profiles`, which does. It is the
-least finished of the three.
+*The market was the wrong league's.* `adp.movement` defaults to
+`config.ADP_SCORING`/`ADP_TEAMS` — **ppr/12, which prices 828, not the Shiva
+Bowl's 2qb/10**. Rendered bare it would have shown a well-formed table of
+another league's drift. The market is now taken from the board's own profile
+rather than resolved a second time, so the screen cannot disagree with the board
+about which market it is in.
 
-### B2. Surface `adp.movement`
+Also fixed: `season_snap_pct` and `last4_snap_pct` both rendered as "Snap
+share", which turns the one comparison the snap screen exists for into a guess
+about which column moved. Only visible in rendered output, not in the code.
 
-Returns real rows now; the agent has been snapshotting twice daily since 08-13.
-August ADP drift is camp news made numeric, and **this is the window where the
-column is worth the most it will ever be worth.**
+### B3 leftover — the Footballers disagreement panel
 
-### B3. The Footballers display, three pieces
+`board.compare_footballers(built)` sorted by `|rank_shift|` and filtered to the
+top 60 is still unbuilt. Positive `rank_shift` means the Footballers like him
+*more* than this project's curve does. Rows where two independent reads diverge
+are the only ones worth reading; agreement is not information.
 
-`FOOTBALLERS_SPEC.md` §4 marks the staleness caption **"required, not
-optional."** Confirmed still unbuilt post-merge: `stalest_days`, `ffb_spread`
-and `compare_footballers` all appear **zero** times in `app.py`.
-
-The panel is not evenly fresh — median projection age was 7 days for Jason, 64
-for Andy, **90 for Mike**. `ffb_par` carries weight 0.5, so a May opinion is
-being presented as current at half the board's say.
-
----
+Cheap, and now that `ffb_spread` and `stalest_days` are on the board it is the
+last piece of `FOOTBALLERS_SPEC.md`'s proposed surface.
 
 ## Block C — before 09-06, not before 08-22
 
@@ -215,7 +222,11 @@ It is computed, tested, and feeds the feature table. But `td_equity` and
 in the glossary** — so the app documents metrics it does not show.
 
 **This is the cheapest item in Block E by a wide margin:** display work on
-columns that already exist, no new computation.
+columns that already exist, no new computation. **It is also now the only
+unreached analysis left** — `peek` and `adp` were wired on 08-17, so
+`context.py` is the last module computing something the screen never shows.
+The 08-17 block-4 breakdown leaned on `rz_carry_share` to separate seven
+backs the board called one asset, and had to reach past the app to get it.
 
 ### E3. The measurements — M1 first
 
