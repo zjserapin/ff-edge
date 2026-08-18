@@ -72,6 +72,57 @@ Three questions to answer while you are in there:
 The Big Board has a CSV download for exactly this. **A preliminary board you
 have argued with is worth more than a final one you have only read.**
 
+### A4b. Build per-block decision artifacts for the draft table
+
+**Requested 2026-08-17.** The block-4 running-back breakdown done that day is
+the template: one artifact per block you expect to be choosing inside, published
+and open beside you on the clock. **Do this for the blocks around your actual
+picks, not for the whole board** — the value is having the argument already made
+where a 90-second decision is coming.
+
+The method, because the answer is only as good as this and it is repeatable:
+
+1. **Rank the block on the signals that repeat, not the ones the board sorted
+   on.** `rank_board` breaks a within-block tie on `quality_pct`, and
+   `stability.year_over_year` measures that as the *weak* half — at RB,
+   opportunity runs `target_share` 0.65 / `carry_per_game` 0.588 / `rush_share`
+   0.57 against quality's `tprr` 0.402 / `yprr` 0.361 / `ypc` 0.278. The block
+   itself is measured; **the order inside it is not**, and `BIG_BOARD_SPEC.md`
+   §12 says so. That gap is the whole reason these artifacts are worth making.
+2. **Check regression debt** with `peek.regression_candidates`. Large positive
+   `pts_over_exp` is efficiency that has to be given back — it repeats at
+   r_yoy 0.283. Large negative is the buy-low.
+3. **Read `rz_carry_share` / red-zone share**, not just target share. TD equity
+   is what `src/context.py` calls "the largest thing target share cannot see",
+   and it is computed but never displayed (Block E2).
+4. **Check `env_swing`** for the offence, and **`ecr` / `ecr_sd`** for where the
+   crowd sits and how settled it is.
+5. **Run `archetypes.neighbors(..., restrict_to=<the block>)`.** The block is a
+   claim about *value* and is silent on *type*; the comparables split it. An
+   outlier whose nearest neighbour is far away is a different bet at the same
+   price.
+6. **Say the age out loud.** Nothing in `par_env` discounts it — see A4c.
+
+Worked example from 08-17, block 4: the board ranked Achane first in the block
+on a `quality_pct` of 100, while he carried **+56.1 points over expected** and
+the worst environment of the seven; Jeanty ranked 15th while leading the block
+in both signals that actually repeat. **The artifact disagreed with the board
+and the board's own docstrings explain why it should.**
+
+### A4c. Know that age is not priced anywhere on this board
+
+**Not a build item — a thing to hold in your head on the 22nd.** Zach, reading
+the board: *"very surprised Derrick Henry is that high, might just be his age is
+not a built-in context risk marker."* Correct. `age` is computed in
+`features.py`, carried into `valuation.py` and defined in the glossary, and it
+is **an input to no ranking**. Nothing in `par` or `par_env` discounts a
+31-year-old back.
+
+On the 2026 board that silently inflates Henry (block 2), and Barkley at 28.6
+on 17.5 carries a game and Jacobs at 27.6 (both block 4). A redraft age
+coefficient is measurement **M4** in `RESEARCH_SPEC.md` §2.3 — cheap, in scope,
+and unbuilt. Until it exists, apply the discount yourself.
+
 ### A5. Run bootstrap by hand on the morning of 08-22
 
 The launchd agent fires at 08:00 and 17:00. The 17:00 run lands two hours before
