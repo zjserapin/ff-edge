@@ -80,10 +80,17 @@ def _ids(items: list[dict]) -> set[str]:
 
 
 def main() -> int:
-    key = os.environ.get("FF_EDGE_FP_API_KEY")
+    # Via config rather than os.environ directly, so this picks up `.env` and
+    # accepts the `fantasypros_api` spelling too. Reading the environment here
+    # is what left this script unrunnable against a key that was already on
+    # disk under a different name.
+    from src.config import FANTASYPROS_API_KEY
+
+    key = FANTASYPROS_API_KEY
     if not key:
-        print("FF_EDGE_FP_API_KEY is not set. Shell exports do not reach the")
-        print("Bash tool — prefix the command instead:")
+        print("No FantasyPros API key found. Either add it to .env as")
+        print("  FF_EDGE_FP_API_KEY=...      (or fantasypros_api=...)")
+        print("or prefix the command, since shell exports do not reach the Bash tool:")
         print("  FF_EDGE_FP_API_KEY=... uv run python probe_fp_news.py --confirm")
         return 2
 

@@ -10,6 +10,43 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+# --- .env -------------------------------------------------------------------
+
+
+def _load_env_file() -> None:
+    """Read `.env` into the environment, without ever overriding a real export.
+
+    **This did not exist until 2026-08-17, and a key had been sitting unread in
+    `.env` because of it.** Nothing in `src/` called `load_dotenv`, and
+    `python-dotenv` is only a transitive dependency, so every `os.environ.get`
+    below was reading the shell and nothing else. A `.env` file in the repo root
+    looked like configuration and was decoration.
+
+    **Real environment variables win**, which is the property that makes this
+    safe to add mid-season: `FF_EDGE_LEAGUE_ID=... uv run ...` on the command
+    line still beats a stale line in `.env`, so nothing that worked yesterday
+    resolves differently today. Only names absent from the environment are
+    filled in.
+
+    Hand-rolled rather than adding `python-dotenv` as a direct dependency: it is
+    ten lines, and a lockfile change five days before a draft buys a
+    `KeyError` risk that this does not.
+    """
+    path = Path(__file__).resolve().parents[1] / ".env"
+    if not path.is_file():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        name = name.strip()
+        # `setdefault` is the whole safety property — see the docstring.
+        os.environ.setdefault(name, value.strip().strip("'\""))
+
+
+_load_env_file()
+
 # --- Season -----------------------------------------------------------------
 
 SEASON = 2026
@@ -275,6 +312,55 @@ ECR_WEIGHT = 0.15
 # between the two pages and nothing would raise.
 ECR_PAGE_SUPERFLEX = "redraft-op"
 ECR_PAGE_STANDARD = "redraft-overall"
+
+# --- FantasyPros API --------------------------------------------------------
+
+# Their authenticated REST API, which is a **different and much weaker source
+# than the ECR above** despite the shared brand. Read the cap before planning
+# anything on it.
+#
+# Accepts either name so an existing `.env` written as `fantasypros_api` keeps
+# working; `FF_EDGE_FP_API_KEY` is the canonical spelling and matches every
+# other env var here. Empty string means "no key", the same convention
+# `ANTHROPIC_API_KEY` uses.
+FANTASYPROS_API_KEY = (
+    os.environ.get("FF_EDGE_FP_API_KEY") or os.environ.get("fantasypros_api") or ""
+)
+
+FANTASYPROS_API_BASE = "https://api.fantasypros.com/public/v2/json"
+
+# **The free tier serves ten players and no more, and it says so in the
+# response.** Probed 2026-08-17 against `/nfl/2026/consensus-rankings`:
+#
+#     count: 270            <- rows that exist
+#     players: list[10]     <- rows served
+#     limit: 10
+#     public_api_limited: True
+#     tier: 'free'
+#
+# `limit`, `max_results`, `offset`, `start` and `page` were each tested and are
+# all ignored — every request returns the same top ten. So **FantasyPros ADP
+# cannot back this board on this tier**, and that is an account limit rather
+# than a wiring problem: no fetcher, cache layer or join can turn 10 rows into a
+# 159-player board.
+#
+# What the endpoint *does* have going for it, and why the key is wired rather
+# than deleted:
+#
+#   - It serves genuine superflex (`position=OP`) and half-PPR (`scoring=HALF`)
+#     — the exact market this league needs, which is rarer than it sounds.
+#   - It updates daily. It read `last_updated: 8/17` on 08-17, while the
+#     nflverse ECR scrape the board actually uses was three days stale.
+#
+# If the tier is ever raised, the swap point is `adp.fetch` — it returns
+# `name, position, team, adp, stdev` and everything downstream keys off
+# `adp_pos_rank`, so a source that produces those columns drops straight in.
+# **Keep `stdev` from FFC even then**: FantasyPros computes its dispersion
+# across `total_experts: 2`, which yields values of 0.00/0.50/1.00 and would
+# make `adp.survival` — the whole who-will-still-be-there calculation — read as
+# nearly deterministic. FFC measures dispersion over real drafts and is the only
+# honest source of it here.
+FANTASYPROS_FREE_TIER_LIMIT = 10
 
 # Seasons FFC publishes no board for at any scoring x team-count combination,
 # and which therefore cannot be label seasons no matter how much production data
