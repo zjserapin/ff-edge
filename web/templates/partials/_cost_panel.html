@@ -1,0 +1,72 @@
+{# The instruction-shaped panel. Expects `cost` = pages._cost_ctx(...) #}
+<section class="card cost" id="cost-panel" aria-label="Cost of waiting">
+{% if cost.missing %}
+  <div class="banner info">
+    {{ cost.why or "Cost of waiting needs your pick list — set
+    <code>FF_EDGE_SLEEPER_USER</code> alongside <code>FF_EDGE_LEAGUE_ID</code>.
+    The <code>drop</code> column on the board below is the pick-independent
+    version and is always available." | safe }}
+  </div>
+{% else %}
+  {% if cost.top %}
+  <h2 class="cost-headline">At pick {{ cost.first }}: take
+    <span class="pos-chip pos-{{ cost.top.position }}">{{ cost.top.position }}</span>,
+    come back for
+    <span class="pos-chip pos-{{ cost.nxt.position }}">{{ cost.nxt.position }}</span></h2>
+  {% endif %}
+  <div class="metrics">
+    {% for t in cost.tiles %}
+    <div class="tile" title="PAR lost between the best {{ t.position }} available at pick {{ cost.first }} and the best still there at your next pick.">
+      <span class="tile-value">{{ t.text }}</span>
+      <span class="tile-label"><span class="pos-dot pos-{{ t.position }}"></span>{{ t.position }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% if cost.top %}
+  <p class="note"><strong>Points given up by waiting one pick, per position.</strong>
+  Waiting on {{ cost.top.position }} costs {{ '%.1f' % cost.top.cost_of_waiting }}
+  against {{ cost.nxt.position }}'s {{ '%.1f' % cost.nxt.cost_of_waiting }}, so
+  taking them in the other order gives up {{ '%.1f' % cost.gap }} points for
+  nothing — the {{ cost.nxt.position }} you want is still there next time and the
+  {{ cost.top.position }} is not. <strong>Between two positions you will fill
+  anyway, take the one that is more expensive to wait on.</strong> This can
+  disagree with the board below, and when it does it is usually right: the board
+  ranks the <em>level</em>, this ranks the <em>shape</em>. It is not a licence to
+  reach — read the two together.</p>
+  {% endif %}
+  {% if cost.filled %}
+  <p class="note"><strong>{{ cost.filled | join(', ') }} is left out of that
+  recommendation because your starting slots there are already
+  full</strong>{{ cost.kept_names }}. League scarcity and your own need are
+  different numbers, and they diverge hardest for the manager who caused the
+  scarcity: the teams that make a position scarce by keeping it are exactly the
+  teams that must not draft it. The board below still ranks those players — they
+  have bench and trade value — but they cannot improve your starting lineup.</p>
+  {% endif %}
+  {% if cost.slots %}
+  <p class="note"><strong>Starting slots you still have to fill:</strong> {{ cost.slots }}.</p>
+  {% endif %}
+  <details>
+    <summary>Every pick, every position — the numbers behind it</summary>
+    <form class="controls" hx-get="/partials/cost" hx-target="#cost-panel"
+          hx-swap="outerHTML" hx-trigger="change">
+      {% if profile %}<input type="hidden" name="profile" value="{{ profile }}">{% endif %}
+      <label class="control">Picks to look ahead
+        <select name="horizon">
+          {% for n in range(2, cost.ceiling + 1) %}
+          <option value="{{ n }}" {% if cost.horizon == n %}selected{% endif %}>{{ n }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </form>
+    {% with t = cost.table %}{% include "partials/_table.html" %}{% endwith %}
+    <p class="note"><code>best_par</code> is the expected PAR of the best player of
+    that position still on the board at that pick; <code>cost_of_waiting</code> is
+    what falls away before your next one, and is blank on the last pick shown
+    because there is nothing after it to wait for. Costed on <code>par</code>
+    rather than the <code>par_env</code> the board ranks on — availability is a
+    fact about the market's curve, and the board's own blocks say the difference
+    at the top is one it cannot support.</p>
+  </details>
+{% endif %}
+</section>

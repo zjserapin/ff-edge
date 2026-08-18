@@ -60,8 +60,14 @@ after time away.
 uv sync
 uv run python -m src.bootstrap --light   # ~2 min cold, hydrates everything but pbp
 uv run python -m src.simulate --sims 4000  # ~3s, writes the strategy artifact
-uv run streamlit run app.py              # the app: Big Board / Draft Day / Board / Research / Glossary
+uv run uvicorn web.server:app --reload   # the website (Big Board built; the rest lands per WEB_SPEC.md)
+uv run streamlit run app.py              # the prototype: Big Board / Draft Day / Board / Research / Glossary
 ```
+
+**Two front ends, on purpose.** `web/` is the FastAPI + Jinja + htmx site and is
+where the work is going; `app.py` is the Streamlit prototype and stays the
+draft-day tool until the site has been used through a real draft. They share
+every module in `src/` and neither can change the other's numbers.
 
 `uv run python -m src.bootstrap --light --analysis` does the cache and the
 derived artifacts in one command. `uv run pytest` runs the suite (**361 tests,
@@ -76,9 +82,16 @@ and its full draft and transaction history:
 
 ```bash
 export FF_EDGE_SLEEPER_USER=yourname
-export FF_EDGE_LEAGUE_ID=1234567890123456789   # optional; discovered if unset
+export FF_EDGE_LEAGUE_ID=1234567890123456789   # set this if you are in more than one league
 uv run python -m src.bootstrap --light
 ```
+
+**Set the league id if you are in more than one league.** Unset does not mean
+"no league" — it means *the first league Sleeper happens to return*, which is
+not necessarily the one you are drafting. The board builds and renders normally
+either way, so the only symptom is keeper counts that belong to someone else's
+draft. The website names the resolved league on every page and marks a
+discovered one **⚠ guessed**; the Streamlit app cannot.
 
 Without them the Sleeper section is skipped and the app falls back to saved
 league settings (10-team, half-PPR, FLEX + SUPER_FLEX), so everything still runs — you
@@ -134,7 +147,22 @@ directly.
 | `src/prompts.py` | Versioned system prompts — the claim-extraction contract lives here, not inline. |
 | `src/uncertainty.py` | Wilson, bootstrap, and season-clustered intervals. |
 | `src/glossary.py` | What every metric means. Feeds column tooltips and the Glossary tab. |
-| `app.py` | Streamlit app: Landscape / Players / Screen / Strategy / Board / Glossary. |
+| `app.py` | Streamlit prototype: Big Board / Draft Day / Board / Research / Glossary. |
+
+**Presentation layer** — `web/`. Reads the analysis layer and renders it; owns
+no numbers of its own. See `WEB_SPEC.md`.
+
+| File | What it's for |
+|---|---|
+| `web/server.py` | FastAPI app factory and uvicorn entry. Thin, mostly wiring. |
+| `web/pages.py` | HTML routes and the panel assembly ported from `app.py`'s tabs. |
+| `web/api.py` | JSON routes. `{data, warnings, meta}` — warnings are part of the contract. |
+| `web/data.py` | The board chain, memoized. **One ranking, for every page that shows one.** Also `league_identity`, which names the league a page actually resolved. |
+| `web/memo.py` | TTL memo replacing `st.cache_data` — a dict and a monotonic clock. |
+| `web/format.py` | Glossary-labelled headers and cell text. A null renders as an em-dash, never a zero. |
+| `web/charts.py` | Altair → Vega-Lite specs. Colors come from `src/theme.py`, the validated palette. |
+| `web/templates/` | Jinja. `base.html` plus one file per page and per htmx fragment. |
+| `web/static/` | The design system (`styles.css`), a 20-line `app.js`, and vendored htmx + vega. No CDN, no build step. |
 
 ## MCP
 

@@ -48,6 +48,31 @@ warnings being invisible to all four of the obvious asserts.
 
 ## Block A — still before 08-22
 
+### A0. Export `FF_EDGE_LEAGUE_ID` on the 22nd. **Found 2026-08-18. Read this first.**
+
+**An unset league id does not give you "no league" — it gives you The Jungle.**
+`scoring.resolve_league_id` falls through to `sleeper.my_leagues()` and takes the
+**first row**, which on this account is the dynasty startup that is out of scope
+by decision. The board then builds, prices, ranks and renders normally against
+the wrong league's keepers and rosters.
+
+It surfaced on the new website as a warning that read *"the league resolved but
+no keepers are declared on it yet"* — true of The Jungle, false of the league
+being drafted, and the only visible symptom. With the id set, the same board
+resolves **20 keepers, 162 draftable, 60 inside roster demand** and the warning
+disappears.
+
+**The Streamlit app cannot tell you this is happening.** Its sidebar says "Live
+from Sleeper" without saying which league. The website names the league on every
+page and flags a guessed one; `app.py` was deliberately not touched, so on the
+22nd the protection is you, exporting the variable:
+
+```bash
+FF_EDGE_LEAGUE_ID=<shiva bowl id> FF_EDGE_SLEEPER_USER=<handle> uv run streamlit run app.py
+```
+
+Sanity check before drafting from any board: **keepers should read 20, not 0.**
+
 ### A3. Sit with the app yourself. **This is the item that expires.**
 
 **Status: still never done.** Carried unfinished since 08-02.

@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}Big Board · ff-edge{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Big board</h1>
+  <p class="lede">Every player still draftable in your league, ranked across
+  positions by points above replacement, with the two reads that are <em>not</em>
+  derived from ADP shown next to the price rather than folded into it.</p>
+</div>
+
+{% for w in warnings %}
+<div class="banner warn" role="alert">{{ w }}</div>
+{% endfor %}
+
+{% if empty %}
+<div class="banner info">No board yet. This page needs an ADP board for the
+season and a league to price it against — run with
+<code>FF_EDGE_LEAGUE_ID</code> set.</div>
+{% else %}
+
+<section class="metrics" aria-label="Board summary">
+  {% for m in metrics %}
+  <div class="tile" {% if m.help %}title="{{ m.help }}"{% endif %}>
+    <span class="tile-value">{{ m.value }}</span>
+    <span class="tile-label">{{ m.label }}</span>
+  </div>
+  {% endfor %}
+</section>
+<p class="note">
+  <strong>{{ unpriced }} players have no posted line, and that is construction
+  rather than breakage</strong> — FanDuel prices about 92 players season-long, top
+  of the board only. A blank Vegas gap means <em>not measured</em>, never
+  <em>no edge</em>. The same holds for quality on a player whose last season fell
+  under the volume floor.
+</p>
+
+{# Cost of waiting leads, ahead of the assumptions and the table both: it is
+   the only thing on this page shaped like an instruction, and the page is
+   read on a clock. #}
+{% with cost = cost %}{% include "partials/_cost_panel.html" %}{% endwith %}
+
+{% if assumptions %}
+<details class="card">
+  <summary>What this board assumes about your draft</summary>
+  {% with t = assumptions %}{% include "partials/_table.html" %}{% endwith %}
+  <p class="note"><strong><code>draft_demand</code> is league demand minus the
+  starters already kept</strong>, and it is the number replacement level is taken
+  from — not the roster slots. A position where keepers have absorbed most of
+  the demand is priced against a shallower pool than its format implies, which
+  is the correct answer for the draft you are actually having and a surprising
+  one if you read the format label instead.</p>
+</details>
+{% endif %}
+
+<form class="controls" hx-get="/partials/board" hx-target="#board-region"
+      hx-swap="outerHTML" hx-trigger="change" aria-label="Board filters">
+  {% if profile %}<input type="hidden" name="profile" value="{{ profile }}">{% endif %}
+  <fieldset class="chips">
+    <legend>Positions</legend>
+    {% for p in positions_all %}
+    <label class="chip pos-{{ p }}">
+      <input type="checkbox" name="positions" value="{{ p }}"
+             {% if not table.positions or p in table.positions %}checked{% endif %}>
+      <span>{{ p }}</span>
+    </label>
+    {% endfor %}
+  </fieldset>
+  <label class="control">Signal
+    <select name="signals">
+      <option value="">all</option>
+      {% for s in signals_all %}
+      <option value="{{ s }}" {% if s in table.signals %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="control toggle" title="Opportunity, not efficiency — the half that repeats. Plus age, which no ranking on this board discounts.">
+    <input type="checkbox" name="usage" value="1" {% if table.usage %}checked{% endif %}>
+    Last season's usage
+  </label>
+  <label class="control">Rows
+    {# The current value is folded into the list rather than assumed to be in
+       it. A hand-edited ?rows=40 otherwise leaves nothing selected, and the
+       control silently displays 25 while the page shows 40 — a widget that
+       disagrees with the page it controls. #}
+    <select name="rows">
+      {% for n in ([25, 50, 75, 100, 150, 250] + [table.rows]) | unique | sort %}
+      <option value="{{ n }}" {% if table.rows == n %}selected{% endif %}>{{ n }}</option>
+      {% endfor %}
+    </select>
+  </label>
+</form>
+
+{% with table = table %}{% include "partials/_board_table.html" %}{% endwith %}
+
+<section class="notes">
+  <p class="note"><strong>The board is ordered on <code>par_env</code> — PAR plus
+  {{ env_weight }} of the offence a player plays in.</strong> That weight is the one
+  asserted number in this project. It is above zero because <code>env_swing</code>
+  spans −31 to +47 here against a PAR range of −65 to +73, so more than half the
+  board's spread sat in a column that carried no weight at all until 2026-08-14.
+  It is below one because ADP already prices some of the offence — a good player
+  on a bad team is drafted later — and <code>env_swing</code> cannot tell how much,
+  so adding it whole would double count.</p>
+  <p class="note"><strong>The board is cut in two at roster demand, and the blank
+  <code>block</code> column is where.</strong> Above the line sit the players inside
+  the number of their position this draft still has to fill — that count comes
+  from the league's own roster shape and its keepers. Below it the order is
+  <strong>ADP's, not this tool's</strong>: under replacement, PAR has no lineup
+  value left to rank on, because you would start the freely available replacement
+  instead. The board disagrees with the market where it has grounds to and says
+  so plainly where it does not.</p>
+  <p class="note"><strong><code>par</code> deliberately does not fall monotonically
+  down this board.</strong> Rows are ordered by <code>block</code> — players the PAR
+  curve cannot tell apart share one — and <em>within</em> a block by
+  <code>quality_pct</code>, the read that is not derived from ADP. The block is
+  measured; the order inside it is a tiebreak, not a result.</p>
+</section>
+
+<details class="card" id="similarity">
+  <summary>Inside a block — which of these actually look alike?</summary>
+  {% with similarity = similarity %}{% include "partials/_block_similarity.html" %}{% endwith %}
+</details>
+
+<details class="card">
+  <summary>The curves behind the drop column</summary>
+  <div hx-get="/partials/dropoff{% if profile %}?profile={{ profile }}{% endif %}"
+       hx-trigger="load" hx-vals='js:{"dark": window.matchMedia("(prefers-color-scheme: dark)").matches ? 1 : 0}'
+       hx-swap="innerHTML">
+    <p class="note">Drawing…</p>
+  </div>
+  <p class="note">The board's own curve, per position: <code>par_env</code> by
+  positional rank, with the roster-demand line dashed where that position's
+  remaining demand runs out. This is what you open when the <code>drop</code>
+  column says something surprising.</p>
+</details>
+
+{% endif %}
+{% endblock %}

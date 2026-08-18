@@ -181,6 +181,30 @@ accumulates, or a season that starts will each do that on their own schedule.
 `src/`. Using `.parent` repoints `DATA_DIR` at `src/data`, creates it, and
 orphans the entire cache without raising.
 
+**An unset `FF_EDGE_LEAGUE_ID` does not mean "no league" — it means "some other
+league".** `scoring.resolve_league_id` falls through to `sleeper.my_leagues()`
+and takes the **first row**, and on this account that row is **The Jungle** —
+the dynasty startup that is out of scope by decision — not the Shiva Bowl.
+Nothing about the result looks wrong: the board builds, prices, ranks and
+renders, using one league's keepers and rosters under whatever profile is
+selected. Found 2026-08-18 while verifying the website, where the board came up
+carrying a "no keepers are declared yet" warning that was true of The Jungle
+and false of the league being drafted.
+
+It is the `adp.movement` wrong-market defect one level up, and worse: the market
+bug mispriced a screen, this misprices **the whole board and every panel on
+it**. The two failure modes compound — a discovered league with a mismatched
+profile is two independent wrongs that each look plausible alone.
+
+`web.data.league_identity` is the mitigation on the website: the header names
+the resolved league on every page and marks it **⚠ guessed** when the id was
+discovered rather than set, listing the leagues that were passed over.
+**`app.py` has no equivalent** — its sidebar says "Live from Sleeper" without
+saying *which*, so the Streamlit app remains blind to this. Set
+`FF_EDGE_LEAGUE_ID` explicitly for anything that matters, and read the tag
+before trusting a board. The id itself comes from the shell and is never
+written down here — see the first non-negotiable above.
+
 **`spread_line` in nflverse is positive when the *home* team is favoured** —
 the opposite of betting convention. Read `spread` from
 `expected.team_environment`, never `spread_line` raw.

@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · ff-edge{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ title }} <span class="phase-tag">arrives in {{ phase }}</span></h1>
+  <p class="lede">{{ text }}</p>
+  {% if command %}<pre class="command"><code>{{ command }}</code></pre>{% endif %}
+  <p class="note">Build order and reasoning: <code>WEB_SPEC.md</code>.</p>
+</div>
+{% endblock %}

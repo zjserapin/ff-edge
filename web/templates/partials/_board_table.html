@@ -1,0 +1,41 @@
+{# The board itself. Expects `table` = pages._board_table_ctx(...) #}
+<div id="board-region">
+  <div class="board-meta">
+    <span class="note">{{ table.shown }} of {{ table.total }} players shown — the CSV
+    carries the full filtered board, not just these rows.</span>
+    <a class="button" href="{{ table.csv_url }}" download>Download CSV</a>
+  </div>
+  <div class="table-wrap board-wrap">
+    <table class="data board">
+      <thead>
+        <tr>
+          {% for h in table.headers %}
+          <th {% if h.help %}title="{{ h.help }}"{% endif %}
+              {% if h.num %}class="num"{% endif %} data-col="{{ h.raw }}">{{ h.label }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in table.body %}
+        <tr class="{% if row.below %}below-line{% endif %}{% if loop.index0 == table.line_at %} demand-line{% endif %}">
+          {% for cell in row.cells %}
+          {% set h = table.headers[loop.index0] %}
+          {% if h.raw == 'name' %}
+          <td class="name">{{ cell }}</td>
+          {% elif h.raw == 'position' %}
+          <td><span class="pos-chip pos-{{ row.position }}">{{ cell }}</span></td>
+          {% else %}
+          <td {% if h.num %}class="num"{% endif %}>{{ cell }}</td>
+          {% endif %}
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if table.line_at is not none %}
+  <p class="note">The rule across the table is the roster-demand line — below it
+  <code>block</code> is blank, the order is ADP's, and the rows are dimmed because
+  the board is no longer claiming anything about them.</p>
+  {% endif %}
+</div>

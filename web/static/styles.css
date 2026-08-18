@@ -1,0 +1,453 @@
+/* ff-edge design system — "the war room".
+   Tokens follow the validated palette in src/theme.py and the dataviz
+   reference: identity (position) colors are the only saturated marks on the
+   page; everything else is surface, ink, and one accent for actionable UI.
+   Dark-first identity, but light is fully specified — both modes derive from
+   prefers-color-scheme. */
+
+:root {
+  color-scheme: light dark;
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --surface-2: #f0efec;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #898781;
+  --grid: #e1e0d9;
+  --border: rgba(11, 11, 11, 0.10);
+  --accent: #2a78d6;
+  --accent-soft: rgba(42, 120, 214, 0.12);
+  --warn-bg: #fdf3df;
+  --warn-edge: #eda100;
+  --info-bg: #eef4fc;
+  --info-edge: #2a78d6;
+  --qb: #2a78d6;
+  --rb: #008300;
+  --wr: #e87ba4;
+  --te: #eda100;
+  --radius: 8px;
+  --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --surface-2: #232322;
+    --ink: #ffffff;
+    --ink-2: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --border: rgba(255, 255, 255, 0.10);
+    --accent: #3987e5;
+    --accent-soft: rgba(57, 135, 229, 0.18);
+    --warn-bg: #2a2110;
+    --warn-edge: #c98500;
+    --info-bg: #14202f;
+    --info-edge: #3987e5;
+    --qb: #3987e5;
+    --rb: #008300;
+    --wr: #d55181;
+    --te: #c98500;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html { height: 100%; }
+body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--page);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+}
+
+code, pre { font-family: var(--mono); font-size: 0.9em; }
+code { background: var(--surface-2); padding: 0.1em 0.35em; border-radius: 4px; }
+
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
+
+/* --- top bar --------------------------------------------------------------- */
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  padding: 0.6rem 1.25rem;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-weight: 750;
+  font-size: 1.05rem;
+  letter-spacing: 0.06em;
+  color: var(--ink);
+  text-decoration: none;
+}
+.brand-mark {
+  background: var(--ink);
+  color: var(--page);
+  border-radius: 5px;
+  padding: 0.05rem 0.35rem;
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
+}
+.brand-season {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.mainnav { display: flex; gap: 0.25rem; flex-wrap: wrap; }
+.mainnav a {
+  color: var(--ink-2);
+  text-decoration: none;
+  font-size: 0.92rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+}
+.mainnav a:hover { background: var(--surface-2); color: var(--ink); }
+.mainnav a[aria-current="page"] {
+  background: var(--ink);
+  color: var(--page);
+  font-weight: 600;
+}
+
+.topbar-right { margin-left: auto; display: flex; gap: 0.5rem; align-items: center; }
+
+/* Which league is on screen. The "guessed" state is deliberately the loudest
+   thing in the bar: an unset FF_EDGE_LEAGUE_ID resolves by taking the first
+   league Sleeper returns, which is a different draft rendered as a normal
+   board — nothing else on the page can tell you that happened. */
+.league-tag {
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid var(--grid);
+  color: var(--ink-2);
+  white-space: nowrap;
+  cursor: help;
+}
+.league-tag.guessed {
+  background: var(--warn-bg);
+  border-color: var(--warn-edge);
+  color: var(--ink);
+}
+.league-tag.none { color: var(--muted); font-weight: 500; }
+
+select, button, .button {
+  font: inherit;
+  font-size: 0.88rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--grid);
+  border-radius: 6px;
+  padding: 0.3rem 0.6rem;
+}
+button, .button { cursor: pointer; text-decoration: none; }
+button:hover, .button:hover { border-color: var(--accent); color: var(--accent); }
+
+/* --- layout ---------------------------------------------------------------- */
+
+main {
+  width: 100%;
+  max-width: 1480px;
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem 4rem;
+  flex: 1;
+}
+
+.page-head { margin: 0.5rem 0 1.25rem; max-width: 70ch; }
+.page-head h1 {
+  margin: 0 0 0.4rem;
+  font-size: 1.6rem;
+  letter-spacing: -0.01em;
+}
+.lede { margin: 0; color: var(--ink-2); }
+.phase-tag {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border: 1px solid var(--grid);
+  border-radius: 999px;
+  padding: 0.15rem 0.6rem;
+  vertical-align: middle;
+}
+.command {
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+}
+.command code { background: none; padding: 0; }
+
+/* --- banners & notes ------------------------------------------------------- */
+
+.banner {
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+  margin: 0.75rem 0;
+  font-size: 0.92rem;
+}
+.banner.warn { background: var(--warn-bg); border-left: 3px solid var(--warn-edge); }
+.banner.info { background: var(--info-bg); border-left: 3px solid var(--info-edge); }
+
+.note {
+  font-size: 0.82rem;
+  line-height: 1.6;
+  color: var(--muted);
+  max-width: 90ch;
+}
+.note strong { color: var(--ink-2); }
+.notes { margin: 1rem 0; }
+
+/* --- metric tiles ---------------------------------------------------------- */
+
+.metrics {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin: 1rem 0 0.5rem;
+}
+.tile {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.6rem 1rem;
+  min-width: 8.5rem;
+}
+.tile-value {
+  display: block;
+  font-size: 1.5rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+.tile-label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+/* --- cards & disclosures --------------------------------------------------- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem 1.25rem;
+  margin: 1rem 0;
+}
+.card > summary, details > summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--ink-2);
+}
+.card > summary:hover, details > summary:hover { color: var(--accent); }
+details[open] > summary { margin-bottom: 0.75rem; }
+
+.cost-headline { margin: 0 0 0.25rem; font-size: 1.2rem; }
+
+/* --- controls -------------------------------------------------------------- */
+
+.controls {
+  display: flex;
+  align-items: end;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin: 1.25rem 0 0.75rem;
+}
+.controls fieldset {
+  border: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+.controls legend {
+  font-size: 0.75rem;
+  color: var(--muted);
+  padding: 0;
+  margin-bottom: 0.25rem;
+}
+.control {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.control.toggle { flex-direction: row; align-items: center; font-size: 0.85rem; color: var(--ink-2); }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid var(--grid);
+  border-radius: 999px;
+  padding: 0.25rem 0.75rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--muted);
+  user-select: none;
+}
+.chip input { position: absolute; opacity: 0; pointer-events: none; }
+.chip:has(input:checked) { color: var(--ink); background: var(--surface); }
+.chip:has(input:checked)::before {
+  content: "";
+  width: 0.55rem; height: 0.55rem;
+  border-radius: 50%;
+}
+.chip.pos-QB:has(input:checked)::before { background: var(--qb); }
+.chip.pos-RB:has(input:checked)::before { background: var(--rb); }
+.chip.pos-WR:has(input:checked)::before { background: var(--wr); }
+.chip.pos-TE:has(input:checked)::before { background: var(--te); }
+.chip:has(input:checked) { border-color: var(--ink-2); }
+
+/* --- position identity ----------------------------------------------------- */
+
+.pos-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.pos-chip::before, .pos-dot {
+  content: "";
+  display: inline-block;
+  width: 0.55rem; height: 0.55rem;
+  border-radius: 50%;
+  flex: none;
+}
+.pos-chip.pos-QB::before, .pos-dot.pos-QB { background: var(--qb); }
+.pos-chip.pos-RB::before, .pos-dot.pos-RB { background: var(--rb); }
+.pos-chip.pos-WR::before, .pos-dot.pos-WR { background: var(--wr); }
+.pos-chip.pos-TE::before, .pos-dot.pos-TE { background: var(--te); }
+
+/* --- tables ---------------------------------------------------------------- */
+
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.board-wrap { max-height: 78vh; overflow-y: auto; }
+
+table.data {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  font-size: 0.85rem;
+}
+table.data th {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--surface);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.72rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  text-align: left;
+  padding: 0.55rem 0.7rem;
+  border-bottom: 1px solid var(--grid);
+  white-space: nowrap;
+}
+table.data td {
+  padding: 0.42rem 0.7rem;
+  border-bottom: 1px solid var(--grid);
+  white-space: nowrap;
+}
+table.data tbody tr:last-child td { border-bottom: none; }
+table.data th.num, table.data td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+table.data td.name { font-weight: 600; }
+table.data tbody tr:hover td { background: var(--accent-soft); }
+
+/* The board runs past 25 columns, so the name pins to the left edge — scrolling
+   right to read `env_swing` is useless if you have lost track of whose row it
+   is. Header and cell both stick, and the header corner has to outrank the
+   column header (z 6 > 5) or it slides under it on a diagonal scroll. */
+table.board td.name,
+table.board th[data-col="name"] {
+  position: sticky;
+  left: 0;
+  z-index: 4;
+  background: var(--surface);
+  box-shadow: 1px 0 0 var(--grid);
+}
+table.board th[data-col="name"] { z-index: 6; }
+table.board tbody tr:hover td.name { background: color-mix(in srgb, var(--accent-soft), var(--surface) 45%); }
+
+/* Below the roster-demand line the board stops claiming: dim the rows and
+   draw the line itself where the first blank block appears. */
+table.board tr.below-line td { color: var(--muted); }
+table.board tr.below-line td.name { font-weight: 500; }
+table.board tr.demand-line td { border-top: 2px solid var(--accent); }
+
+.board-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0.5rem 0;
+  flex-wrap: wrap;
+}
+
+/* --- charts ---------------------------------------------------------------- */
+
+.chart { overflow-x: auto; }
+
+/* --- footer ---------------------------------------------------------------- */
+
+.site-footer {
+  border-top: 1px solid var(--border);
+  padding: 0.75rem 1.25rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+/* --- responsive ------------------------------------------------------------ */
+
+@media (max-width: 760px) {
+  .topbar { gap: 0.6rem; padding: 0.5rem 0.75rem; }
+  .topbar-right { margin-left: 0; width: 100%; }
+  main { padding: 1rem 0.75rem 3rem; }
+  .metrics { gap: 0.5rem; }
+  .tile { min-width: 7rem; padding: 0.5rem 0.75rem; }
+  .tile-value { font-size: 1.2rem; }
+  body { font-size: 14px; }
+}

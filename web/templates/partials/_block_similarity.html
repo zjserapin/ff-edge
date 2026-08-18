@@ -1,0 +1,45 @@
+{# Expects `similarity` = pages._block_ctx(...) (may be none) #}
+<div id="block-panel">
+{% if similarity is none %}
+  <p class="note">No blocks on this board yet.</p>
+{% elif similarity.empty %}
+  <div class="banner info">No block on this board holds more than one player.</div>
+{% else %}
+  <p class="note">The board says a block is one asset <em>on expected points</em>.
+  That is a statement about value and says nothing about type. Two backs worth
+  the same pick can earn their volume in completely different ways, and which
+  one you want depends on the rest of your roster.</p>
+  <form class="controls" hx-get="/partials/block" hx-target="#block-panel"
+        hx-swap="outerHTML" hx-trigger="change">
+    {% if profile %}<input type="hidden" name="profile" value="{{ profile }}">{% endif %}
+    <label class="control">Block
+      <select name="block">
+        {% for o in similarity.options %}
+        <option value="{{ o.block }}" {% if similarity.block == o.block %}selected{% endif %}>
+          Block {{ o.block }} — {{ o.n }} players ({{ o.pos }})
+        </option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="control">Compared against
+      <select name="anchor">
+        {% for name in similarity.names %}
+        <option value="{{ name }}" {% if similarity.anchor == name %}selected{% endif %}>{{ name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </form>
+  {% if similarity.unmatched %}<p class="note">{{ similarity.unmatched }}</p>{% endif %}
+  {% if similarity.message %}
+  <div class="banner info">{{ similarity.message }}</div>
+  {% elif similarity.table %}
+  {% with t = similarity.table %}{% include "partials/_table.html" %}{% endwith %}
+  <p class="note"><strong>Closest to {{ similarity.anchor }} inside block
+  {{ similarity.block }}, nearest first.</strong> Distance is in standardized
+  quality space, weighted by how much each metric actually repeats year over
+  year — so a stat that is mostly noise pulls two players together far less than
+  one that carries. Standardized over <em>this block</em>, so these numbers do
+  not compare with the Research page's, which use the whole position.</p>
+  {% endif %}
+{% endif %}
+</div>

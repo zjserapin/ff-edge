@@ -1,7 +1,38 @@
 # ff-edge — handoff
 
-**Session date:** 2026-08-17. **Shiva Bowl drafts 08-22 at 19:00 — five days.**
-**State:** 385 tests pass, 11 skip. **`main` is the only branch.**
+**Session date:** 2026-08-18. **Shiva Bowl drafts 08-22 at 19:00 — four days.**
+**State:** 451 tests pass, 2 skip (with both env vars). **`main` is the only branch.**
+
+---
+
+## New 08-18: there is a website, and Streamlit is untouched
+
+`web/` is a FastAPI + Jinja + htmx site over the same `src/` modules — see
+`WEB_SPEC.md`. **The Big Board page is at parity** with the Streamlit tab;
+Draft Day, Player, Research and Reference are placeholder pages naming the
+block they arrive in.
+
+```bash
+FF_EDGE_LEAGUE_ID=... FF_EDGE_SLEEPER_USER=... uv run uvicorn web.server:app --reload
+```
+
+**`app.py` was not modified — not one line.** Draft the Shiva Bowl from
+Streamlit on the 22nd. The website targets 09-06 (828), which is also when the
+profile selector it already carries stops being optional. Retire Streamlit only
+after the site has been used through a real draft.
+
+Two things worth knowing about it:
+
+- **State is the URL**, not session state. `?profile=&positions=&usage=1` —
+  bookmarkable, and the five-selectboxes-across-four-tabs problem (E1) cannot
+  reproduce here.
+- **`st.dataframe`'s pandas↔Arrow round-trip is gone from the render path**, so
+  the pyarrow 25.0.0 crash class does not exist on this surface. The exclusion
+  in `pyproject.toml` stays while `app.py` lives.
+
+**Building it found a live defect: an unset `FF_EDGE_LEAGUE_ID` boards The
+Jungle, not the Shiva Bowl.** See `DRAFT_CHECKLIST.md` **A0** — it is the first
+thing to read before the 22nd, and `app.py` gives you no way to notice it.
 
 **→ The action list is `DRAFT_CHECKLIST.md`.** This file is the state around it.
 Read `CLAUDE.md` before touching code; every silent-failure trap lives there.

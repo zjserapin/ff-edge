@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}ff-edge{% endblock %}</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/vendor/htmx.min.js" defer></script>
+  <script src="/static/vendor/vega.min.js" defer></script>
+  <script src="/static/vendor/vega-lite.min.js" defer></script>
+  <script src="/static/vendor/vega-embed.min.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/{% if profile %}?profile={{ profile }}{% endif %}">
+      <span class="brand-mark">FF</span>EDGE<span class="brand-season">{{ season }}</span>
+    </a>
+    <nav class="mainnav" aria-label="Main">
+      {% set q = '?profile=' + profile if profile else '' %}
+      <a href="/{{ q }}" {% if active == 'board' %}aria-current="page"{% endif %}>Big Board</a>
+      <a href="/draft{{ q }}" {% if active == 'draft' %}aria-current="page"{% endif %}>Draft Day</a>
+      <a href="/player{{ q }}" {% if active == 'player' %}aria-current="page"{% endif %}>Player</a>
+      <a href="/research{{ q }}" {% if active == 'research' %}aria-current="page"{% endif %}>Research</a>
+      <a href="/reference{{ q }}" {% if active == 'reference' %}aria-current="page"{% endif %}>Reference</a>
+    </nav>
+    <div class="topbar-right">
+      {% if league %}
+      {% if not league.resolved %}
+      <span class="league-tag none" title="No league resolved — set FF_EDGE_LEAGUE_ID. The board is using saved defaults.">no league</span>
+      {% elif league.discovered %}
+      <span class="league-tag guessed"
+            title="FF_EDGE_LEAGUE_ID is unset, so this league was discovered by taking the first one Sleeper returned{% if league.others %} — the others on this account are {{ league.others | join(', ') }}{% endif %}. Set the id explicitly to be sure which draft you are pricing.">
+        ⚠ guessed: {{ league.name or league.league_id }}
+      </span>
+      {% else %}
+      <span class="league-tag set" title="Read live from Sleeper, id set explicitly.">{{ league.name or league.league_id }}{% if league.teams %} · {{ league.teams }}T{% endif %}</span>
+      {% endif %}
+      {% endif %}
+      <form method="get" action="{{ request.url.path }}" class="profile-form">
+        <label class="visually-hidden" for="profile-select">League profile</label>
+        <select id="profile-select" name="profile" onchange="this.form.submit()">
+          {% for name in profile_names %}
+          <option value="{{ name }}" {% if (profile or 'shiva_bowl') == name %}selected{% endif %}>{{ name.replace('_', ' ') }}</option>
+          {% endfor %}
+        </select>
+      </form>
+      <form method="post" action="/refresh" class="refresh-form">
+        <button type="submit" title="Drop the page cache and re-read every feed">↻ Refresh</button>
+      </form>
+    </div>
+  </header>
+  <main>
+  {% block content %}{% endblock %}
+  </main>
+  <footer class="site-footer">
+    <span>ff-edge · localhost only · the Streamlit prototype remains at <code>uv run streamlit run app.py</code></span>
+  </footer>
+</body>
+</html>
