@@ -402,7 +402,16 @@ TERMS: dict[str, Term] = {
         "Next Gen Stats"),
     # --- Context -----------------------------------------------------------
     "age": _t("Age", "Age in years as of September 1 of that season.",
-              "Computed from birth date, not from experience.", "Context"),
+              """Computed from birth date, not from experience. **It is an input
+              to no ranking on this board.** `age` is computed, carried and now
+              displayed, but nothing in `par`, `par_env` or `block` discounts it,
+              so a 31-year-old back and a 22-year-old at the same projected
+              volume price identically. That is a real gap and not an oversight
+              of display: measuring a redraft age effect — one coefficient,
+              season-forward, controlling for price — is M4 in `RESEARCH_SPEC.md`
+              and unbuilt. Until it exists the discount has to be applied by the
+              reader, which is why the column is on the board at all.""",
+              "Context"),
     "seasons_exp": _t("Seasons of experience", "Seasons since his rookie year, inclusive.",
                       """Excluded from every model: it correlates 0.964 with age, and
                       fitting both makes them split into a large positive and negative
@@ -687,6 +696,13 @@ TERMS: dict[str, Term] = {
         superflex league is most sensitive about. Each side is standardized over
         the rows where both exist, then mapped back onto the `par` scale so the
         weight means what it says.""", "Board"),
+    "rank_shift": _t(
+        "Rank shift", "board_rank minus blend_rank — how far the Footballers moved him.",
+        """**Positive means they like him more** than this project's curve does.
+        The point of printing it beside both ranks is that the blend stays
+        checkable rather than asserted: if these ever read near zero across the
+        board, `FOOTBALLERS_WEIGHT` should go to 0.0 and the complexity should
+        come out. Same standard `compare_baselines` is held to.""", "Board"),
     "blend_rank": _t(
         "Blended rank", "Board order using the blended value.",
         "Kept beside the unblended `board_rank` so the blend's effect is visible rather than asserted.",

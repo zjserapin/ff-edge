@@ -2352,7 +2352,12 @@ def _draft_board() -> dict[str, Any]:
             on="position",
             how="left",
         )
-    out["players"] = bd.rank_board(players, value_col="par_env")
+    ranked = bd.rank_board(players, value_col="par_env")
+    # **After the ranking, deliberately.** `attach_usage` adds last season's
+    # opportunity profile for reading, and appending it here rather than earlier
+    # is what makes "it cannot move a rank" a fact about the call graph instead
+    # of a claim in a docstring. Nothing below this line feeds `par_env`.
+    out["players"] = bd.attach_usage(ranked, _features())
     return out
 
 
@@ -3298,12 +3303,36 @@ def _tab_big_board(p: dict[str, Any]) -> None:
     # clock — "the 6th of 8 tight ends this draft still needs" is the sentence
     # that decides whether you take him now, and it is the number the
     # roster-demand line is drawn on.
+    # Behind a toggle rather than always on, because the board is already wide
+    # and these are read *about a shortlist*, not scanned down the whole page.
+    # The default view answers "who is next"; this answers "why", which is the
+    # second question and belongs one click away rather than in the way.
+    show_usage = st.checkbox(
+        "Show last season's usage", value=False, key="big_board_usage",
+        help=(
+            "Opportunity, not efficiency — the half that repeats. Plus age, "
+            "which no ranking on this board discounts."
+        ),
+    )
+    usage_columns = [c for c in bd._USAGE_COLUMNS if c in view.columns] if show_usage else []
+    if show_usage:
+        st.caption(
+            "**Last season's numbers, on this season's board.** These describe "
+            "the role he had, which is the most persistent thing known about him "
+            "and still not a projection. Opportunity metrics repeat at r=0.52-0.65 "
+            "at RB against 0.40 for the best quality metric, so this is the "
+            "sturdier half of the picture — but a rookie has no prior season, and "
+            "`rz_carry_share` is a rushing metric a receiver correctly does not "
+            "have. **A blank means not measured, never zero.** `age` is here "
+            "because nothing in `par_env` discounts it (M4, unbuilt)."
+        )
     columns = [
         c for c in (
             "block", "name", "position", "need", "pos_rank", "demand", "team",
             "bye", "tier", "same", "adp", "adj_adp", "par", "ffb_par", "ffb_spread",
             "stalest_days", "ecr", "ecr_sd",
             "blend_par", "env_swing", "par_env", "drop", "quality_pct",
+            *usage_columns,
             "value_gap", "vegas_gap", "signal", "board_rank",
         ) if c in view.columns
     ]
@@ -3521,6 +3550,54 @@ def _screens_section(p: dict[str, Any]) -> None:
         st.info(f"No snap data cached for {trend_pos}.")
 
 
+def _footballers_disagreement_section() -> None:
+    """Where the Footballers and this project's curve actually diverge.
+
+    The last piece of `FOOTBALLERS_SPEC.md`'s proposed surface, and the sibling
+    of `compare_baselines`: a correction that never changes a decision is
+    complexity not earning its keep, so the blend has to be *checkable* rather
+    than asserted. `board_rank` is the unblended control and `blend_rank` is the
+    result; printing both is the whole point.
+    """
+    data = _draft_board()
+    compare = bd.compare_footballers(data)
+    if not compare.height:
+        st.info("No Footballers projections joined, so there is nothing to compare.")
+        return
+
+    st.caption(
+        "Positive **rank shift** means the Footballers like him *more* than this "
+        "project's curve does. Agreement is not information — these are the rows "
+        "where two independent reads diverge, which is the only place a private "
+        "opinion is worth having."
+    )
+    # The spec's `board_rank <= 60` filter is load-bearing, not cosmetic. Unfiltered,
+    # the largest disagreements are all backup quarterbacks and deep receivers priced
+    # past ADP 110 — real disagreements about players nobody in this league drafts.
+    # Capping it at roughly the roster-demand line keeps the panel about picks.
+    limit = st.slider("Top N of the board", 20, 120, 60, step=10, key="ffb_cmp_top")
+    view = compare.filter(pl.col("board_rank") <= limit)
+    if not view.height:
+        st.info("No players inside that cut.")
+        return
+
+    view = view.sort(pl.col("rank_shift").abs(), descending=True, nulls_last=True)
+    table(view.head(25))
+
+    moved = view.filter(pl.col("rank_shift") != 0).height
+    st.caption(
+        f"{moved} of {view.height} players inside the top {limit} move at all. "
+        "If that number ever reads near zero, `FOOTBALLERS_WEIGHT` should go to "
+        "0.0 and the blend should come out — the same standard "
+        "`compare_baselines` is held to."
+    )
+    st.caption(
+        "**Read `stalest_days` beside every row.** The panel is not evenly "
+        "fresh, and a consensus number hides that completely."
+    )
+
+
+
 def _tab_research(p: dict[str, Any]) -> None:
     """The measured nulls and the supporting work, collapsed.
 
@@ -3546,6 +3623,8 @@ def _tab_research(p: dict[str, Any]) -> None:
 
     with st.expander("Screens — buy-low, ADP movement, dispersion, snaps", expanded=True):
         _screens_section(p)
+    with st.expander("Where the Footballers disagree with the curve"):
+        _footballers_disagreement_section()
     with st.expander("Do these metrics repeat? — stability"):
         _stability_section(p["dark"])
     with st.expander("Where replacement level sits, and how it has moved"):

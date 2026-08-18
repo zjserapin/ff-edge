@@ -211,3 +211,36 @@ def test_filtering_the_buy_low_screen_to_each_position_renders(screens) -> None:
     for position in options:
         at = at.multiselect(key="screen_reg_pos").set_value([position]).run()
         assert not at.exception, f"{position} raised: {at.exception[0].value}"
+
+
+# --- the Footballers disagreement panel -------------------------------------
+
+
+def test_the_disagreement_panel_and_usage_toggle_render(screens) -> None:
+    """Both of the last two cheap items reached the page.
+
+    Cheap to assert and worth asserting: a section that silently fails to render
+    looks identical to one that was never added.
+    """
+    at = screens
+    assert [c for c in at.checkbox if c.key == "big_board_usage"], "usage toggle missing"
+    assert [s for s in at.slider if s.key == "ffb_cmp_top"], "disagreement panel missing"
+
+
+def test_the_usage_toggle_can_be_driven_both_ways(screens) -> None:
+    """On, off, on — the column set changes each time, which is where it breaks."""
+    at = screens
+    for value in (True, False, True):
+        at = at.checkbox(key="big_board_usage").set_value(value).run()
+        assert not at.exception, f"usage={value} raised: {at.exception[0].value}"
+
+
+def test_the_disagreement_cut_can_be_driven_the_whole_way_up(screens) -> None:
+    at = screens
+    slider = at.slider(key="ffb_cmp_top")
+    values = list(range(int(slider.min), int(slider.max) + 1, int(slider.step)))
+    assert len(values) > 1, "a single-step slider cannot exercise repetition"
+
+    for value in values:
+        at = at.slider(key="ffb_cmp_top").set_value(value).run()
+        assert not at.exception, f"top {value} raised: {at.exception[0].value}"

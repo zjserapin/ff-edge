@@ -1438,6 +1438,108 @@ def attach_quality(
     )
 
 
+# The usage columns `attach_usage` carries across, and why these seven.
+#
+# **Every one is an opportunity metric, and that is the whole selection rule.**
+# `stability.year_over_year` measures which columns repeat, and at RB the
+# opportunity axis runs 0.52-0.65 (`target_share` 0.65, `carry_per_game` 0.588,
+# `rush_share` 0.57, `snap_pct` 0.566, `rz_carry_share` 0.517) against a quality
+# axis topping out at 0.402. The board already shows `quality_pct`, because
+# `rank_board` sorts on it inside a block — so the half that actually persists
+# was the half you could not see.
+#
+# `exp_td_share` earns its place by covering all four positions at ~100% while
+# being the one thing `src/context.py` names as invisible to target share: "a
+# slot receiver on 25% of targets and a big-slot on 18% with every goal-line
+# fade can finish miles apart, and only one of those gaps is priced."
+#
+# The red-zone and neutral pairs are **deliberately position-lopsided** and left
+# that way. `rz_carry_share` and `neutral_rush_share` are ~99% covered at RB and
+# ~20-40% at WR/TE; `rz_target_share` is the mirror. Filling either with a zero
+# would read as "no red-zone role" when it means "not a rushing position", and
+# this file's rule is that a null means not measured, never bad.
+#
+# `age` is here for a different reason and it is not a usage metric: **nothing in
+# `par` or `par_env` discounts it.** It is computed, carried and displayed and it
+# is an input to no ranking, so the board silently prices a 31-year-old back and
+# a 22-year-old identically. Measuring a redraft age effect is M4 in
+# `RESEARCH_SPEC.md` and unbuilt; until it exists the honest move is to put the
+# number in front of the reader rather than to pretend it was considered.
+_USAGE_COLUMNS = [
+    "age",
+    "snap_pct",
+    "target_share",
+    "exp_td_share",
+    "neutral_target_share",
+    "rz_target_share",
+    "rz_carry_share",
+]
+
+
+def attach_usage(
+    players: pl.DataFrame, feats: pl.DataFrame | None = None, season: int | None = None
+) -> pl.DataFrame:
+    """Add last season's opportunity profile, for reading — never for ranking.
+
+    **Call this after the board is ranked.** Nothing here feeds `par`, `par_env`
+    or `block`, and appending it downstream of `rank_board` is what makes that a
+    property of the call graph rather than a promise in a docstring. These are
+    last season's numbers on this season's board; they describe the role he had,
+    which is the most persistent thing known about him and still not a
+    projection.
+
+    Joined on the normalized name, deduped to one row per player first — the
+    `attach_quality` pattern, and the reason is the trap in `CLAUDE.md`: the
+    board's `player_id` is FFC's **Int64** while the feature table keys on
+    **gsis_id, a String**. Joining those leaves two columns sharing a name,
+    polars silently suffixes the newcomer, and reading `player_id` back hands
+    you the wrong namespace. Carrying no id across sidesteps it entirely.
+
+    Nulls are the normal case and are load-bearing: a rookie has no prior
+    season, and `rz_carry_share` is a rushing metric that a receiver correctly
+    does not have. Null means not measured, never zero.
+
+    Returns `players` with `_USAGE_COLUMNS` added, left-joined so every row
+    survives.
+    """
+    if not players.height:
+        return players
+
+    if feats is None:
+        from src import features as ft  # local: features is a heavy import
+
+        feats = ft.build()
+
+    cols = [c for c in _USAGE_COLUMNS if c in feats.columns]
+    if not feats.height or not cols:
+        return players.with_columns(
+            [pl.lit(None, dtype=pl.Float64).alias(c) for c in _USAGE_COLUMNS]
+        )
+
+    season = season if season is not None else SEASON - 1
+    recent = feats.filter(pl.col("season") == season) if "season" in feats.columns else feats
+    if not recent.height:
+        return players.with_columns(
+            [pl.lit(None, dtype=pl.Float64).alias(c) for c in _USAGE_COLUMNS]
+        )
+
+    name_col = "player_name" if "player_name" in recent.columns else "name"
+    keys = recent.select(
+        ids.normalize(name_col).alias("_norm"),
+        *[pl.col(c).cast(pl.Float64) for c in cols],
+    ).unique(subset=["_norm"], keep="first")
+
+    out = (
+        players.with_columns(ids.normalize("name").alias("_norm"))
+        .join(keys, on="_norm", how="left")
+        .drop("_norm")
+    )
+    # Any column the feature table did not carry still has to exist, or the app
+    # renders a different set of columns depending on what happened to be cached.
+    missing = [c for c in _USAGE_COLUMNS if c not in out.columns]
+    return out.with_columns([pl.lit(None, dtype=pl.Float64).alias(c) for c in missing])
+
+
 # The columns `attach_vegas` carries across. `market` travels with `vegas_gap`
 # because the gap's meaning depends on which prop it came from — a receiving
 # yards line says something much closer to fantasy value than a passing yards
