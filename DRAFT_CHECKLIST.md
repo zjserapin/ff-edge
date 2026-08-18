@@ -41,6 +41,11 @@ warnings being invisible to all four of the obvious asserts.
 
 ---
 
+> **State as of 2026-08-17, end of day.** Every cheap item is done. **437 tests
+> pass, 2 skip.** What remains before the 22nd is A3, A4, A4b, A4c and A5 —
+> **none of them are code**, they are you reading the board and the machine
+> staying fed. Blocks C, D and E3/E4 are all post-draft by design.
+
 ## Block A — still before 08-22
 
 ### A3. Sit with the app yourself. **This is the item that expires.**
@@ -166,15 +171,17 @@ Also fixed: `season_snap_pct` and `last4_snap_pct` both rendered as "Snap
 share", which turns the one comparison the snap screen exists for into a guess
 about which column moved. Only visible in rendered output, not in the code.
 
-### B3 leftover — the Footballers disagreement panel
+### ~~B3 leftover — the Footballers disagreement panel~~ **DONE 2026-08-17**
 
-`board.compare_footballers(built)` sorted by `|rank_shift|` and filtered to the
-top 60 is still unbuilt. Positive `rank_shift` means the Footballers like him
-*more* than this project's curve does. Rows where two independent reads diverge
-are the only ones worth reading; agreement is not information.
+On Research, as `compare_footballers` sorted by `|rank_shift|`. **The spec's
+`board_rank <= 60` cut turned out to be load-bearing rather than cosmetic** —
+unfiltered, every largest disagreement is a backup quarterback or a receiver
+priced past ADP 110, which is a real disagreement about players nobody in this
+league drafts. The cut is a slider so it can be widened deliberately.
 
-Cheap, and now that `ffb_spread` and `stalest_days` are on the board it is the
-last piece of `FOOTBALLERS_SPEC.md`'s proposed surface.
+Held to `compare_baselines`' standard, and the panel says so on screen: if these
+shifts ever read near zero, `FOOTBALLERS_WEIGHT` goes to 0.0 and the blend comes
+out. `FOOTBALLERS_SPEC.md`'s proposed surface is now fully built.
 
 ## Block C — before 09-06, not before 08-22
 
@@ -209,24 +216,32 @@ Big Board. The one that looks like a player detail is really a comparables view
 means visiting four tabs and joining by eye") and it is **still exactly true.**
 For detailed research this costs you more than anything else in this file.
 
-### E2. `context.py` computes the good stuff and it never reaches the screen
+### ~~E2. `context.py`'s metrics never reached the screen~~ **DONE 2026-08-17**
 
-The module docstring calls touchdown equity **"the largest thing target share
-cannot see"** — a slot receiver on 25% of targets and a big-slot on 18% with
-every goal-line fade finish miles apart, and only one of those gaps is priced.
-Neutral-game-script share strips out targets accumulated down three scores,
-which count the same in a raw share and are worth much less going forward.
+`board.attach_usage` puts last season's opportunity profile on the big board
+behind a **"Show last season's usage"** toggle — `age`, `snap_pct`,
+`target_share`, `exp_td_share`, `neutral_target_share`, `rz_target_share`,
+`rz_carry_share`.
 
-It is computed, tested, and feeds the feature table. But `td_equity` and
-`neutral_target_share` appear **zero** times in `app.py`, while being **defined
-in the glossary** — so the app documents metrics it does not show.
+**The selection rule is the design.** Every column is opportunity, because
+`stability.year_over_year` measured that axis at **0.52-0.65** year over year at
+RB against a quality axis topping out at **0.402** — and `quality_pct` was
+already both a display column *and* the within-block sort key while the sturdier
+half was invisible. `exp_td_share` covers all four positions at ~100% and is the
+thing `context.py` names as invisible to target share.
 
-**This is the cheapest item in Block E by a wide margin:** display work on
-columns that already exist, no new computation. **It is also now the only
-unreached analysis left** — `peek` and `adp` were wired on 08-17, so
-`context.py` is the last module computing something the screen never shows.
-The 08-17 block-4 breakdown leaned on `rz_carry_share` to separate seven
-backs the board called one asset, and had to reach past the app to get it.
+**Attached after `rank_board`, and that ordering is the point.** Appending
+downstream is what makes "usage cannot move a rank" a fact about the call graph
+rather than a docstring claim;
+`test_attaching_usage_never_reorders_or_reranks_the_board` fails if anyone moves
+the call upstream.
+
+The red-zone and neutral pairs are position-lopsided and stay that way — a
+receiver has no `rz_carry_share` and filling it with a zero would read as "no
+red-zone role". **Blank means not measured, never zero.**
+
+`age` rides along for a different reason — see A4c. It is still an input to no
+ranking; displaying it is the mitigation, not the fix. **M4 remains unbuilt.**
 
 ### E3. The measurements — M1 first
 
