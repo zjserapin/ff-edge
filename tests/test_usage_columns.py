@@ -124,7 +124,11 @@ def test_only_the_requested_season_is_joined() -> None:
     feats = pl.concat(
         [
             _feats([("Ja'Marr Chase", 26.0)]),
-            _feats([("Ja'Marr Chase", 99.0)]).with_columns(pl.lit(2024).alias("season")),
+            _feats([("Ja'Marr Chase", 99.0)]).with_columns(
+                # Cast explicitly: `pl.lit(2024)` is Int32 and the column built
+                # by `_feats` is Int64, and `concat` raises on the mismatch.
+                pl.lit(2024).cast(pl.Int64).alias("season")
+            ),
         ]
     )
     out = bd.attach_usage(_ranked(), feats, season=2025)
