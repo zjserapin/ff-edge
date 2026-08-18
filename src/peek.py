@@ -13,10 +13,18 @@ from __future__ import annotations
 import polars as pl
 
 from src import nflverse as nv
-from src.config import OUTPUT_DIR
+from src.config import OUTPUT_DIR, SEASON
+
+# The last season with completed games. Every screen here reads *finished*
+# production, so it trails `SEASON` by one — and it is derived rather than
+# typed, because these four defaults said `2025` while `config.SEASON` said
+# 2026 and nothing would have raised in 2027 either. `config.py` is the
+# source of truth for a season; a module-level literal is how that stops
+# being true one August at a time.
+LAST_PLAYED = SEASON - 1
 
 
-def regression_candidates(season: int = 2025, min_games: int = 10) -> pl.DataFrame:
+def regression_candidates(season: int = LAST_PLAYED, min_games: int = 10) -> pl.DataFrame:
     """Players whose actual production diverged most from their opportunity.
 
     Large *negative* pts_over_exp: the volume was there and the points weren't.
@@ -59,7 +67,7 @@ def regression_candidates(season: int = 2025, min_games: int = 10) -> pl.DataFra
 
 
 def usage_leaders(
-    season: int = 2025, position: str = "WR", min_games: int = 8
+    season: int = LAST_PLAYED, position: str = "WR", min_games: int = 8
 ) -> pl.DataFrame:
     """Who commands their offense — target share and air yards share.
 
@@ -88,7 +96,7 @@ def usage_leaders(
     )
 
 
-def snap_trend(season: int = 2025, position: str = "RB", last_n: int = 4) -> pl.DataFrame:
+def snap_trend(season: int = LAST_PLAYED, position: str = "RB", last_n: int = 4) -> pl.DataFrame:
     """Late-season snap share minus full-season baseline.
 
     This is the shape of the in-season signal worth tracking weekly: a role
@@ -172,17 +180,17 @@ def market_disagreement(top_n: int = 250) -> pl.DataFrame:
 if __name__ == "__main__":
     pl.Config.set_tbl_rows(15)
 
-    print("\n=== Negative regression candidates (2025, volume > points) ===")
+    print(f"\n=== Negative regression candidates ({LAST_PLAYED}, volume > points) ===")
     reg = regression_candidates()
     print(reg.head(15))
     print("\n--- other direction (outran their opportunity) ---")
     print(reg.tail(10))
 
-    print("\n=== WR usage leaders (2025) ===")
+    print(f"\n=== WR usage leaders ({LAST_PLAYED}) ===")
     usage = usage_leaders()
     print(usage.head(15))
 
-    print("\n=== RB snap trend (last 4 weeks vs season, 2025) ===")
+    print(f"\n=== RB snap trend (last 4 weeks vs season, {LAST_PLAYED}) ===")
     print(snap_trend().head(15))
 
     print("\n=== Market disagreement (2026 redraft ECR) ===")

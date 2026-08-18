@@ -627,6 +627,52 @@ TERMS: dict[str, Term] = {
         players at the same ADP with spreads of 12 and 68 points are completely
         different bets, and nothing else on this board can tell you which is
         which.""", "Board"),
+    "stalest_days": _t(
+        "Panel staleness", "Age in days of the OLDEST of the three analysts' projections.",
+        """**Read this next to any Footballers number, not instead of it.** The
+        panel is not evenly fresh — on 2026-08-10 the median projection was 7
+        days old for Jason, 64 for Andy and 90 for Mike — and a consensus hides
+        that completely. With `ffb_par` carrying half the board's say, a high
+        value here means a May opinion is being presented as a current one.
+        `FOOTBALLERS_SPEC.md` calls showing this required rather than
+        cosmetic.""", "Board"),
+    "pts_over_exp": _t(
+        "Points over expected", "Actual production minus what his opportunity was worth.",
+        """A screen, never a ranking input. A large **negative** is usually the
+        better buy: the volume was there and the points were not, and this
+        project measured that opportunity persists better than quality at every
+        position. A large positive is efficiency that has to be handed back — at
+        RB `pts_over_exp_per_game` repeats at only r=0.28, against 0.65 for
+        target share. Promoting it past a screen needs measurement M3, which has
+        not been made.""", "Screens"),
+    "exp_pts": _t(
+        "Expected points", "What his volume and situation were worth, before he touched it.",
+        """Modeled from where the ball was snapped and how far it travelled, so
+        it prices the chance rather than the catch.""", "Screens"),
+    "act_pts": _t("Actual points", "What he actually scored over the same weeks.", "", "Screens"),
+    "adp_change": _t(
+        "ADP change", "Movement in draft position across the window, in picks.",
+        """**Negative means he is going earlier** — the ADP number fell, so the
+        market is buying. August drift is camp news made numeric, and it cannot
+        be backfilled: this only exists for days the bootstrap actually ran.""",
+        "Screens"),
+    "adp_prior": _t("ADP then", "His ADP at the start of the window.", "", "Screens"),
+    "direction": _t("Direction", "Rising or falling across the window.", "", "Screens"),
+    "season_snap_pct": _t(
+        "Snap share", "Share of his team's offensive snaps across the full season.", "", "Screens"),
+    "last4_snap_pct": _t(
+        "Snap share, last 4", "Share of snaps over the final four weeks.",
+        """Against the season baseline this is role change before the box score
+        catches up. A back whose last four ran well above his season number is
+        being handed a job, and usage sees that before the market does.""",
+        "Screens"),
+    "sd": _t(
+        "Expert dispersion", "Standard deviation of the expert ranks behind the consensus.",
+        """Wide dispersion is an argument still in progress, and that is where a
+        private read is worth having — a tight consensus is already in the
+        price.""", "Screens"),
+    "best": _t("Best rank", "The most optimistic expert rank on him.", "", "Screens"),
+    "worst": _t("Worst rank", "The most pessimistic expert rank on him.", "", "Screens"),
     "blend_par": _t(
         "Blended PAR", "PAR and Footballers PAR combined on a common scale.",
         """**Standardized before blending, and skipping that is a silent bug.**

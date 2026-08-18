@@ -21,6 +21,7 @@ import altair as alt
 import polars as pl
 import streamlit as st
 
+from src import adp as adp_mod
 from src import archetypes as ar
 from src import board as bd
 from src import breakout as bo
@@ -29,6 +30,7 @@ from src import glossary
 from src import claims as cm
 from src import ids
 from src import landscape as ls
+from src import peek
 from src import projection as pj
 from src import promotion as pm
 from src import props as pp
@@ -3283,6 +3285,15 @@ def _tab_big_board(p: dict[str, Any]) -> None:
     # applied: `par` is the ADP curve's slot value (blind to player and team),
     # `ffb_par` adds the player, `env_swing` adds the team. Anyone asking "why is
     # he here" should be able to read the answer across one row.
+    # `ffb_spread` and `stalest_days` ride immediately right of `ffb_par` because
+    # they are the two things that qualify it, and `FOOTBALLERS_SPEC.md` §4 calls
+    # the staleness read **required rather than cosmetic**. The panel is not
+    # evenly fresh — median projection age ran 7 days for Jason against 90 for
+    # Mike — and `ffb_par` carries half the board's say, so an unqualified column
+    # presents a May opinion as a current one. `ffb_spread` is the half most
+    # consensus products discard: two players at the same price with panel
+    # spreads of 12 and 68 points are different bets, and no other source in this
+    # project can say so.
     # `pos_rank` sits next to `position` because the two are read together on the
     # clock — "the 6th of 8 tight ends this draft still needs" is the sentence
     # that decides whether you take him now, and it is the number the
@@ -3290,7 +3301,8 @@ def _tab_big_board(p: dict[str, Any]) -> None:
     columns = [
         c for c in (
             "block", "name", "position", "need", "pos_rank", "demand", "team",
-            "bye", "tier", "same", "adp", "adj_adp", "par", "ffb_par", "ecr", "ecr_sd",
+            "bye", "tier", "same", "adp", "adj_adp", "par", "ffb_par", "ffb_spread",
+            "stalest_days", "ecr", "ecr_sd",
             "blend_par", "env_swing", "par_env", "drop", "quality_pct",
             "value_gap", "vegas_gap", "signal", "board_rank",
         ) if c in view.columns
@@ -3379,6 +3391,136 @@ def _tab_big_board(p: dict[str, Any]) -> None:
         _dropoff_section(p)
 
 
+# --- the screens ------------------------------------------------------------
+#
+# `peek` and `adp` were both finished, tested against real data, and **imported
+# by nothing**. `app.py` pulled in sixteen modules and neither was among them,
+# so four working tools sat unreachable — the same failure as `board.py` being
+# unreachable two weeks before a draft.
+#
+# Everything below is display over functions that already existed. No new
+# analysis, and nothing here feeds the ranking.
+
+
+@st.cache_data(show_spinner="Screening…")
+def _regression_candidates() -> pl.DataFrame:
+    return peek.regression_candidates()
+
+
+@st.cache_data(show_spinner="Reading expert dispersion…")
+def _market_disagreement() -> pl.DataFrame:
+    return peek.market_disagreement()
+
+
+@st.cache_data(show_spinner="Reading snaps…")
+def _snap_trend(position: str) -> pl.DataFrame:
+    return peek.snap_trend(position=position)
+
+
+@st.cache_data(show_spinner="Reading ADP history…")
+def _adp_movement(scoring: str, teams: int, days: int) -> pl.DataFrame:
+    # **The market is passed in, never defaulted.** `adp.movement`'s defaults are
+    # `config.ADP_SCORING`/`ADP_TEAMS` — ppr/12 — which is the 828 league, not
+    # this one. Calling it bare would render a well-formed table of the wrong
+    # league's drift, which is the `profiles.py` lesson exactly: a roster format
+    # and the market that prices it travel together or they silently disagree.
+    return adp_mod.movement(days=days, scoring=scoring, teams=teams)
+
+
+def _screens_section(p: dict[str, Any]) -> None:
+    """Four question generators. **None of them is a ranking.**"""
+    st.caption(
+        "Screens, not rankings — each one is a question generator. Promoting any "
+        "of these to a ranking input needs a measurement this repo has not made, "
+        "and the last two fitted models here both came back null."
+    )
+
+    # The profile comes from the board rather than being resolved again, so the
+    # movement screen is guaranteed to read the same market the board is priced
+    # against instead of drifting from it.
+    profile = _draft_board().get("profile")
+    scoring = getattr(profile, "adp_scoring", None)
+    teams = getattr(profile, "adp_teams", None)
+
+    st.markdown("**Points over expected — the buy-low screen**")
+    st.caption(
+        "Actual production minus what his opportunity was worth. A large "
+        "*negative* is usually the better buy: the volume was there and the "
+        "points were not, and this project measured that volume persists better "
+        "than efficiency at every position (`stability.year_over_year`). A large "
+        "positive is efficiency that has to be given back — at RB "
+        "`pts_over_exp_per_game` repeats at only r=0.28."
+    )
+    reg = _regression_candidates()
+    if reg.height:
+        pos = st.multiselect(
+            "Position", sorted(reg.get_column("position").unique().to_list()),
+            default=[], key="screen_reg_pos",
+        )
+        view = reg.filter(pl.col("position").is_in(pos)) if pos else reg
+        table(view.sort("pts_over_exp", nulls_last=True).head(20))
+        st.caption("Most negative first — the buy-low end.")
+    else:
+        st.info("No completed season cached to screen against.")
+
+    st.divider()
+    st.markdown("**ADP movement — camp news made numeric**")
+    if scoring and teams:
+        st.caption(
+            f"Risers and fallers in the **{scoring}/{teams}** market — the one "
+            "this profile is priced against. Negative change means the ADP "
+            "number fell, i.e. he is going *earlier*. This cannot be "
+            "backfilled: it only exists for days the bootstrap actually ran."
+        )
+        days = st.slider("Window (days)", 3, 21, 7, key="screen_move_days")
+        mv = _adp_movement(scoring, teams, days)
+        if mv.height:
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("*Rising*")
+                table(mv.sort("adp_change").head(12))
+            with c2:
+                st.markdown("*Falling*")
+                table(mv.sort("adp_change", descending=True, nulls_last=True).head(12))
+        else:
+            st.info(
+                "Fewer than two snapshots in this window. The daily bootstrap is "
+                "what accumulates them and a missed day is gone permanently."
+            )
+    else:
+        st.info("No profile resolved, so no market to read movement in.")
+
+    st.divider()
+    st.markdown("**Where the experts disagree**")
+    st.caption(
+        "FantasyPros consensus with its dispersion. Wide `sd` is an argument "
+        "still in progress, and that is where a private read is worth having — "
+        "a tight consensus is already in the price. Read it knowing the two "
+        "biases in `peek.market_disagreement`'s own docstring."
+    )
+    dis = _market_disagreement()
+    if dis.height:
+        table(dis.head(20))
+    else:
+        st.info("No rankings cached.")
+
+    st.divider()
+    st.markdown("**Snap trend — role change before the box score**")
+    st.caption(
+        "Late-season snap share against the full-season baseline. A back whose "
+        "last four weeks ran well above his season is being handed a job, and "
+        "usage sees that before the market does."
+    )
+    trend_pos = st.selectbox(
+        "Position", ["RB", "WR", "TE", "QB"], key="screen_snap_pos"
+    )
+    snaps = _snap_trend(trend_pos)
+    if snaps.height:
+        table(snaps.head(20))
+    else:
+        st.info(f"No snap data cached for {trend_pos}.")
+
+
 def _tab_research(p: dict[str, Any]) -> None:
     """The measured nulls and the supporting work, collapsed.
 
@@ -3402,7 +3544,9 @@ def _tab_research(p: dict[str, Any]) -> None:
         "the interval, not another re-run until it flips."
     )
 
-    with st.expander("Do these metrics repeat? — stability", expanded=True):
+    with st.expander("Screens — buy-low, ADP movement, dispersion, snaps", expanded=True):
+        _screens_section(p)
+    with st.expander("Do these metrics repeat? — stability"):
         _stability_section(p["dark"])
     with st.expander("Where replacement level sits, and how it has moved"):
         _positional_value_section(p)
