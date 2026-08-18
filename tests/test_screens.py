@@ -142,3 +142,72 @@ def test_movement_direction_matches_its_sign() -> None:
             "a 'rising' player whose ADP number went up means the label and the "
             "sign disagree"
         )
+
+
+# --- driving the tab --------------------------------------------------------
+#
+# Ported from `test_draft_day.py` rather than re-derived, for the reason that
+# file documents: rendering once passed and rendering nine times segfaulted, and
+# the same fifteen steps in reverse never failed. So these walk forward, the
+# whole range. **A failure here may not look like one** — pytest exits 139 with
+# no summary, and a vanished run is a red result.
+
+
+def _app():
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_file("app.py", default_timeout=600).run()
+    if at.exception:
+        pytest.fail(f"app raised on first render: {at.exception[0].value}")
+    return at
+
+
+@pytest.fixture(scope="module")
+def screens():
+    """The screens expander, or a skip when there is nothing cached to screen."""
+    at = _app()
+    if not [s for s in at.selectbox if s.key == "screen_snap_pos"]:
+        pytest.skip("screens did not render — cold cache")
+    return at
+
+
+def test_every_screen_heading_rendered(screens) -> None:
+    """All four are present, so a silently-empty section cannot pass as working."""
+    headings = {m.value for m in screens.markdown}
+    for expected in (
+        "**Points over expected — the buy-low screen**",
+        "**ADP movement — camp news made numeric**",
+        "**Where the experts disagree**",
+        "**Snap trend — role change before the box score**",
+    ):
+        assert expected in headings, f"missing screen: {expected}"
+
+
+def test_the_movement_window_can_be_driven_the_whole_way_up(screens) -> None:
+    """Repetition, forward, on the control that re-reads a parquet each step."""
+    at = screens
+    slider = at.slider(key="screen_move_days")
+    values = list(range(int(slider.min), int(slider.max) + 1, int(slider.step)))
+    assert len(values) > 1, "a single-step slider cannot exercise repetition"
+
+    for value in values:
+        at = at.slider(key="screen_move_days").set_value(value).run()
+        assert not at.exception, f"window {value} raised: {at.exception[0].value}"
+
+
+def test_every_snap_position_renders(screens) -> None:
+    """Each option re-runs a different nflverse slice; one empty must not raise."""
+    at = screens
+    for position in ("RB", "WR", "TE", "QB"):
+        at = at.selectbox(key="screen_snap_pos").set_value(position).run()
+        assert not at.exception, f"{position} raised: {at.exception[0].value}"
+
+
+def test_filtering_the_buy_low_screen_to_each_position_renders(screens) -> None:
+    at = screens
+    options = at.multiselect(key="screen_reg_pos").options
+    if not options:
+        pytest.skip("no positions to filter")
+    for position in options:
+        at = at.multiselect(key="screen_reg_pos").set_value([position]).run()
+        assert not at.exception, f"{position} raised: {at.exception[0].value}"

@@ -659,7 +659,10 @@ TERMS: dict[str, Term] = {
     "adp_prior": _t("ADP then", "His ADP at the start of the window.", "", "Screens"),
     "direction": _t("Direction", "Rising or falling across the window.", "", "Screens"),
     "season_snap_pct": _t(
-        "Snap share", "Share of his team's offensive snaps across the full season.", "", "Screens"),
+        "Snap share, season", "Share of his team's offensive snaps across the full season.",
+        """Labelled distinctly from `snap_pct` on purpose: the snap-trend screen
+        puts both halves of the comparison in one row, and two columns both
+        reading "Snap share" is how you misread which one moved.""", "Screens"),
     "last4_snap_pct": _t(
         "Snap share, last 4", "Share of snaps over the final four weeks.",
         """Against the season baseline this is role change before the box score
