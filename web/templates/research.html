@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+{% block title %}Research · ff-edge{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Research</h1>
+  <p class="lede">The work behind the boards, including the parts that did not pan
+  out. Fitted models have repeatedly failed to beat ADP here, and the useful thing to
+  publish is the interval — not another re-run until it flips.</p>
+</div>
+
+<nav class="subnav" aria-label="Sections">
+  <a href="#screens">Screens</a>
+  <a href="#movement">ADP movement</a>
+  <a href="#snaps">Snaps</a>
+  {% if footballers %}<a href="#footballers">Footballers</a>{% endif %}
+  {% if stability %}<a href="#stability">Stability</a>{% endif %}
+</nav>
+
+<section class="card" id="screens">
+  <h2>Screens — buy low, and where the experts disagree</h2>
+  <p class="note"><strong>Screens, not rankings — each one is a question
+  generator.</strong> Promoting any of these to a ranking input needs a measurement
+  this repo has not made, and the last two fitted models here both came back null.
+  Read against the {{ season }} season, taken from <code>config.SEASON</code> rather
+  than a literal.</p>
+
+  <h3>Points over expected — the buy-low screen</h3>
+  <p class="note">Actual production minus what his opportunity was worth. A large
+  <em>negative</em> is usually the better buy: the volume was there and the points were
+  not, and volume persists better than efficiency at every position. A large positive
+  is efficiency that has to be given back — at RB it repeats at only r=0.28.</p>
+  {% if regression %}
+  <form class="controls" method="get" action="/research">
+    {% if profile %}<input type="hidden" name="profile" value="{{ profile }}">{% endif %}
+    <fieldset class="chips">
+      <legend>Position</legend>
+      {% for p in regression.options %}
+      <label class="chip pos-{{ p }}">
+        <input type="checkbox" name="regpos" value="{{ p }}"
+               {% if p in regression.selected %}checked{% endif %} onchange="this.form.submit()">
+        <span>{{ p }}</span>
+      </label>
+      {% endfor %}
+    </fieldset>
+  </form>
+  {% with t = regression.table %}{% include "partials/_table.html" %}{% endwith %}
+  <p class="note">Most negative first — the buy-low end.</p>
+  {% else %}
+  <div class="banner info">No completed season cached to screen against.</div>
+  {% endif %}
+
+  {% if disagreement %}
+  <h3>Where the experts disagree with each other</h3>
+  <p class="note">Dispersion across expert rankings, widest first. A wide spread is
+  not an edge on its own — it is a flag that the crowd has not settled, which is where
+  a strong opinion is worth the most and where a consensus number is worth the least.</p>
+  {% with t = disagreement %}{% include "partials/_table.html" %}{% endwith %}
+  {% endif %}
+</section>
+
+{% if movement %}
+<section class="card" id="movement">
+  <h2>ADP movement — camp news made numeric</h2>
+  <p class="note">Risers and fallers in the <strong>{{ movement.market }}</strong>
+  market — the one this profile is priced against, taken from the board rather than
+  resolved again, so this screen cannot disagree with the board about which market it
+  is in. Negative change means the ADP number fell, i.e. he is going <em>earlier</em>.
+  <strong>This cannot be backfilled</strong>: it only exists for days the bootstrap
+  actually ran.</p>
+  <form class="controls" method="get" action="/research">
+    {% if profile %}<input type="hidden" name="profile" value="{{ profile }}">{% endif %}
+    <label class="control">Window (days)
+      <select name="days" onchange="this.form.submit()">
+        {% for d in [3, 5, 7, 10, 14, 21] %}
+        <option value="{{ d }}" {% if movement.days == d %}selected{% endif %}>{{ d }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </form>
+  {% if movement.rising %}
+  <div class="two-up">
+    <div><h3>Rising</h3>{% with t = movement.rising %}{% include "partials/_table.html" %}{% endwith %}</div>
+    <div><h3>Falling</h3>{% with t = movement.falling %}{% include "partials/_table.html" %}{% endwith %}</div>
+  </div>
+  {% else %}
+  <div class="banner info">Fewer than two snapshots in this window. The daily bootstrap
+  is what accumulates them, and a missed day is gone permanently.</div>
+  {% endif %}
+</section>
+{% endif %}
+
+<section class="card" id="snaps">
+  <h2>Snap trend — is the role growing?</h2>
+  <p class="note">Season share against the last four games. The two columns are the
+  whole point of the screen: a player whose recent share is well above his season share
+  is being used more than his price reflects, and the market prices the season.</p>
+  <form class="controls" method="get" action="/research">
+    {% if profile %}<input type="hidden" name="profile" value="{{ profile }}">{% endif %}
+    <fieldset class="chips">
+      <legend>Position</legend>
+      {% for p in snaps.options %}
+      <label class="chip pos-{{ p }}">
+        <input type="radio" name="snappos" value="{{ p }}"
+               {% if snaps.position == p %}checked{% endif %} onchange="this.form.submit()">
+        <span>{{ p }}</span>
+      </label>
+      {% endfor %}
+    </fieldset>
+  </form>
+  {% if snaps.table %}
+  {% with t = snaps.table %}{% include "partials/_table.html" %}{% endwith %}
+  {% else %}
+  <div class="banner info">No snap data cached for {{ snaps.position }} in {{ season }}.</div>
+  {% endif %}
+</section>
+
+{% if footballers_error %}
+<section class="card" id="footballers">
+  <h2>Where the Footballers disagree with the curve</h2>
+  <div class="banner warn">This section failed to build — <code>{{ footballers_error }}</code>.</div>
+</section>
+{% elif footballers %}
+<section class="card" id="footballers">
+  <h2>Where the Footballers disagree with the curve</h2>
+  <p class="note">Board rank against what ADP alone would say, largest shift first.
+  <strong>The rank cut is load-bearing rather than cosmetic</strong>: unfiltered, every
+  largest disagreement is a backup quarterback or a receiver priced past ADP 110 —
+  a real disagreement about players nobody in this league drafts.</p>
+  <form class="controls" method="get" action="/research">
+    {% if profile %}<input type="hidden" name="profile" value="{{ profile }}">{% endif %}
+    <label class="control">Board rank within
+      <select name="shift_cut" onchange="this.form.submit()">
+        {% for c in [30, 60, 100, 150, 200] %}
+        <option value="{{ c }}" {% if footballers.cut == c %}selected{% endif %}>{{ c }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </form>
+  {% with t = footballers.table %}{% include "partials/_table.html" %}{% endwith %}
+  <p class="note"><strong>Held to <code>compare_baselines</code>' standard:</strong> if
+  these shifts ever read near zero, <code>FOOTBALLERS_WEIGHT</code> goes to 0.0 and the
+  blend comes out. A correction that cannot be measured is complexity that is not
+  earning its keep.</p>
+  {% if footballers.panel %}
+  <details><summary>How fresh is the panel?</summary>
+    <p class="note"><strong>The panel is not evenly fresh, and a plain mean hides
+    it.</strong> <code>updated_at</code> is per analyst per player — on 2026-08-10 the
+    median projection was 7 days old for Jason, 64 for Andy and 90 for Mike. Coverage
+    is uneven too, which is why <code>n_analysts</code> rides on every consensus row
+    rather than averaging over a different set of people for every player.</p>
+    <pre class="command"><code>{{ footballers.panel }}</code></pre>
+  </details>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if stability or stability_error %}
+<section class="card" id="stability">
+  <h2>Does a metric mean the same thing next year?</h2>
+  <p class="note"><strong>The gate every feature has to clear.</strong> Year-over-year
+  correlation, season-forward, highest first. Opportunity runs 0.52–0.65 at RB; the
+  best quality metric tops out at 0.402. This is the measurement behind the Big Board's
+  choice to display opportunity and to treat the order <em>inside</em> a block as a
+  tiebreak rather than a result.</p>
+  {% if stability_error %}
+  <div class="banner warn">This section failed to build — <code>{{ stability_error }}</code>.
+  It is saying so rather than rendering nothing, because a section that quietly
+  disappears looks exactly like one that was never written.</div>
+  {% else %}
+  {% if stability.top %}
+  <p class="note">Most repeatable measured: <strong>{{ stability.top.metric }}</strong>
+  at {{ stability.top.position }} ({{ '%.3f' % stability.top.r_yoy }} over
+  {{ stability.top.n_pairs }} pairs).</p>
+  {% endif %}
+  {% with t = stability.table %}{% include "partials/_table.html" %}{% endwith %}
+  {% endif %}
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Still on the Streamlit prototype</h2>
+  <p class="note">Four sections have not moved yet — the two <strong>measured
+  nulls</strong> (<code>breakout</code> and <code>projection</code>, both kept
+  deliberately: a negative result is a result), the rookie model, the strategy
+  simulator, and the claims ledger. They are read once rather than on a clock, which is
+  why they are last in the port order. Until they land:</p>
+  <pre class="command"><code>uv run streamlit run app.py</code></pre>
+</section>
+
+{% endblock %}

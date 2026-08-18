@@ -60,7 +60,7 @@ after time away.
 uv sync
 uv run python -m src.bootstrap --light   # ~2 min cold, hydrates everything but pbp
 uv run python -m src.simulate --sims 4000  # ~3s, writes the strategy artifact
-uv run uvicorn web.server:app --reload   # the website (Big Board built; the rest lands per WEB_SPEC.md)
+uv run uvicorn web.server:app --reload   # the website: Big Board / Draft Day / Player / Research / Reference
 uv run streamlit run app.py              # the prototype: Big Board / Draft Day / Board / Research / Glossary
 ```
 

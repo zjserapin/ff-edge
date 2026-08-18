@@ -1,0 +1,7 @@
+{# One Vega-Lite spec. Expects `spec` (a dict) and `cid` (a DOM id).
+   "</" is escaped inside the JSON so a player name can never close the
+   script element early. #}
+{% if spec %}
+<div id="{{ cid }}" class="chart"></div>
+<script type="application/json" class="vega-spec" data-target="{{ cid }}">{{ spec | tojson | replace("</", "<\\/") | safe }}</script>
+{% endif %}

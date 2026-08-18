@@ -1,0 +1,232 @@
+{% extends "base.html" %}
+{% block title %}Draft Day · ff-edge{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Draft day</h1>
+  {% if header %}
+  <p class="lede">{{ header.label }} · priced off the {{ header.market }} board ·
+  <strong>{{ header.available }} still available</strong>{% if header.drafted %} ·
+  {{ header.drafted }} drafted so far{% endif %}</p>
+  {% endif %}
+</div>
+
+{% for w in warnings %}<div class="banner warn" role="alert">{{ w }}</div>{% endfor %}
+
+{% if empty %}
+<div class="banner info">No board yet. This page needs an ADP board for the season
+and a league to price it against — run with <code>FF_EDGE_LEAGUE_ID</code> set.</div>
+{% else %}
+
+{% if last_pick %}
+<div class="banner live">🟢 Live — {{ header.drafted }} picks are off the board,
+most recently <strong>{{ last_pick.name }}</strong> at pick {{ last_pick.no }}.</div>
+{% endif %}
+
+{# --- your picks --- #}
+<section class="card">
+  <h2>Your picks</h2>
+  {% if picks %}
+  <div class="metrics">
+    <div class="tile"><span class="tile-value">{{ picks.owned }}</span><span class="tile-label">Picks owned</span></div>
+    <div class="tile"><span class="tile-value">{{ picks.usable }}</span><span class="tile-label">Usable</span></div>
+    <div class="tile"><span class="tile-value">{{ picks.first or "—" }}</span><span class="tile-label">First pick</span></div>
+  </div>
+  <p class="note">A keeper is slotted onto a specific pick and spends it, so owned
+  and usable are different numbers. Picks acquired in a trade sit at the
+  <em>original</em> owner's draft slot, not yours.</p>
+  <details><summary>Every pick you hold</summary>
+    {% with t = picks.table %}{% include "partials/_table.html" %}{% endwith %}
+  </details>
+  {% else %}
+  <p class="note">No pick list — needs a league with a draft order set, and
+  <code>FF_EDGE_SLEEPER_USER</code> alongside the league id.</p>
+  {% endif %}
+
+  {% if kept %}
+  <p class="note"><strong>{{ kept.n }} kept players are off the board below.</strong>
+  They are removed from the pool, not hidden from it — every PAR and replacement
+  level here is already computed without them.</p>
+  <details><summary>Who is kept ({{ kept.n }})</summary>
+    {% with t = kept.table %}{% include "partials/_table.html" %}{% endwith %}
+  </details>
+  {% endif %}
+
+  {% if unmatched %}
+  <div class="banner warn"><strong>{{ unmatched.n }} keepers did not match a row on
+  the ADP board.</strong> Most are benign — a keeper too deep to appear in the top
+  200 never had a row to match — but a genuine match failure leaves a kept player
+  on your board as though he were available.</div>
+  {% with t = unmatched.table %}{% include "partials/_table.html" %}{% endwith %}
+  {% endif %}
+</section>
+
+{# --- tiers left --- #}
+{% if tiers %}
+<section class="card">
+  <h2>How many of each asset are left</h2>
+  <p class="note">A tier is a group the board cannot separate, so the useful
+  question is not <em>who is next</em> but <em>how many more of this are there</em>.
+  Reaching for the last player in a tier buys something; reaching for the fourth of
+  nine does not. <strong>The last band shown is a cap, not the bottom of the
+  position</strong> — only the top six tiers are drawn.</p>
+  {% with spec = tiers.spec, cid = "tiers-chart" %}{% include "partials/_chart.html" %}{% endwith %}
+  <details><summary>Show the tier table</summary>
+    {% with t = tiers.table %}{% include "partials/_table.html" %}{% endwith %}
+  </details>
+</section>
+{% endif %}
+
+{# --- the board --- #}
+<section class="card">
+  <h2>The board</h2>
+  <p class="note"><strong><code>par</code> rates the draft slot, not the player</strong>
+  — within a position it reproduces ADP's order exactly. Read <code>value_gap</code>
+  for the opinion that is not derived from price. Gaps smaller than <code>se</code>
+  are not real; the <code>same</code> column groups players the curve cannot tell
+  apart.</p>
+  <form class="controls" method="get" action="/draft">
+    {% if profile %}<input type="hidden" name="profile" value="{{ profile }}">{% endif %}
+    <fieldset class="chips">
+      <legend>Positions</legend>
+      {% for p in positions_all %}
+      <label class="chip pos-{{ p }}">
+        <input type="checkbox" name="positions" value="{{ p }}"
+               {% if not positions or p in positions %}checked{% endif %}
+               onchange="this.form.submit()">
+        <span>{{ p }}</span>
+      </label>
+      {% endfor %}
+    </fieldset>
+  </form>
+  {% with t = board %}{% include "partials/_table.html" %}{% endwith %}
+  <details><summary>How to read this board</summary>
+    <p class="note"><strong><code>par</code> is a function of price.</strong> Expected
+    points come from a curve mapping <em>positional ADP rank</em> to what players at
+    that rank have historically scored, so two receivers eleven picks apart have
+    different PAR for one reason: eleven picks. It answers <em>what is this draft
+    slot worth</em> and is silent on <em>how good is this player</em>.</p>
+    <p class="note"><strong><code>se</code> is that curve's standard error, and it is
+    large</strong> — six to thirteen points, against a board printed to a tenth.
+    <strong><code>same</code> is the honest reading</strong>: players sharing a group
+    are one asset, and the count tells you how many of that asset are left.</p>
+    <p class="note"><strong><code>value_gap</code> is the second opinion.</strong>
+    Quality percentile within position minus price percentile within position.
+    Positive means this project rates him above his cost. A blank still means
+    <em>not measured</em>, never <em>bad</em>.</p>
+    <p class="note"><strong><code>env_swing</code> is the offence he plays in, in
+    points per season</strong>, and it is <em>not</em> double counting ADP: the
+    expected-points curve is blind to team, assigning this year's TE1 whatever the
+    average TE1 scored whether he plays for the best offence in football or the
+    worst. <strong>It is an upper bound, not a correction to subtract</strong> — some
+    of the discount is already in the price and this does not know how much.</p>
+    <p class="note"><strong><code>adj_adp</code> is where he goes once the keepers are
+    off the board</strong>, roughly fifteen picks. <strong>Compare
+    <code>exp_pick</code> against your own picks, not <code>adj_adp</code></strong> —
+    a keeper leaves the pool <em>and</em> spends a pick, so using the first against a
+    pick number counts the keeper adjustment twice.</p>
+  </details>
+</section>
+
+{# --- targets at a pick --- #}
+<section class="card">
+  <h2>Who is likely to be there when you are on the clock</h2>
+  <p class="note">Best PAR among players who plausibly last, using the dispersion FFC
+  publishes alongside ADP. Two players at the same price with different dispersion are
+  completely different planning problems — the one with a tight distribution is the
+  one you cannot wait on.</p>
+  <form class="controls" method="get" action="/draft">
+    {% if profile %}<input type="hidden" name="profile" value="{{ profile }}">{% endif %}
+    {% for p in positions %}<input type="hidden" name="positions" value="{{ p }}">{% endfor %}
+    <label class="control">Your pick
+      {% if targets.options %}
+      <select name="pick" onchange="this.form.submit()">
+        {% for o in targets.options %}
+        <option value="{{ o }}" {% if targets.pick == o %}selected{% endif %}>{{ o }}</option>
+        {% endfor %}
+      </select>
+      {% else %}
+      <input type="number" name="pick" min="1" max="200" value="{{ targets.pick }}"
+             onchange="this.form.submit()">
+      {% endif %}
+    </label>
+    <label class="control">Minimum chance he lasts
+      <select name="floor" onchange="this.form.submit()">
+        {% for f in targets.floors %}
+        <option value="{{ f }}" {% if targets.floor == f %}selected{% endif %}>{{ (f * 100) | round | int }}%</option>
+        {% endfor %}
+      </select>
+    </label>
+  </form>
+  {% if targets.table %}
+  {% with t = targets.table %}{% include "partials/_table.html" %}{% endwith %}
+  {% else %}
+  <p class="note">Nobody clears that floor at this pick — either everyone worth taking
+  is gone by then, or the dispersion column did not survive the board build.</p>
+  {% endif %}
+</section>
+
+{# --- cost of waiting --- #}
+{% if waiting %}
+<section class="card">
+  <h2>What it costs to wait</h2>
+  <div class="banner info">⏳ <strong>The board says what a player is worth. This says
+  what waiting costs.</strong> For each pick you own, the expected PAR of the best
+  player of that position <em>still on the board</em> — so the difference between two
+  columns is what falls away if you spend this pick elsewhere and come back next
+  round. Read it beside PAR, not instead of it: a big number here is an opportunity
+  cost, not an instruction.</div>
+  <h3>Best available, by pick</h3>
+  {% with t = waiting.best %}{% include "partials/_table.html" %}{% endwith %}
+  <h3>Cost of waiting to your next pick</h3>
+  {% with t = waiting.cost %}{% include "partials/_table.html" %}{% endwith %}
+  <p class="note">Availability is measured on the keeper-adjusted pick number, not raw
+  ADP — in a keeper league players go earlier than public ADP says, and comparing the
+  two overstates who is left.</p>
+</section>
+{% endif %}
+
+{# --- quality against price --- #}
+{% if quality %}
+<section class="card">
+  <h2>Quality against price, one position at a time</h2>
+  <p class="note">The board above orders across positions, which is what PAR is for.
+  This asks the other question — inside one position, who is rated above what he
+  costs. Up is better per opportunity, right is more expensive, so the
+  <strong>top-left</strong> is where this project disagrees with the market in your
+  favour. The dashed line is agreement; only players more than 25 percentile points
+  from it are labelled.</p>
+  <form class="controls" method="get" action="/draft">
+    {% if profile %}<input type="hidden" name="profile" value="{{ profile }}">{% endif %}
+    {% for p in positions %}<input type="hidden" name="positions" value="{{ p }}">{% endfor %}
+    <fieldset class="chips">
+      <legend>Position</legend>
+      {% for p in quality.positions %}
+      <label class="chip pos-{{ p }}">
+        <input type="radio" name="qpos" value="{{ p }}"
+               {% if quality.position == p %}checked{% endif %} onchange="this.form.submit()">
+        <span>{{ p }}</span>
+      </label>
+      {% endfor %}
+    </fieldset>
+  </form>
+  {% if quality.thin_qb %}
+  <p class="note">Quarterback quality rides on three metrics rather than eight or ten,
+  and the stability weighting makes it largely a rushing read. Season-forward it
+  correlates +0.367 with next-season PPG (95% CI [+0.213, +0.493]) — about RB's level.
+  <strong>Thinner than the other positions, not absent.</strong></p>
+  {% endif %}
+  {% with spec = quality.spec, cid = "quality-chart" %}{% include "partials/_chart.html" %}{% endwith %}
+  <details><summary>Show the numbers</summary>
+    {% with t = quality.table %}{% include "partials/_table.html" %}{% endwith %}
+  </details>
+</section>
+{% endif %}
+
+<p class="note">Breaking a tie inside a tier — the promotion screen and the claims
+ledger — lives on <a href="/research{% if profile %}?profile={{ profile }}{% endif %}">Research</a>.
+They are read about a shortlist rather than at the pick, and keeping one copy means
+there is only one to keep in step.</p>
+
+{% endif %}
+{% endblock %}

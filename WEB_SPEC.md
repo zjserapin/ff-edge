@@ -1,18 +1,23 @@
 # WEB_SPEC.md — the ff-edge website
 
 **Drafted 2026-08-17. Agreed 2026-08-18 (FastAPI + htmx; parallel build).**
-**W0 and W1 shipped 2026-08-18. 451 tests pass, 2 skip.**
+**W0–W5 shipped 2026-08-18. 458 tests pass, 2 skip.**
 
 > ## State
 >
 > | block | status |
 > |---|---|
 > | **W0** skeleton, design system, header, memo layer | **done** |
-> | **W1** Big Board page | **done** — full parity incl. warnings, demand line, usage toggle, CSV, cost-of-waiting, block similarity, dropoff charts |
-> | W2 Draft Day | not started — placeholder page ships |
-> | W3 Player page (E1) | not started — placeholder page ships |
-> | W4 Research | not started — placeholder page ships |
-> | W5 Reference, polish | not started |
+> | **W1** Big Board page | **done** — warnings, demand line, usage toggle, CSV, cost-of-waiting, block similarity, dropoff charts |
+> | **W2** Draft Day | **done** — picks, keepers, unmatched, tiers-left chart, board, targets-at-pick, cost-of-waiting pivots, quality-against-price scatter |
+> | **W3** Player page (E1) | **done** — search, the four layers as an argument, usage against position, comparables, position context |
+> | **W4** Research | **done** — screens, ADP movement in the profile's own market, snaps, Footballers disagreement, stability |
+> | **W5** Reference | **done** — the full glossary, filterable |
+>
+> **Still on Streamlit, deliberately last:** the two measured nulls
+> (`breakout`, `projection`), the rookie model, the strategy simulator, and the
+> claims ledger. All five are read once rather than on a clock. The Research
+> page says so on screen rather than pretending they do not exist.
 >
 > ```bash
 > FF_EDGE_LEAGUE_ID=... FF_EDGE_SLEEPER_USER=... uv run uvicorn web.server:app --reload
@@ -23,12 +28,23 @@
 > **0.004s**. That is the answer to A3's "how many seconds to a decision" —
 > filtering the board no longer re-runs the pipeline.
 >
-> **What building it found:** an unset `FF_EDGE_LEAGUE_ID` silently boards a
-> *different league* — see `DRAFT_CHECKLIST.md` A0. The website names the
-> resolved league on every page and flags a guessed one; `app.py` cannot.
-> This is the second time surfacing something in a UI exposed a defect that a
-> green test suite could not see, after Block B's season literal and wrong
-> ADP market.
+> **What building it found**, and both are the same lesson as Block B's season
+> literal and wrong ADP market — *rendering a thing is a test no assert
+> replaces*:
+>
+> 1. **An unset `FF_EDGE_LEAGUE_ID` silently boards a different league** — see
+>    `DRAFT_CHECKLIST.md` A0. The site names the resolved league on every page
+>    and flags a guessed one; `app.py` cannot.
+> 2. **A broad `except` deleted a whole section and nothing noticed.**
+>    `stability.year_over_year` returns one frame; the port unpacked it as a
+>    pair, the unpack raised, and the Research page rendered without its
+>    stability panel — no error, no log, suite green. Sections now render a
+>    banner naming the failure instead of vanishing, and a test asserts no page
+>    contains one.
+>
+> A third, found by looking rather than by testing: **`width: "container"`
+> draws a blank chart rather than raising.** Two charts shipped as empty boxes.
+> Charts are sized in pixels now and a test forbids the string.
 
 Replace the Streamlit prototype with a modern, professional, responsive website.
 Backend stays Python — every number on every page keeps coming from `src/`.

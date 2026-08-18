@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}{% if name %}{{ name }}{% else %}Player{% endif %} · ff-edge{% endblock %}
+{% block content %}
+
+{% if empty %}
+<div class="page-head"><h1>Player</h1></div>
+<div class="banner info">No board yet. This page needs an ADP board for the season and
+a league to price it against — run with <code>FF_EDGE_LEAGUE_ID</code> set.</div>
+{% else %}
+
+<form class="player-search" method="get" action="/player">
+  {% if profile %}<input type="hidden" name="profile" value="{{ profile }}">{% endif %}
+  <label class="visually-hidden" for="player-name">Player</label>
+  <input id="player-name" name="name" list="player-names" placeholder="Search any player on the board…"
+         value="{{ name or '' }}" autocomplete="off">
+  <datalist id="player-names">
+    {% for n in all_names %}<option value="{{ n }}"></option>{% endfor %}
+  </datalist>
+  <button type="submit">Look him up</button>
+</form>
+
+{% if missing %}
+<div class="banner warn">Nobody named <strong>{{ missing }}</strong> is on this board.
+He may be kept, already drafted, or outside the ADP board's depth — all three are
+different things, and the board says which on the <a href="/draft">Draft Day</a> page.</div>
+{% endif %}
+
+{% if suggestions %}
+<div class="page-head">
+  <h1>Player</h1>
+  <p class="lede">One page, one player, everything this repo knows about him — the
+  board row, the four layers as an argument, last season's role against his position,
+  and who he most resembles. Search above, or start from the top of the board.</p>
+</div>
+<div class="table-wrap">
+  <table class="data">
+    <thead><tr><th>Player</th><th>Pos</th><th>Team</th><th class="num">Board rank</th></tr></thead>
+    <tbody>
+      {% for s in suggestions %}
+      <tr>
+        <td class="name"><a href="/player?name={{ s.name | urlencode }}{% if profile %}&profile={{ profile }}{% endif %}">{{ s.name }}</a></td>
+        <td><span class="pos-chip pos-{{ s.position }}">{{ s.position }}</span></td>
+        <td>{{ s.team or "—" }}</td>
+        <td class="num">{{ s.board_rank or "—" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if player %}
+<div class="page-head player-head">
+  <h1>{{ player.name }}
+    <span class="pos-chip pos-{{ player.position }}">{{ player.position }}</span>
+    <span class="team-tag">{{ player.team or "—" }}</span>
+  </h1>
+  <p class="lede">
+    {% if player.board_rank %}Board rank {{ player.board_rank }}{% endif %}
+    {% if player.block %} · block {{ player.block }}{% else %} · <em>below the roster-demand line — this board ranks him in ADP's order, not its own</em>{% endif %}
+    {% if player.adp %} · ADP {{ '%.1f' % player.adp }}{% endif %}
+    {% if player.bye %} · bye {{ player.bye }}{% endif %}
+  </p>
+</div>
+
+<section class="metrics">
+  {% for l in layers %}
+  {% set v = layer_values[l.key] %}
+  <div class="tile layer" {% if l.adds %}title="{{ l.adds }}"{% endif %}>
+    <span class="tile-value">{% if v is none %}—{% else %}{{ '%.1f' % v }}{% endif %}</span>
+    <span class="tile-label">{{ l.label }}</span>
+  </div>
+  {% endfor %}
+</section>
+<p class="note">The row reads left to right as an argument: the ADP curve prices the
+<em>slot</em>, the Footballers add the <em>player</em>, ECR adds the <em>crowd</em>, and
+environment adds the <em>team</em>. An em-dash is <strong>not measured</strong>, never
+zero — about two thirds of the board has no book line on a good day, and a player whose
+last season fell under the volume floor has no quality score.</p>
+
+{% if player.age %}
+<div class="banner warn"><strong>He is {{ '%.1f' % player.age }}, and nothing on this
+board discounts that.</strong> <code>age</code> is computed, carried and displayed, and
+it is an input to no ranking — a redraft age coefficient is measurement M4 and is
+unbuilt. Apply the discount yourself.</div>
+{% endif %}
+
+{% if usage_spec %}
+<section class="card">
+  <h2>Last season's role, against his position</h2>
+  <p class="note">Opportunity, not efficiency — the half that repeats. Opportunity
+  metrics repeat at r=0.52–0.65 at RB against 0.40 for the best quality metric. The
+  tick on each bar is the position's median, because a share means nothing without the
+  field it came out of. <strong>A missing bar means not measured, never zero</strong> —
+  a receiver correctly has no red-zone carry share.</p>
+  {% with spec = usage_spec, cid = "usage-chart" %}{% include "partials/_chart.html" %}{% endwith %}
+</section>
+{% endif %}
+
+{% if neighbors %}
+<section class="card">
+  <h2>Who he most resembles</h2>
+  <p class="note">Nearest neighbours in standardized quality space, weighted by how
+  much each metric actually repeats year over year — so a stat that is mostly noise
+  pulls two players together far less than one that carries. Standardized over the
+  whole position; the Big Board's block panel standardizes over the block, so the two
+  sets of distances are not comparable.</p>
+  {% with t = neighbors %}{% include "partials/_table.html" %}{% endwith %}
+</section>
+{% elif no_quality %}
+<section class="card">
+  <h2>Who he most resembles</h2>
+  <p class="note">No quality score for him — a season under the volume floor is not
+  measured, which is <strong>not</strong> the same as being unlike everyone. Rookies
+  land here too, and <a href="/research">Research</a> has the separate rookie model.</p>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Where he sits in his own position</h2>
+  <p class="note">The same board, filtered to {{ player.position }} and in board order.
+  <code>need</code> is <em>your</em> open starting slots at the position, not the
+  league's scarcity — the two diverge hardest for the manager whose own keepers caused
+  the scarcity.</p>
+  {% with t = position_context %}{% include "partials/_table.html" %}{% endwith %}
+</section>
+{% endif %}
+
+{% endif %}
+{% endblock %}

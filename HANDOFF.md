@@ -8,9 +8,18 @@
 ## New 08-18: there is a website, and Streamlit is untouched
 
 `web/` is a FastAPI + Jinja + htmx site over the same `src/` modules — see
-`WEB_SPEC.md`. **The Big Board page is at parity** with the Streamlit tab;
-Draft Day, Player, Research and Reference are placeholder pages naming the
-block they arrive in.
+`WEB_SPEC.md`. **All five pages are built**: Big Board, Draft Day, Player,
+Research and Reference.
+
+**The Player page is new and closes checklist E1** — the structural gap that
+cost more than anything else in the file. Researching a player meant five
+selectboxes across four tabs joined by eye; it is now one URL,
+`/player?name=...`, carrying the board row, the four layers as an argument,
+last season's role against his position's median, and his nearest comparables.
+
+Five sections stay on Streamlit deliberately, all read once rather than on a
+clock: the two measured nulls (`breakout`, `projection`), the rookie model, the
+strategy simulator, and the claims ledger. The Research page says so on screen.
 
 ```bash
 FF_EDGE_LEAGUE_ID=... FF_EDGE_SLEEPER_USER=... uv run uvicorn web.server:app --reload
@@ -33,6 +42,14 @@ Two things worth knowing about it:
 **Building it found a live defect: an unset `FF_EDGE_LEAGUE_ID` boards The
 Jungle, not the Shiva Bowl.** See `DRAFT_CHECKLIST.md` **A0** — it is the first
 thing to read before the 22nd, and `app.py` gives you no way to notice it.
+
+Two more found by rendering rather than by asserting, both recorded in
+`WEB_SPEC.md`: a broad `except` silently deleted the whole stability section
+(sections now name their failure instead of disappearing), and Vega's
+`width: "container"` draws a **blank chart rather than raising** (charts are
+sized in pixels, and a test forbids the string). The pattern is old news here —
+Block B's season literal and wrong ADP market were the same shape — and it is
+the argument for A3: **look at the thing.**
 
 **→ The action list is `DRAFT_CHECKLIST.md`.** This file is the state around it.
 Read `CLAUDE.md` before touching code; every silent-failure trap lives there.

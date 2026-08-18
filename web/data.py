@@ -20,16 +20,23 @@ from typing import Any
 
 import polars as pl
 
+from src import adp as adp_mod
 from src import archetypes as ar
 from src import board as bd
 from src import features as ft
+from src import footballers as fbl
+from src import peek
 from src import profiles as pf
 from src import props as pp
 from src import scoring as sc
 from src import sleeper
+from src import stability as stab
 from src import valuation as val
-from src.config import LEAGUE_ID
+from src.config import LEAGUE_ID, SEASON
 from web.memo import memo
+
+# The season the screens read. **Derived, never a literal** — see `screens`.
+LAST_PLAYED = SEASON - 1
 
 
 @memo(ttl_seconds=300)
@@ -162,6 +169,60 @@ def board(profile_name: str | None = None) -> dict[str, Any]:
     ranked = bd.rank_board(players, value_col="par_env")
     out["players"] = bd.attach_usage(ranked, features())
     return out
+
+
+@memo()
+def screens(season: int) -> dict[str, pl.DataFrame]:
+    """The four `peek` question generators. **None of them is a ranking.**
+
+    `season` is passed in rather than defaulted, because all four `peek` entry
+    points once defaulted to a 2025 literal while `config.SEASON` said 2026 —
+    right that August, wrong the next, and invisible either way because a
+    screen against the wrong year returns a full plausible table.
+    """
+    return {
+        "regression": peek.regression_candidates(season=season),
+        "disagreement": peek.market_disagreement(),
+    }
+
+
+@memo()
+def snap_trend(season: int, position: str) -> pl.DataFrame:
+    return peek.snap_trend(season=season, position=position)
+
+
+@memo(ttl_seconds=600)
+def adp_movement(scoring: str, teams: int, days: int) -> pl.DataFrame:
+    """Risers and fallers **in the profile's own market**.
+
+    The market is passed in from the board's profile rather than resolved a
+    second time. `adp.movement` defaults to `config.ADP_SCORING`/`ADP_TEAMS`
+    — ppr/12, which prices 828 rather than the Shiva Bowl's 2qb/10 — so a bare
+    call renders a well-formed table of a different league's drift.
+    """
+    return adp_mod.movement(days=days, scoring=scoring, teams=teams)
+
+
+@memo()
+def stability_table() -> pl.DataFrame:
+    """Year-over-year correlation per position, per metric.
+
+    Returns **one** frame — `position, axis, metric, n_pairs, r_yoy, verdict`.
+    Worth stating because unpacking it as a pair is silently plausible and was
+    a real bug here: the tuple unpack raised, a broad `except` swallowed it,
+    and the whole stability section vanished from the page with nothing
+    logged and every test still green.
+    """
+    return stab.year_over_year(df=features())
+
+
+@memo()
+def footballers_panel() -> dict[str, Any]:
+    """Per-analyst freshness. The panel is not evenly fresh and a mean hides it."""
+    try:
+        return fbl.panel_report()
+    except Exception:  # noqa: BLE001 — a dead feed costs a panel, not a page
+        return {}
 
 
 @memo(ttl_seconds=60)

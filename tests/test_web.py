@@ -118,11 +118,83 @@ def test_usage_columns_appear_only_when_toggled(players):
     assert probe in header_with
 
 
-def test_placeholder_pages_render():
-    for path in ("/draft", "/player", "/research", "/reference"):
+def test_every_page_renders():
+    for path in ("/", "/draft", "/player", "/research", "/reference"):
         r = client.get(path)
         assert r.status_code == 200, path
-        assert "arrives in" in r.text
+        assert "<h1" in r.text, path
+
+
+def test_no_page_silently_drops_a_section():
+    """A section that fails renders a banner naming the error; it never just
+    disappears. The stability panel vanished for an afternoon behind a broad
+    `except` — invisible on screen and green in the suite."""
+    for path in ("/draft", "/research", "/player"):
+        assert "failed to build" not in client.get(path).text, path
+
+
+def test_research_carries_its_sections(players):
+    r = client.get("/research")
+    for heading in ("Screens", "Snap trend", "Does a metric mean the same thing"):
+        assert heading in r.text, heading
+
+
+def test_draft_day_carries_its_sections(players):
+    r = client.get("/draft")
+    for heading in ("Your picks", "The board", "Who is likely to be there"):
+        assert heading in r.text, heading
+
+
+def test_charts_are_sized_in_pixels_not_container(players):
+    """`width: "container"` renders a blank box rather than raising — vega
+    resolves it against a parent that has not laid out yet. Two charts shipped
+    that way. Nothing on the site may reintroduce it."""
+    import json
+    import re
+
+    for path in ("/draft", "/player?name=" + players.get_column("name")[0]):
+        html = client.get(path).text
+        specs = re.findall(r'class="vega-spec"[^>]*>(.*?)</script>', html, re.S)
+        assert specs, f"no chart on {path}"
+        for raw in specs:
+            spec = json.loads(raw.replace("<\\/", "</"))
+            for key in ("width", "height"):
+                assert spec.get(key) != "container", f"{path} {key}"
+
+
+def test_player_page_finds_a_player_and_says_so_when_it_cannot(players):
+    name = players.get_column("name")[0]
+    hit = client.get(f"/player?name={name}")
+    assert hit.status_code == 200
+    assert name in hit.text
+    # Prove the assert can fail: a name that is not on the board must say so
+    # rather than rendering an empty player page.
+    miss = client.get("/player?name=Definitely+Not+A+Player")
+    assert "is on this board" in miss.text
+    assert "Definitely Not A Player" in miss.text
+
+
+def test_player_page_never_prints_a_zero_for_an_unmeasured_column(players):
+    """Blank means not measured. A zero would read as a real red-zone role."""
+    import polars as pl
+
+    if "rz_carry_share" not in players.columns:
+        pytest.skip("no usage columns on this board")
+    receivers = players.filter(
+        (pl.col("position") == "WR") & pl.col("rz_carry_share").is_null()
+    )
+    if not receivers.height:
+        pytest.skip("every receiver has a red-zone carry share")
+    r = client.get(f"/player?name={receivers.get_column('name')[0]}")
+    assert r.status_code == 200
+    assert "Red-zone carries" not in r.text
+
+
+def test_reference_filters(players):
+    everything = client.get("/reference")
+    filtered = client.get("/reference?q=replacement")
+    assert everything.status_code == filtered.status_code == 200
+    assert len(filtered.text) < len(everything.text)
 
 
 def test_vendored_assets_are_served():

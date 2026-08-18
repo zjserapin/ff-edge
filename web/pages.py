@@ -20,6 +20,7 @@ from fastapi.templating import Jinja2Templates
 
 from src import archetypes as ar
 from src import board as bd
+from src import glossary
 from src import ids
 from src import profiles as pf
 from src.config import ENV_WEIGHT, FANTASY_POSITIONS, SEASON, SLEEPER_USERNAME
@@ -540,69 +541,404 @@ def refresh(request: Request) -> RedirectResponse:
     return RedirectResponse(target, status_code=303)
 
 
-# --- pages that arrive in later blocks --------------------------------------
+# --- Draft Day --------------------------------------------------------------
 
-_PLACEHOLDERS = {
-    "draft": (
-        "Draft Day",
-        "W2",
-        "The pick-by-pick companion moves here after the Big Board. Until it "
-        "does — and until it has been trusted through a dry run — draft from "
-        "the Streamlit app:",
-        "FF_EDGE_LEAGUE_ID=... FF_EDGE_SLEEPER_USER=... uv run streamlit run app.py",
-    ),
-    "player": (
-        "Player",
-        "W3",
-        "One page, one player, everything the repo knows — board row, the four "
-        "layers as an argument, usage against position, comparables, screens, "
-        "claims. This page is the reason the site exists (checklist E1).",
-        "",
-    ),
-    "research": (
-        "Research",
-        "W4",
-        "Screens, the Footballers disagreement panel, quality against price, "
-        "stability, the honest nulls, rookies, the strategy simulator and the "
-        "claims ledger — ported section by section after Draft Day.",
-        "",
-    ),
-    "reference": (
-        "Reference",
-        "W5",
-        "The glossary, plus the pipeline's shape. Last, because every table "
-        "already carries its definitions on the headers.",
-        "",
-    ),
-}
-
-
-def _placeholder(request: Request, key: str, profile: str | None) -> HTMLResponse:
-    title, phase, text, command = _PLACEHOLDERS[key]
-    return _page(
-        request, "placeholder.html",
-        {
-            "active": key, "profile": profile, "title": title,
-            "phase": phase, "text": text, "command": command,
-        },
-    )
+_DRAFT_COLS = (
+    "board_rank", "name", "position", "team", "adp", "adj_adp", "exp_pick",
+    "par", "se", "same", "tier", "quality_pct", "value_gap", "env_swing",
+)
 
 
 @router.get("/draft", response_class=HTMLResponse)
-def draft_day(request: Request, profile: str | None = None) -> HTMLResponse:
-    return _placeholder(request, "draft", profile)
+def draft_day(
+    request: Request,
+    profile: str | None = None,
+    positions: list[str] = Query(default=[]),
+    pick: int | None = None,
+    floor: float = 0.35,
+    qpos: str | None = None,
+    dark: int = 1,
+) -> HTMLResponse:
+    """The tab with a deadline on it. Everything here is read on a clock.
+
+    Ported from `app.py:_tab_draft_day`. The one deliberate omission is the
+    tie-break screens, which live on Research: they are read *about* a
+    shortlist rather than at the pick, and duplicating them here would mean
+    two places to keep in step.
+    """
+    positions = _clean(positions)
+    try:
+        data = wd.board(profile)
+    except KeyError as err:
+        return _profile_error(request, err)
+
+    players = data["players"]
+    ctx: dict[str, Any] = {
+        "active": "draft",
+        "profile": profile,
+        "warnings": data.get("warnings", []),
+        "empty": not players.height,
+        "positions": positions,
+    }
+    if not players.height:
+        return _page(request, "draft.html", ctx)
+
+    if "indist_n" in players.columns:
+        players = players.with_columns(
+            pl.when(pl.col("indist_n") > 1).then(pl.col("indist_n")).otherwise(None).alias("same")
+        )
+
+    prof = data.get("profile")
+    gone = data.get("drafted", pl.DataFrame())
+    ctx["header"] = {
+        "label": getattr(prof, "label", ""),
+        "market": getattr(prof, "adp_scoring", ""),
+        "available": players.height,
+        "drafted": gone.height,
+    }
+    if gone.height and {"player_name", "pick_no"} <= set(gone.columns):
+        last = gone.sort("pick_no")
+        ctx["last_pick"] = {
+            "name": last.get_column("player_name")[-1],
+            "no": int(last.get_column("pick_no")[-1]),
+        }
+
+    # --- your picks ---------------------------------------------------------
+    picks = wd.my_picks()
+    if picks.height:
+        usable = picks.filter(pl.col("usable"))
+        ctx["picks"] = {
+            "owned": picks.height,
+            "usable": usable.height,
+            "first": int(usable.get_column("pick_no")[0]) if usable.height else None,
+            "table": table_ctx(
+                picks.select(
+                    [c for c in ("round", "pick_no", "from_owner", "keeper", "usable")
+                     if c in picks.columns]
+                ),
+                pretty=False,
+            ),
+        }
+
+    kept = data.get("kept", pl.DataFrame())
+    if kept.height:
+        kept_cols = [c for c in ("player_name", "position", "team", "kept_by", "round")
+                     if c in kept.columns]
+        ctx["kept"] = {
+            "n": kept.height,
+            "table": table_ctx(kept.select(kept_cols) if kept_cols else kept, pretty=False),
+        }
+    unmatched = data.get("unmatched", pl.DataFrame())
+    if unmatched.height:
+        ctx["unmatched"] = {"n": unmatched.height, "table": table_ctx(unmatched, pretty=False)}
+
+    # --- how many of each asset are left ------------------------------------
+    tiers = bd.tier_map(players)
+    if tiers.height:
+        ctx["tiers"] = {
+            "spec": charts.tiers_left(tiers, bool(dark)),
+            "table": table_ctx(tiers),
+        }
+
+    # --- the board ----------------------------------------------------------
+    view = players.filter(pl.col("position").is_in(positions or list(FANTASY_POSITIONS)))
+    cols = [c for c in _DRAFT_COLS if c in view.columns]
+    ctx["board"] = table_ctx(view.select(cols).head(60))
+
+    # --- availability at a chosen pick --------------------------------------
+    options = (
+        picks.filter(pl.col("usable")).get_column("pick_no").to_list()
+        if picks.height else []
+    )
+    chosen = pick if pick is not None else (options[0] if options else 24)
+    floor = min(0.95, max(0.05, float(floor)))
+    got = bd.targets(players, int(chosen), min_available=float(floor), top=15)
+    ctx["targets"] = {
+        "options": options,
+        "pick": int(chosen),
+        "floor": floor,
+        "floors": [round(0.05 + 0.05 * i, 2) for i in range(19)],
+        "table": table_ctx(got, pretty=False) if got.height else None,
+    }
+
+    # --- what it costs to wait ---------------------------------------------
+    if options:
+        waiting = bd.cost_of_waiting(players, options[:6])
+        if waiting.height:
+            ctx["waiting"] = {
+                "best": table_ctx(
+                    waiting.pivot(on="pick_no", index="position", values="best_par"),
+                    pretty=False,
+                ),
+                "cost": table_ctx(
+                    waiting.pivot(on="pick_no", index="position", values="cost_of_waiting"),
+                    pretty=False,
+                ),
+            }
+
+    # --- one position at a time --------------------------------------------
+    if {"quality_pct", "market_pct"} <= set(players.columns):
+        scored = players.filter(
+            pl.col("quality_pct").is_not_null() & pl.col("market_pct").is_not_null()
+        )
+        if scored.height:
+            available = [
+                p for p in FANTASY_POSITIONS
+                if scored.filter(pl.col("position") == p).height
+            ]
+            which = qpos if qpos in available else (available[0] if available else None)
+            if which:
+                detail = scored.filter(pl.col("position") == which).sort(
+                    "value_gap", descending=True, nulls_last=True
+                )
+                dcols = [c for c in ("name", "team", "adp", "par", "tier", "quality_pct",
+                                     "market_pct", "value_gap") if c in detail.columns]
+                ctx["quality"] = {
+                    "positions": available,
+                    "position": which,
+                    "spec": charts.quality_against_price(scored, which, bool(dark)),
+                    "table": table_ctx(detail.select(dcols)),
+                    "thin_qb": which == "QB",
+                }
+    return _page(request, "draft.html", ctx)
+
+
+# --- Player -----------------------------------------------------------------
 
 
 @router.get("/player", response_class=HTMLResponse)
-def player(request: Request, profile: str | None = None) -> HTMLResponse:
-    return _placeholder(request, "player", profile)
+def player(
+    request: Request,
+    profile: str | None = None,
+    name: str | None = None,
+    dark: int = 1,
+) -> HTMLResponse:
+    """One page, one player, everything the repo knows about him.
+
+    **This is checklist E1.** Researching a player previously meant five
+    selectboxes across four tabs, each with its own session key, and joining by
+    eye. Here the identity is the URL (`/player?name=...`), so the whole
+    picture is one request and one bookmark.
+
+    Every panel degrades independently: a player with no prior season has no
+    usage chart, one under the volume floor has no comparables, and each says
+    so rather than rendering an empty box.
+    """
+    try:
+        data = wd.board(profile)
+    except KeyError as err:
+        return _profile_error(request, err)
+
+    players = data["players"]
+    ctx: dict[str, Any] = {
+        "active": "player", "profile": profile, "empty": not players.height,
+    }
+    if not players.height:
+        return _page(request, "player.html", ctx)
+
+    names = players.get_column("name").to_list()
+    ctx["all_names"] = names
+    if not name:
+        # No player chosen yet: offer the top of the board as a starting point
+        # rather than an empty page.
+        ctx["suggestions"] = players.head(12).select(
+            [c for c in ("name", "position", "team", "board_rank") if c in players.columns]
+        ).to_dicts()
+        return _page(request, "player.html", ctx)
+
+    match = players.filter(pl.col("name") == name)
+    if not match.height:
+        # Fall back to a normalized match so a URL typed by hand still lands.
+        target = ids.normalize_name(name) if hasattr(ids, "normalize_name") else name.lower()
+        match = players.with_columns(ids.normalize("name").alias("_n")).filter(
+            pl.col("_n") == str(target).lower()
+        )
+        if match.height:
+            match = match.drop("_n")
+    if not match.height:
+        ctx["missing"] = name
+        return _page(request, "player.html", ctx)
+
+    row = match.row(0, named=True)
+    ctx["player"] = row
+    ctx["name"] = row["name"]
+
+    # The argument, left to right, in the order the layers are applied.
+    ctx["layers"] = [
+        {"key": "par", "label": "ADP curve", "adds": "the draft slot — blind to player and team"},
+        {"key": "ffb_par", "label": "Fantasy Footballers", "adds": "the player"},
+        {"key": "ecr", "label": "FantasyPros ECR", "adds": "the crowd"},
+        {"key": "env_swing", "label": "Team environment", "adds": "the team"},
+        {"key": "par_env", "label": "What the board ranks on", "adds": ""},
+    ]
+    ctx["layer_values"] = {l["key"]: row.get(l["key"]) for l in ctx["layers"]}
+
+    ctx["usage_spec"] = charts.player_usage(row, players, bool(dark))
+    ctx["usage_row"] = {
+        c: row.get(c) for c in bd._USAGE_COLUMNS if c in players.columns
+    }
+
+    # Comparables, restricted to the position rather than the block — this page
+    # asks "who is he like", not "who is he like at this price".
+    feats = wd.features()
+    if feats.height:
+        season = int(feats.get_column("season").max())
+        scored = wd.scores(season, 8)
+        if scored.height:
+            key = scored.select(
+                ids.normalize("player_name").alias("_norm"),
+                pl.col("player_id").alias("gsis_id"),
+            ).unique(subset=["_norm"], keep="first")
+            mine = (
+                match.with_columns(ids.normalize("name").alias("_norm"))
+                .join(key, on="_norm", how="left")
+                .get_column("gsis_id")
+            )
+            if mine.len() and mine[0] is not None:
+                near = ar.neighbors(mine[0], scored, feats, n=8, season=season)
+                if near.height:
+                    ncols = [c for c in ("player_name", "team", "distance", "ppg",
+                                         "pos_rank", "games") if c in near.columns]
+                    ctx["neighbors"] = table_ctx(near.select(ncols))
+            else:
+                ctx["no_quality"] = True
+
+    # Where he sits in his own position on the board.
+    pos_rows = players.filter(pl.col("position") == row["position"]).sort(
+        "board_rank", nulls_last=True
+    )
+    ctx["position_context"] = table_ctx(
+        pos_rows.select(
+            [c for c in ("board_rank", "name", "team", "adp", "par_env", "block", "need")
+             if c in pos_rows.columns]
+        ).head(30)
+    )
+    return _page(request, "player.html", ctx)
+
+
+# --- Research ---------------------------------------------------------------
 
 
 @router.get("/research", response_class=HTMLResponse)
-def research(request: Request, profile: str | None = None) -> HTMLResponse:
-    return _placeholder(request, "research", profile)
+def research(
+    request: Request,
+    profile: str | None = None,
+    regpos: list[str] = Query(default=[]),
+    days: int = 7,
+    snappos: str = "RB",
+    shift_cut: int = 60,
+    dark: int = 1,
+) -> HTMLResponse:
+    """The work behind the boards, including the parts that did not pan out.
+
+    **Nothing measured-null is hidden here.** `breakout` and `projection` are
+    kept as results, because the house rule is that a negative result is a
+    result and the honest intervals are the most credible thing in the repo.
+    """
+    regpos = _clean(regpos)
+    try:
+        data = wd.board(profile)
+    except KeyError as err:
+        return _profile_error(request, err)
+
+    ctx: dict[str, Any] = {"active": "research", "profile": profile, "season": wd.LAST_PLAYED}
+
+    # --- screens ------------------------------------------------------------
+    screens = wd.screens(wd.LAST_PLAYED)
+    reg = screens["regression"]
+    if reg.height:
+        options = sorted(reg.get_column("position").unique().to_list())
+        view = reg.filter(pl.col("position").is_in(regpos)) if regpos else reg
+        ctx["regression"] = {
+            "options": options, "selected": regpos,
+            "table": table_ctx(view.sort("pts_over_exp", nulls_last=True).head(20)),
+        }
+    dis = screens["disagreement"]
+    if dis.height:
+        ctx["disagreement"] = table_ctx(dis.head(20))
+
+    # The market comes from the board's own profile, never resolved again — a
+    # bare `adp.movement` reads ppr/12 and would render another league's drift.
+    prof = data.get("profile")
+    scoring, teams = getattr(prof, "adp_scoring", None), getattr(prof, "adp_teams", None)
+    if scoring and teams:
+        days = max(3, min(21, int(days)))
+        mv = wd.adp_movement(scoring, teams, days)
+        ctx["movement"] = {
+            "market": f"{scoring}/{teams}", "days": days,
+            "rising": table_ctx(mv.sort("adp_change").head(12)) if mv.height else None,
+            "falling": table_ctx(
+                mv.sort("adp_change", descending=True, nulls_last=True).head(12)
+            ) if mv.height else None,
+        }
+
+    snaps = wd.snap_trend(wd.LAST_PLAYED, snappos)
+    ctx["snaps"] = {
+        "position": snappos,
+        "options": list(FANTASY_POSITIONS),
+        "table": table_ctx(snaps.head(20)) if snaps.height else None,
+    }
+
+    # --- where the Footballers disagree with the curve ----------------------
+    # A failed section says so on screen rather than disappearing. A section
+    # that silently vanishes is indistinguishable from one that was never
+    # built, which is how the stability panel went missing for an afternoon.
+    shifts = pl.DataFrame()
+    try:
+        shifts = bd.compare_footballers(data)
+    except Exception as err:  # noqa: BLE001 — a missing layer costs a panel
+        ctx["footballers_error"] = f"{type(err).__name__}: {err}"
+    if shifts.height:
+        cut = max(20, min(200, int(shift_cut)))
+        if "board_rank" in shifts.columns:
+            shifts = shifts.filter(pl.col("board_rank") <= cut)
+        ctx["footballers"] = {
+            "cut": cut,
+            "table": table_ctx(shifts.head(25)),
+            "panel": wd.footballers_panel(),
+        }
+
+    # --- does a metric repeat? ---------------------------------------------
+    try:
+        rep = wd.stability_table()
+        if rep.height:
+            ctx["stability"] = {
+                "table": table_ctx(
+                    rep.sort("r_yoy", descending=True, nulls_last=True)
+                ),
+                "top": rep.sort("r_yoy", descending=True, nulls_last=True).row(
+                    0, named=True
+                ),
+            }
+    except Exception as err:  # noqa: BLE001
+        ctx["stability_error"] = f"{type(err).__name__}: {err}"
+
+    return _page(request, "research.html", ctx)
+
+
+# --- Reference --------------------------------------------------------------
 
 
 @router.get("/reference", response_class=HTMLResponse)
-def reference(request: Request, profile: str | None = None) -> HTMLResponse:
-    return _placeholder(request, "reference", profile)
+def reference(
+    request: Request, profile: str | None = None, q: str | None = None
+) -> HTMLResponse:
+    """Every metric, what it is computed from, and what it does not mean."""
+    needle = (q or "").lower().strip()
+    groups: list[dict[str, Any]] = []
+    for group, terms in glossary.groups().items():
+        hits = [
+            {"key": key, "label": term.label, "long": term.long or term.short}
+            for key, term in terms
+            if not needle
+            or needle in key.lower()
+            or needle in term.label.lower()
+            or needle in (term.long or "").lower()
+        ]
+        if hits:
+            groups.append({"name": group, "terms": hits})
+    return _page(
+        request, "reference.html",
+        {"active": "reference", "profile": profile, "groups": groups, "q": q or "",
+         "n": sum(len(g["terms"]) for g in groups)},
+    )

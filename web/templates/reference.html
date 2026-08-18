@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Reference · ff-edge{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Reference</h1>
+  <p class="lede">Every metric in the project, what it is computed from, and — where it
+  matters — what it does <em>not</em> mean. Hovering any column header elsewhere on the
+  site shows the short version of the same definition.</p>
+</div>
+
+<form class="controls" method="get" action="/reference">
+  {% if profile %}<input type="hidden" name="profile" value="{{ profile }}">{% endif %}
+  <label class="control">Filter
+    <input type="search" name="q" value="{{ q }}" placeholder="e.g. share, replacement, ADP">
+  </label>
+  <button type="submit">Search</button>
+  {% if q %}<a class="button" href="/reference{% if profile %}?profile={{ profile }}{% endif %}">Clear</a>{% endif %}
+</form>
+
+<p class="note">{{ n }} term{{ '' if n == 1 else 's' }}{% if q %} matching “{{ q }}”{% endif %}.</p>
+
+{% for group in groups %}
+<section class="card">
+  <h2>{{ group.name }}</h2>
+  <dl class="glossary">
+    {% for term in group.terms %}
+    <dt>{{ term.label }} <code>{{ term.key }}</code></dt>
+    <dd>{{ term.long }}</dd>
+    {% endfor %}
+  </dl>
+</section>
+{% else %}
+<div class="banner info">Nothing matches “{{ q }}”. The glossary keys are the raw
+column names — try a fragment like <code>share</code> or <code>par</code>.</div>
+{% endfor %}
+
+{% endblock %}
