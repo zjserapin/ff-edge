@@ -15,6 +15,7 @@ import pytest
 
 from src import adp
 from src import board as bd
+from src import profiles as pf
 
 
 def _board(rows: list[tuple[str, str, float, float, bool]]) -> pl.DataFrame:
@@ -646,3 +647,82 @@ def test_tier_map_ignores_unscored_players() -> None:
 def test_tier_map_survives_a_board_without_tiers() -> None:
     frame = pl.DataFrame({"name": ["a"], "position": ["WR"], "par": [1.0]})
     assert bd.tier_map(frame).is_empty()
+
+
+# --- the silent keeper failure ----------------------------------------------
+#
+# Added 2026-08-17, five days before the draft, after the board was found
+# showing Josh Allen, Lamar Jackson and Jaxon Smith-Njigba as draftable.
+#
+# Nothing was broken. `FF_EDGE_LEAGUE_ID` was simply unset, `kept_players`
+# returned empty exactly as designed, and every step downstream behaved
+# correctly given its input. The board came back **larger** (181 rows against
+# 161) with replacement QB at rank 21 instead of 8, and said nothing at all.
+#
+# `test_unadjusted_board_is_honest_about_having_no_keepers` above already
+# covered this case and passed throughout — it asserts the *summary* reports
+# zero kept, which is true and is not what a person reading the board sees.
+# These pin the sentence rather than the number.
+
+
+def _no_keepers(monkeypatch) -> None:
+    """Force the empty-keeper state regardless of what this machine can reach.
+
+    Only `kept_players` is patched. `keeper_summary` is deliberately left real
+    so the summary is derived from the same empty frame the live failure
+    produced, rather than from a fixture that could disagree with it.
+    """
+    monkeypatch.setattr(bd, "kept_players", lambda *a, **k: pl.DataFrame())
+
+
+def test_a_keeper_league_with_no_resolvable_league_says_so(monkeypatch) -> None:
+    """The dangerous branch: the profile expects keepers and none arrived."""
+    _no_keepers(monkeypatch)
+    monkeypatch.setattr(bd.sc, "resolve_league_id", lambda *a, **k: "")
+
+    out = bd.build(profile=pf.resolve("shiva_bowl"))
+    if not out["players"].height:
+        pytest.skip("no ADP board cached")
+
+    text = " ".join(out["warnings"]).lower()
+    assert text, "a keeper board with no keepers must not be silent"
+    assert "no keepers have been removed" in text
+    assert "ff_edge_league_id" in text
+
+
+def test_the_undeclared_case_is_worded_differently(monkeypatch) -> None:
+    """A resolved league with nobody declared yet is a different sentence.
+
+    Both are worth saying and only one is an error. Collapsing them would train
+    the reader to ignore the banner in August, which is exactly when the
+    dangerous one fires.
+    """
+    _no_keepers(monkeypatch)
+    monkeypatch.setattr(bd.sc, "resolve_league_id", lambda *a, **k: "123456")
+
+    out = bd.build(profile=pf.resolve("shiva_bowl"))
+    if not out["players"].height:
+        pytest.skip("no ADP board cached")
+
+    text = " ".join(out["warnings"]).lower()
+    assert "no keepers are declared" in text
+    assert "no keepers have been removed" not in text
+
+
+def test_a_league_with_keepers_raises_no_keeper_warning(with_keepers) -> None:
+    """The real board must not cry wolf."""
+    text = " ".join(with_keepers["warnings"]).lower()
+    assert "no keepers have been removed" not in text
+    assert "no keepers are declared" not in text
+
+
+def test_a_non_keeper_profile_is_not_warned_about_keepers(monkeypatch) -> None:
+    """`standard_12` has no keepers by definition; a banner there is noise."""
+    monkeypatch.setattr(bd.sc, "resolve_league_id", lambda *a, **k: "")
+
+    out = bd.build(profile=pf.resolve("standard_12"))
+    if not out["players"].height:
+        pytest.skip("no ADP board cached for standard_12")
+
+    text = " ".join(out["warnings"]).lower()
+    assert "keeper" not in text

@@ -951,6 +951,45 @@ def build(
 
     kept = kept_players(league_id, profile=profile)
     summary = keeper_summary(kept, league_id, profile=profile)
+
+    # **A keeper league that resolves no keepers is the most dangerous state
+    # this function has, and until 2026-08-17 it was completely silent.**
+    #
+    # `kept_players` returns an empty frame when no league id resolves, which is
+    # indistinguishable from "nobody has declared yet". Downstream, `replacement`
+    # then computes draft demand as if every keeper were available, and on the
+    # 2026 Shiva Bowl board that moves **replacement QB from rank 8 to rank 21**
+    # — thirteen of the top quarterbacks are kept, and pretending otherwise
+    # inflates every quarterback's PAR by the entire depth of that tier. The
+    # board goes from "your QB need is zero" to "take a quarterback early",
+    # which is the exact inversion of the right advice.
+    #
+    # It also gets *bigger*, not smaller, which is why it does not look broken:
+    # 181 players rather than 161, with Josh Allen, Lamar Jackson and Jaxon
+    # Smith-Njigba sitting on it looking perfectly draftable.
+    #
+    # Nothing raises, because every step is behaving correctly given its input.
+    # The only place that can notice is here, where the profile says keepers
+    # exist and the data says none do.
+    if profile.keepers and profile.sleeper_backed and not kept.height:
+        resolved = league_id or sc.resolve_league_id(None)
+        if not resolved:
+            warnings.append(
+                "No league could be resolved, so **no keepers have been removed "
+                "from this board**. It is showing every kept player as "
+                "draftable, and replacement level is computed against a pool "
+                "that does not exist — quarterbacks are the worst affected in a "
+                "superflex keeper league. Set FF_EDGE_LEAGUE_ID (and "
+                "FF_EDGE_SLEEPER_USER) and reload before drafting from this."
+            )
+        else:
+            warnings.append(
+                "The league resolved but no keepers are declared on it yet, so "
+                "this board prices every player as available. That is correct "
+                "today and will stop being correct the moment your leaguemates "
+                "declare; re-check before the draft."
+            )
+
     gone = drafted_players(league_id) if profile.sleeper_backed else pl.DataFrame()
     pool = draftable(kept, season=season, profile=profile, drafted=gone)
     if not pool.height:
