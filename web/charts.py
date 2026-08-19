@@ -15,6 +15,7 @@ from typing import Any
 import altair as alt
 import polars as pl
 
+from src import glossary
 from src import theme
 
 # **An explicit pixel width, deliberately, rather than `width="container"`.**
@@ -124,6 +125,221 @@ def quality_against_price(
     return _spec(
         (fair + pts + labels).properties(height=460, width=_WIDTH), dark
     )
+
+
+def _parity(dark: bool) -> alt.Chart:
+    """The agreement diagonal. Distance from it is the message of both scatters."""
+    return (
+        alt.Chart(alt.Data(values=[{"a": 0}, {"a": 100}]))
+        .mark_line(strokeDash=[5, 5], strokeWidth=1, color=theme.ink(dark)["muted"])
+        .encode(x=alt.X("a:Q"), y=alt.Y("a:Q"))
+    )
+
+
+def quality_scatter(view: pl.DataFrame, dark: bool) -> dict[str, Any] | None:
+    """Quality against price for one position, sized by room to grow.
+
+    Up is better per opportunity; right is more expensive. **The top-left
+    quadrant is the one worth your time** — good players the market has not
+    paid for.
+
+    One position at a time, deliberately: a four-position scatter puts four
+    separate percentile spaces on one pair of axes, where a WR at the 80th and
+    a TE at the 80th are ranked against different fields.
+    """
+    if not view.height or "market_pct" not in view.columns:
+        return None
+    frame = view.drop_nulls(subset=["market_pct", "quality_pct"])
+    if not frame.height:
+        return None
+
+    # `path_score` is null at QB by design — a starting quarterback already has
+    # all the volume there is. An all-null size channel silently collapses
+    # every point to the minimum radius rather than failing, so fall back to a
+    # constant instead of encoding nothing.
+    has_path = (
+        "path_score" in frame.columns
+        and frame.get_column("path_score").is_not_null().any()
+    )
+    size_enc = (
+        alt.Size("path_score:Q", title="Room to grow", scale=alt.Scale(range=[40, 400]))
+        if has_path
+        else alt.value(140)
+    )
+    tips = [
+        alt.Tooltip("name:N", title="Player"),
+        alt.Tooltip("team:N", title="Team"),
+        alt.Tooltip("adp:Q", title="ADP", format=".1f"),
+        alt.Tooltip("quality_pct:Q", title="Quality %ile", format=".0f"),
+        alt.Tooltip("market_pct:Q", title="Price %ile", format=".0f"),
+        alt.Tooltip("value_gap:Q", title="Value gap", format="+.0f"),
+    ]
+    for col, title, fmt in (
+        ("path_score", "Room to grow", ".0f"),
+        ("yprr", "Yds/route", ".2f"),
+        ("verdict", "Verdict", None),
+    ):
+        if col in frame.columns:
+            tips.append(
+                alt.Tooltip(f"{col}:{'N' if fmt is None else 'Q'}", title=title,
+                            **({} if fmt is None else {"format": fmt}))
+            )
+
+    data = alt.Data(values=frame.to_dicts())
+    points = (
+        alt.Chart(data)
+        # A 2px surface ring so overlapping marks stay countable.
+        .mark_circle(opacity=0.85, stroke=theme.surface(dark), strokeWidth=1)
+        .encode(
+            x=alt.X("market_pct:Q", title="Draft price percentile (100 = most expensive)"),
+            y=alt.Y("quality_pct:Q", title="Quality percentile (100 = best per opportunity)"),
+            size=size_enc,
+            # Diverging with a neutral midpoint: the *sign* of the gap is the
+            # message. `redyellowblue` puts a hue at the middle, which reads as
+            # a third category rather than as "no disagreement".
+            color=alt.Color(
+                "value_gap:Q",
+                scale=alt.Scale(scheme="redblue", domainMid=0),
+                title="Value gap",
+            ),
+            tooltip=tips,
+        )
+    )
+    labels = (
+        alt.Chart(data)
+        .mark_text(align="left", dx=9, fontSize=10, color=theme.ink(dark)["primary"])
+        .encode(
+            x="market_pct:Q", y="quality_pct:Q", text="name:N",
+            opacity=alt.condition(
+                "abs(datum.value_gap) >= 42", alt.value(0.9), alt.value(0.0)
+            ),
+        )
+    )
+    return _spec(
+        (_parity(dark) + points + labels).properties(height=440, width=_WIDTH), dark
+    )
+
+
+def vegas_scatter(priced: pl.DataFrame, dark: bool) -> dict[str, Any] | None:
+    """The sportsbook's line against draft price — a third opinion, money-backed.
+
+    Worth having next to `value_gap` because the two disagree for unrelated
+    reasons: `value_gap` comes from per-opportunity quality this project
+    measured, `vegas_gap` from a number a bookmaker will take money on.
+    Neither is derived from ADP, and where they agree is more interesting than
+    either alone.
+
+    Both axes are percentiles **among priced players only** — the book prices
+    about 92 players season-long, so a percentile against the whole board
+    would compare him to players the market never quoted.
+    """
+    need = {"price_pct_priced", "line_pct", "vegas_gap", "name"}
+    if not priced.height or not need.issubset(priced.columns):
+        return None
+    frame = priced.drop_nulls(subset=["price_pct_priced", "line_pct"])
+    if not frame.height:
+        return None
+
+    tips = [
+        alt.Tooltip("name:N", title="Player"),
+        alt.Tooltip("team:N", title="Team"),
+        alt.Tooltip("adp:Q", title="ADP", format=".1f"),
+        alt.Tooltip("line:Q", title="Line", format=".1f"),
+        alt.Tooltip("line_pct:Q", title="Line %ile", format=".0f"),
+        alt.Tooltip("price_pct_priced:Q", title="Price %ile (priced)", format=".0f"),
+        alt.Tooltip("vegas_gap:Q", title="Vegas gap", format="+.0f"),
+        alt.Tooltip("value_gap:Q", title="Value gap", format="+.0f"),
+    ]
+    data = alt.Data(values=frame.to_dicts())
+    points = (
+        alt.Chart(data)
+        .mark_circle(size=150, opacity=0.85, stroke=theme.surface(dark), strokeWidth=1)
+        .encode(
+            x=alt.X("price_pct_priced:Q",
+                    title="Draft price percentile (among priced players)"),
+            y=alt.Y("line_pct:Q", title="Sportsbook line percentile"),
+            color=alt.Color(
+                "vegas_gap:Q",
+                scale=alt.Scale(scheme="redblue", domainMid=0),
+                title="Vegas gap",
+            ),
+            tooltip=tips,
+        )
+    )
+    labels = (
+        alt.Chart(data)
+        .mark_text(align="left", dx=9, fontSize=10, color=theme.ink(dark)["primary"])
+        .encode(
+            x="price_pct_priced:Q", y="line_pct:Q", text="name:N",
+            opacity=alt.condition(
+                "abs(datum.vegas_gap) >= 15", alt.value(0.9), alt.value(0.0)
+            ),
+        )
+    )
+    return _spec(
+        (_parity(dark) + points + labels).properties(height=420, width=_WIDTH), dark
+    )
+
+
+def sticky_against_price(
+    view: pl.DataFrame, metrics: list[str], r_by_metric: dict[str, float], dark: bool
+) -> dict[str, Any] | None:
+    """Each metric that actually repeats, plotted against what the market charges.
+
+    **A flat cloud is the interesting one** — a metric that repeats year over
+    year and does not rise with price is a signal the market is not charging
+    for. A tight upward diagonal means the market already knows.
+
+    Deliberately one colour. Encoding the value looked informative and was not:
+    y-scales resolve independently per panel while a colour scale resolves
+    globally, so aDOT's 5-20 range swamped target share's 0.05-0.35 and every
+    share panel rendered the same pale blue. The message is the *shape* of each
+    cloud, and shape needs no second channel.
+    """
+    present = [m for m in metrics if m in view.columns]
+    if not present or not view.height:
+        return None
+    long = (
+        view.select(["name", "team", "market_pct", *present])
+        .unpivot(
+            index=["name", "team", "market_pct"],
+            on=present,
+            variable_name="metric",
+            value_name="value",
+        )
+        .drop_nulls("value")
+    )
+    if not long.height:
+        return None
+
+    labels = {}
+    for m in present:
+        term = glossary.lookup(m)
+        r = r_by_metric.get(m)
+        base = term.label if term else m
+        labels[m] = f"{base}  (r={r:.2f})" if r is not None else base
+    long = long.with_columns(
+        pl.col("metric").replace_strict(labels, default=pl.col("metric")).alias("panel")
+    )
+
+    panels = (
+        alt.Chart(alt.Data(values=long.to_dicts()))
+        .mark_circle(size=70, opacity=0.75, color=theme.SEQUENTIAL_BLUE[3])
+        .encode(
+            x=alt.X("market_pct:Q", title="Draft price percentile"),
+            y=alt.Y("value:Q", title=None, scale=alt.Scale(zero=False)),
+            tooltip=[
+                alt.Tooltip("name:N", title="Player"),
+                alt.Tooltip("team:N", title="Team"),
+                alt.Tooltip("market_pct:Q", title="Price %ile", format=".0f"),
+                alt.Tooltip("value:Q", title="Value", format=".3f"),
+            ],
+        )
+        .properties(height=185, width=215)
+        .facet(facet=alt.Facet("panel:N", title=None), columns=3)
+        .resolve_scale(y="independent")
+    )
+    return _spec(panels, dark)
 
 
 def player_usage(row: dict[str, Any], league: pl.DataFrame, dark: bool) -> dict[str, Any] | None:

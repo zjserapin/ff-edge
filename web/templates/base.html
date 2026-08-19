@@ -20,6 +20,7 @@
       {% set q = '?profile=' + profile if profile else '' %}
       <a href="/{{ q }}" {% if active == 'board' %}aria-current="page"{% endif %}>Big Board</a>
       <a href="/draft{{ q }}" {% if active == 'draft' %}aria-current="page"{% endif %}>Draft Day</a>
+      <a href="/board{{ q }}" {% if active == 'value' %}aria-current="page"{% endif %}>Value</a>
       <a href="/player{{ q }}" {% if active == 'player' %}aria-current="page"{% endif %}>Player</a>
       <a href="/research{{ q }}" {% if active == 'research' %}aria-current="page"{% endif %}>Research</a>
       <a href="/reference{{ q }}" {% if active == 'reference' %}aria-current="page"{% endif %}>Reference</a>

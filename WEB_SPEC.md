@@ -1,7 +1,7 @@
 # WEB_SPEC.md — the ff-edge website
 
 **Drafted 2026-08-17. Agreed 2026-08-18 (FastAPI + htmx; parallel build).**
-**W0–W5 shipped 2026-08-18. 458 tests pass, 2 skip.**
+**W0–W6 shipped 2026-08-18. 462 tests pass, 2 skip.**
 
 > ## State
 >
@@ -13,6 +13,12 @@
 > | **W3** Player page (E1) | **done** — search, the four layers as an argument, usage against position, comparables, position context |
 > | **W4** Research | **done** — screens, ADP movement in the profile's own market, snaps, Footballers disagreement, stability |
 > | **W5** Reference | **done** — the full glossary, filterable |
+> | **W6** Value (`/board`) | **done** — `valuation.py`: quality against price sized by room to grow, **the sportsbook line against draft price**, where both opinions agree, and what repeats against what it costs |
+>
+> **W6 was not in the original plan.** The spec folded `valuation.py` into
+> Research as a section; in practice it is its own question — *who has the
+> market got wrong* — carrying three charts and its own position control, and
+> it is the only place the **sportsbook line** appears. It is a page.
 >
 > **Still on Streamlit, deliberately last:** the two measured nulls
 > (`breakout`, `projection`), the rookie model, the strategy simulator, and the

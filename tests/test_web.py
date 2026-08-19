@@ -119,7 +119,7 @@ def test_usage_columns_appear_only_when_toggled(players):
 
 
 def test_every_page_renders():
-    for path in ("/", "/draft", "/player", "/research", "/reference"):
+    for path in ("/", "/draft", "/board", "/player", "/research", "/reference"):
         r = client.get(path)
         assert r.status_code == 200, path
         assert "<h1" in r.text, path
@@ -129,7 +129,7 @@ def test_no_page_silently_drops_a_section():
     """A section that fails renders a banner naming the error; it never just
     disappears. The stability panel vanished for an afternoon behind a broad
     `except` — invisible on screen and green in the suite."""
-    for path in ("/draft", "/research", "/player"):
+    for path in ("/draft", "/board", "/research", "/player"):
         assert "failed to build" not in client.get(path).text, path
 
 
@@ -152,7 +152,7 @@ def test_charts_are_sized_in_pixels_not_container(players):
     import json
     import re
 
-    for path in ("/draft", "/player?name=" + players.get_column("name")[0]):
+    for path in ("/draft", "/board", "/player?name=" + players.get_column("name")[0]):
         html = client.get(path).text
         specs = re.findall(r'class="vega-spec"[^>]*>(.*?)</script>', html, re.S)
         assert specs, f"no chart on {path}"
@@ -188,6 +188,71 @@ def test_player_page_never_prints_a_zero_for_an_unmeasured_column(players):
     r = client.get(f"/player?name={receivers.get_column('name')[0]}")
     assert r.status_code == 200
     assert "Red-zone carries" not in r.text
+
+
+def test_value_page_carries_both_scatters():
+    """Quality-against-price and the sportsbook line are separate opinions built
+    from unrelated evidence. Losing either quietly is the failure to guard."""
+    board = wd.valuation()
+    if not board.height:
+        pytest.skip("no valuation board — needs ADP and a warm feature table")
+    r = client.get("/board")
+    assert r.status_code == 200
+    assert "Quality against price" in r.text
+    assert "What the sportsbook thinks" in r.text
+
+
+def _flat(html: str) -> str:
+    """Collapse whitespace before matching prose.
+
+    Templates wrap sentences across lines for readability, so a phrase that
+    reads as contiguous on screen is not contiguous in the source. Asserting
+    against the raw text tests the line wrapping rather than the content.
+    """
+    import re
+
+    return re.sub(r"\s+", " ", html)
+
+
+def test_vegas_section_says_how_thin_the_feed_is(players):
+    """FanDuel prices ~92 players season-long. A position with no lines must say
+    'not measured', never render an empty chart as though it were an answer."""
+    import polars as pl
+
+    board = wd.valuation()
+    if not board.height or "line_pct" not in board.columns:
+        pytest.skip("no book lines cached")
+    for pos in ("QB", "RB", "WR", "TE"):
+        sub = board.filter(pl.col("position") == pos)
+        if not sub.height:
+            continue
+        text = _flat(client.get(f"/board?pos={pos}").text)
+        priced = sub.filter(pl.col("line_pct").is_not_null()).height
+        if priced:
+            assert f"{priced} of {sub.height} {pos}s have a season-long line" in text
+        else:
+            assert "No sportsbook lines matched" in text
+
+
+def test_vegas_trust_note_is_position_specific(players):
+    """The QB caveat inverts the obvious reading — passing-yards lines flatter
+    exactly the quarterbacks who are mediocre fantasy quarterbacks. It must not
+    be shown under a position it was not written about."""
+    qb = client.get("/board?pos=QB").text
+    wr = client.get("/board?pos=WR").text
+    if "No sportsbook lines matched" not in qb:
+        assert "Weakest here" in qb
+        assert "Weakest here" not in wr
+
+
+def test_every_position_renders_on_the_value_page():
+    board = wd.valuation()
+    if not board.height:
+        pytest.skip("no valuation board")
+    for pos in ("QB", "RB", "WR", "TE"):
+        r = client.get(f"/board?pos={pos}")
+        assert r.status_code == 200, pos
+        assert "failed to build" not in r.text, pos
 
 
 def test_reference_filters(players):

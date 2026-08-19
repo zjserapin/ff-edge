@@ -1,15 +1,22 @@
 # ff-edge — handoff
 
 **Session date:** 2026-08-18. **Shiva Bowl drafts 08-22 at 19:00 — four days.**
-**State:** 451 tests pass, 2 skip (with both env vars). **`main` is the only branch.**
+**State:** 462 tests pass, 2 skip (with both env vars). **`main` is the only branch.**
 
 ---
 
 ## New 08-18: there is a website, and Streamlit is untouched
 
 `web/` is a FastAPI + Jinja + htmx site over the same `src/` modules — see
-`WEB_SPEC.md`. **All five pages are built**: Big Board, Draft Day, Player,
-Research and Reference.
+`WEB_SPEC.md`. **All six pages are built**: Big Board, Draft Day, Value,
+Player, Research and Reference.
+
+**Value (`/board`) is `valuation.py`, and it is deliberately not the draft
+board** — that trap is inherited from the archived dashboard spec and is still
+live: an edit meant for `src/board.py` belongs on Draft Day. It carries the
+three scatters, including the **sportsbook line against draft price**, which is
+the only money-backed opinion in the project and the one read that shares no
+evidence with either `par` or `quality_pct`.
 
 **The Player page is new and closes checklist E1** — the structural gap that
 cost more than anything else in the file. Researching a player meant five
@@ -74,9 +81,13 @@ to the manager who caused it.** Teams that make a position scarce by keeping one
 are precisely the teams that must not draft one. The board was telling you to
 buy the thing you already own, at pick 4.
 
-**Two remote branches survive** and `main` is **10 commits ahead of
-`origin/main`**, all unpushed — `CLAUDE.md` gates every push on explicit
-approval and none was given.
+**Corrected 2026-08-18: that backlog is gone.** `origin/main` is level with
+`main`, and the two stranded remote branches (`measure-what-repeats`,
+`worktree-fantasypros-brainstorm`) no longer exist on the remote — both were
+fully merged locally first, so nothing was lost. `git branch -r` shows only
+`origin/main`. **The push gate itself has not moved**: `CLAUDE.md` still
+requires explicit approval in the conversation, and each of the two pushes on
+08-18 was approved individually.
 
 ---
 

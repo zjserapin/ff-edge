@@ -313,11 +313,12 @@ behind the blend instead of a judgment call. `FOOTBALLERS_WEIGHT = 0.5` and
   the answers are **not** in `FANTASYPROS_IDEAS.md`. It costs 5 calls of a
   50/day budget and refuses to run without `--confirm`. Either run it and record
   the answers, or delete it; leaving it is the one state its author ruled out.
-- **Two remote branches survive** — `origin/measure-what-repeats` and
-  `origin/worktree-fantasypros-brainstorm`. Both are fully merged locally.
-  Deleting them is a push, and `CLAUDE.md` gates every push on explicit approval,
-  so **they were deliberately left alone.** `main` is also **10 commits ahead of
-  `origin/main`** and unpushed for the same reason.
+- ~~**Two remote branches survive**~~ **Resolved by 2026-08-18.** Neither
+  `origin/measure-what-repeats` nor `origin/worktree-fantasypros-brainstorm`
+  exists any more, and `origin/main` is level with `main` — `git branch -r`
+  shows only `origin/main`. Both branches were fully merged locally before they
+  went, so nothing was lost. The push gate is unchanged: `CLAUDE.md` still
+  requires explicit approval per push.
 - **The daily bootstrap is not running clean** — recent runs logged 56-59 of 60.
   Causes are transient network on nflverse historical tables and one Sleeper read
   timeout. **None touch the ADP, Footballers or claims snapshots**, the three

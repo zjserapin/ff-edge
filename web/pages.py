@@ -23,6 +23,8 @@ from src import board as bd
 from src import glossary
 from src import ids
 from src import profiles as pf
+from src import stability as stab
+from src import valuation as val
 from src.config import ENV_WEIGHT, FANTASY_POSITIONS, SEASON, SLEEPER_USERNAME
 from web import charts
 from web import data as wd
@@ -814,6 +816,123 @@ def player(
         ).head(30)
     )
     return _page(request, "player.html", ctx)
+
+
+# --- Board (who the market has wrong) ---------------------------------------
+
+# Why the sportsbook line is worth more at some positions than others. Verbatim
+# from `app.py`, because each sentence is a measured limitation of the feed
+# rather than a hedge, and the quarterback one inverts the obvious reading.
+_VEGAS_TRUST: dict[str, str] = {
+    "WR": "<strong>Strongest here.</strong> Receiving yards is the dominant input to a "
+          "receiver's scoring, so the line and fantasy value point the same way. Still "
+          "missing touchdowns and receptions — no season-long market exists for either "
+          "— so this is a view on volume, not on points.",
+    "TE": "<strong>Strong here</strong>, same as receiver: receiving yards drives the "
+          "scoring. Only nine tight ends are priced, so the percentile is cut against a "
+          "thin field.",
+    "RB": "<strong>Weaker here.</strong> The line is rushing yards, and 23 of 25 backs "
+          "have no receiving market at all — so in a half-PPR league this is blind to "
+          "exactly what separates a three-down back from an early-down one.",
+    "QB": "<strong>Weakest here, and it looks most exciting here.</strong> The line is "
+          "passing yards, but fantasy quarterback value concentrates in <em>rushing</em> "
+          "— <code>rush_share</code> is the stickiest metric measured anywhere in this "
+          "project at 0.82 — and FanDuel posts a rushing line for 5 of 24 quarterbacks. "
+          "High-volume pocket passers therefore rise to the top of this list for the "
+          "exact reason they are mediocre fantasy quarterbacks. Read it as a statement "
+          "about passing volume, not about points.",
+}
+
+
+@router.get("/board", response_class=HTMLResponse)
+def board_page(
+    request: Request,
+    profile: str | None = None,
+    pos: str | None = None,
+    dark: int = 1,
+) -> HTMLResponse:
+    """Quality against price, the sportsbook against price, and what repeats.
+
+    **This is `valuation.py`, and it is deliberately not the draft board.**
+    The draft board ranks across positions on PAR; this asks the other
+    question — inside one position, who is rated above what he costs. An edit
+    meant for `src/board.py` belongs on Draft Day, not here.
+    """
+    board = wd.valuation()
+    ctx: dict[str, Any] = {"active": "value", "profile": profile, "empty": not board.height}
+    if not board.height:
+        return _page(request, "board_value.html", ctx)
+
+    counts = val.summary(board)
+    ctx["counts"] = {
+        verdict: int(counts.filter(pl.col("verdict") == verdict).get_column("n").sum())
+        for verdict in ("undervalued", "fairly priced", "overvalued")
+    }
+
+    available = [p for p in FANTASY_POSITIONS if board.filter(pl.col("position") == p).height]
+    if not available:
+        return _page(request, "board_value.html", ctx)
+    which = pos if pos in available else available[0]
+    view = board.filter(pl.col("position") == which)
+    ctx.update(positions=available, position=which, n=view.height)
+
+    ctx["quality_spec"] = charts.quality_scatter(view, bool(dark))
+    ctx["thin_qb"] = which == "QB"
+
+    # --- the sportsbook ------------------------------------------------------
+    priced = (
+        view.filter(pl.col("line_pct").is_not_null())
+        if "line_pct" in view.columns else pl.DataFrame()
+    )
+    vegas: dict[str, Any] = {"n": priced.height, "total": view.height,
+                             "trust": _VEGAS_TRUST.get(which, "")}
+    if priced.height:
+        vegas["spec"] = charts.vegas_scatter(priced, bool(dark))
+        # Where the two independent opinions agree is the actual output here.
+        both = priced.filter(
+            pl.col("value_gap").is_not_null()
+            & (
+                ((pl.col("value_gap") >= 15) & (pl.col("vegas_gap") >= 10))
+                | ((pl.col("value_gap") <= -15) & (pl.col("vegas_gap") <= -10))
+            )
+        )
+        if both.height:
+            bcols = [c for c in ("name", "team", "adp", "price_pct_priced", "quality_pct",
+                                 "value_gap", "line", "line_pct", "vegas_gap")
+                     if c in both.columns]
+            vegas["agree"] = table_ctx(
+                both.select(bcols).sort("vegas_gap", descending=True, nulls_last=True),
+                pretty=False,
+            )
+        pcols = [c for c in ("name", "team", "adp", "market", "line", "line_pct",
+                             "price_pct_priced", "vegas_gap", "value_gap")
+                 if c in priced.columns]
+        vegas["table"] = table_ctx(
+            priced.select(pcols).sort("vegas_gap", descending=True, nulls_last=True),
+            pretty=False,
+        )
+    ctx["vegas"] = vegas
+
+    # --- what repeats, against what it costs --------------------------------
+    try:
+        rep = wd.stability_table()
+        sticky = stab.sticky_features(rep, which, top_n=6) if rep.height else pl.DataFrame()
+    except Exception as err:  # noqa: BLE001
+        ctx["sticky_error"] = f"{type(err).__name__}: {err}"
+        sticky = pl.DataFrame()
+    if sticky.height:
+        wanted = sticky.get_column("metric").to_list()
+        r_by = {r["metric"]: r["r_yoy"] for r in sticky.iter_rows(named=True)}
+        # Said out loud rather than dropped. This panel once silently rendered
+        # one of two QB metrics and two of six at RB, because the columns were
+        # not on the board — and a chart missing two thirds of its subject
+        # looks exactly like a chart that is finished.
+        ctx["sticky"] = {
+            "spec": charts.sticky_against_price(view, wanted, r_by, bool(dark)),
+            "absent": [m for m in wanted if m not in view.columns],
+            "table": table_ctx(sticky),
+        }
+    return _page(request, "board_value.html", ctx)
 
 
 # --- Research ---------------------------------------------------------------

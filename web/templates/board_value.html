@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block title %}Who the market has wrong · ff-edge{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Who the market has wrong</h1>
+  <p class="lede">Every drafted player with enough volume to measure, scored on two
+  axes the draft market treats as one — plus a third opinion the market cannot see
+  itself: what a sportsbook will take money on.</p>
+</div>
+
+{% if empty %}
+<div class="banner warn">No {{ season }} ADP available yet, or the feature table is
+cold. Run <code>uv run python -m src.bootstrap --light</code>.</div>
+{% else %}
+
+<div class="banner info">ℹ️ <strong>The argument in one line: ADP prices volume well and
+quality badly.</strong> Everyone can see a 28% target share; far fewer are pricing 2.4
+yards per route run on 300 routes. So <code>quality_pct</code> is compared against
+<code>market_pct</code> — both percentiles within position — and the difference is
+<code>value_gap</code>. <strong>This is a disagreement score, not a projection</strong>:
+it says where this project's read differs from the market's, which is a reason to look
+closer, not a reason to be right.</div>
+
+<section class="metrics" aria-label="Verdicts">
+  <div class="tile"><span class="tile-value">{{ counts['undervalued'] }}</span><span class="tile-label">Undervalued</span></div>
+  <div class="tile"><span class="tile-value">{{ counts['fairly priced'] }}</span><span class="tile-label">Fairly priced</span></div>
+  <div class="tile"><span class="tile-value">{{ counts['overvalued'] }}</span><span class="tile-label">Overvalued</span></div>
+</section>
+
+<form class="controls" method="get" action="/board">
+  {% if profile %}<input type="hidden" name="profile" value="{{ profile }}">{% endif %}
+  <fieldset class="chips">
+    <legend>Position</legend>
+    {% for p in positions %}
+    <label class="chip pos-{{ p }}">
+      <input type="radio" name="pos" value="{{ p }}"
+             {% if position == p %}checked{% endif %} onchange="this.form.submit()">
+      <span>{{ p }}</span>
+    </label>
+    {% endfor %}
+  </fieldset>
+</form>
+<p class="note"><strong>One position at a time, deliberately.</strong> A four-position
+scatter puts four separate percentile spaces on one pair of axes — a WR at the 80th and
+a TE at the 80th are ranked against different fields — and the reader has to remember
+which cloud is which before any of it means anything.</p>
+
+{# --- quality against price --- #}
+<section class="card">
+  <h2>Quality against price</h2>
+  <p class="note">Up is better per opportunity; right is more expensive.
+  <strong>The top-left quadrant is the one worth your time</strong> — good players the
+  market has not paid for. Bottom-right is the reverse. Point size is how much room he
+  has to grow into more volume; the dashed line is agreement, and only players more
+  than 42 percentile points from it are labelled.</p>
+  {% if thin_qb %}
+  <p class="note"><strong>Quarterback quality is a thinner measurement than the
+  others.</strong> Three metrics rather than eight or ten, and the stability weighting
+  makes it largely a rushing read. Season-forward it correlates +0.367 with next-season
+  PPG (95% CI [+0.213, +0.493]), about RB's level. <code>path_score</code> is blank by
+  design — a starting quarterback already has all the volume there is.</p>
+  {% endif %}
+  {% with spec = quality_spec, cid = "value-quality-chart" %}{% include "partials/_chart.html" %}{% endwith %}
+</section>
+
+{# --- the sportsbook --- #}
+<section class="card" id="vegas">
+  <h2>What the sportsbook thinks, against what he costs</h2>
+  {% if vegas.n %}
+  <p class="note">{{ vegas.n }} of {{ vegas.total }} {{ position }}s have a season-long
+  line. <code>vegas_gap</code> is the line's percentile within position minus the draft
+  price's — positive means <strong>the book rates him above where he is drafted</strong>.
+  A <strong>disagreement score, not a projection</strong>, and the reason to read it
+  next to <code>value_gap</code> is that the two are built from unrelated evidence:
+  one is per-opportunity quality this project measured, the other is a number a
+  bookmaker will take money on. Neither is derived from ADP.</p>
+  {% if vegas.trust %}
+  <div class="banner warn">⚖️ {{ vegas.trust | safe }}</div>
+  {% endif %}
+  {% with spec = vegas.spec, cid = "vegas-chart" %}{% include "partials/_chart.html" %}{% endwith %}
+  <p class="note">Both axes are percentiles <strong>among priced players only</strong> —
+  the book quotes about 92 players season-long, top of the board, so a percentile
+  against the whole board would be comparing him to players it never quoted. Players
+  more than 15 points off the diagonal are labelled.</p>
+
+  {% if vegas.agree %}
+  <h3>Both opinions agree</h3>
+  <p class="note">Quality and the sportsbook lean the same way against draft price.
+  <strong>Two unrelated kinds of evidence pointing together is a stronger reason to look
+  than either on its own</strong> — it is still not a projection.</p>
+  {% with t = vegas.agree %}{% include "partials/_table.html" %}{% endwith %}
+  {% endif %}
+
+  <details><summary>Show every priced {{ position }}</summary>
+    {% with t = vegas.table %}{% include "partials/_table.html" %}{% endwith %}
+  </details>
+  {% else %}
+  <div class="banner info">No sportsbook lines matched at {{ position }}. FanDuel prices
+  about 92 players season-long, top of the board only — <strong>a blank means not
+  measured, never no edge</strong>.</div>
+  {% endif %}
+</section>
+
+{# --- what repeats --- #}
+<section class="card">
+  <h2>What repeats, against what it costs</h2>
+  {% if sticky_error %}
+  <div class="banner warn">This section failed to build — <code>{{ sticky_error }}</code>.</div>
+  {% elif sticky %}
+  <p class="note">The most persistent {{ position }} metrics, each against draft price.
+  <strong>A flat cloud is the interesting one</strong> — a metric that repeats year over
+  year and does not rise with price is a signal the market is not charging for. A tight
+  upward diagonal means the market already knows. Panel titles carry each metric's
+  year-over-year correlation.</p>
+  <p class="note">The metric list is <strong>measured, not chosen</strong>: it is
+  whatever clears the stickiness threshold at this position, ordered by persistence,
+  with the outcome columns excluded — plotting last season's points against draft price
+  is close to plotting price against itself.</p>
+  {% with spec = sticky.spec, cid = "sticky-chart" %}{% include "partials/_chart.html" %}{% endwith %}
+  {% if sticky.absent %}
+  <p class="note"><strong>Not shown</strong> — sticky at this position but not carried
+  on the valuation board: {% for m in sticky.absent %}<code>{{ m }}</code>{% if not loop.last %}, {% endif %}{% endfor %}.
+  Said out loud rather than dropped: a chart missing two thirds of its subject looks
+  exactly like a chart that is finished.</p>
+  {% endif %}
+  <details><summary>Show the persistence figures</summary>
+    {% with t = sticky.table %}{% include "partials/_table.html" %}{% endwith %}
+  </details>
+  {% else %}
+  <div class="banner info">No {{ position }} metric clears the stickiness threshold
+  outside the outcome columns, so there is nothing here that would not just be restating
+  draft price.</div>
+  {% endif %}
+</section>
+
+{% endif %}
+{% endblock %}
