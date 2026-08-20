@@ -21,7 +21,7 @@ import polars as pl
 
 from src import adp, cache, ids
 from src import nflverse as nv
-from src import sleeper
+from src import sleeper, sleeper_adp
 from src.config import (
     ADP_MISSING_YEARS,
     FEATURE_SEASONS,
@@ -122,6 +122,21 @@ def run(light: bool = False) -> None:
     step(
         f"adp snapshot {SUPERFLEX_ADP_SCORING}/{LEAGUE_ADP_TEAMS}",
         lambda: adp.snapshot(SUPERFLEX_ADP_SCORING, LEAGUE_ADP_TEAMS),
+    )
+
+    _section("ADP (Sleeper — the board this league actually drafts against)")
+    # The market the Shiva Bowl board is priced from. Kept warm here so the app
+    # works offline, and snapshotted for the same reason the FFC histories are:
+    # the endpoint serves today only and a missed day cannot be recovered.
+    # Started 2026-08-20, two days before the draft, so movement is a 2027 asset
+    # rather than a 2026 one — which is an argument for starting it, not against.
+    step(
+        f"sleeper adp {SUPERFLEX_ADP_SCORING}",
+        lambda: sleeper_adp.board(SUPERFLEX_ADP_SCORING, LEAGUE_ADP_TEAMS),
+    )
+    step(
+        f"sleeper adp snapshot {SUPERFLEX_ADP_SCORING}",
+        lambda: sleeper_adp.snapshot(SUPERFLEX_ADP_SCORING),
     )
 
     _section("The Fantasy Footballers")

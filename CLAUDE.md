@@ -20,6 +20,7 @@ one, columns that look like duplicates but aren't. None of it raises.
 | `BIG_BOARD_SPEC.md` | The Big Board tab. Spec, then eighteen numbered records of what each change to the board found. Why only two of the three original numbers are independent of ADP. |
 | `FOOTBALLERS_SPEC.md` | The Fantasy Footballers layer. Data built, display half built. |
 | `CLAIMS_SPEC.md` | Design contract for the claims ledger. Built; a 2027 asset. |
+| `LEAGUE_ADP_SPEC.md` | Whether ADP can be made league-specific. **Read its resolution block first** — the answer arrived from a different direction than the measurement, and the `src/market.py` design it proposes was deliberately not built. Its value-vs-cost split is the part that still governs. |
 | `HOW_IT_WORKS.md` | The pipeline's shape, stage by stage. **Its tab walkthrough describes the old six-tab app** and carries a status block saying so; the pipeline half is current. |
 | `FANTASYPROS_IDEAS.md` | Brainstorm, not a plan. Its lead finding shipped (ECR is live); the seven-years-of-dispersion one has not been touched. |
 | `README.md` | Setup, module map, what the analysis has verified. |
@@ -272,6 +273,59 @@ de-vigging them returns exactly 0.500 — the absence of a signal, not a
 probability — and `marketType` is a **bucket, not a position** (Bowers, Kittle
 and Loveland are all filed under `WIDE_RECEIVERS`).
 
+**The Shiva Bowl board is priced from Sleeper's ADP, not FFC's, and Sleeper
+spells "undrafted" as `999.0` rather than null.** 8,537 of the 9,414 rows in the
+2026 feed carry the sentinel. Nothing raises, and it *sorts correctly* — 999
+lands last, exactly where an undrafted player belongs — so every ascending query
+looks right while any mean, curve fit, or `nulls_last` guard reads it as a real
+draft slot in round 100. `sleeper_adp.fetch` drops it on ingest so no caller has
+to remember. **A sentinel that sorts correctly is the most dangerous kind**; the
+`nulls_last` entry below is the same lesson from the other direction.
+
+The swap itself (2026-08-20) was a source change rather than a correction, and
+the argument for it is causal, not statistical: **the other nine managers are
+looking at Sleeper's numbers while they pick.** FFC's board is seen by nobody in
+this league, so Sleeper's ADP does not merely predict this draft better — it
+partly creates it. `draft.metadata.scoring_type` is `"2qb"`, so the feed is
+superflex-aware for this league by construction.
+
+The disagreement is large and runs **both ways**, which is why no per-position
+offset could have fixed it: inside FFC's top 150, TEs sit a median **25 picks
+earlier** on Sleeper and QBs **27 later**. Trey McBride is FFC 65.7 against
+Sleeper 19.8. That TE gap independently reproduces the one
+`LEAGUE_ADP_SPEC.md` measured from three seasons of real Shiva Bowl picks, which
+is why the `src/market.py` bias correction proposed there was **not built** —
+two unrelated methods agreeing FFC is wrong about tight ends means stop reading
+FFC, not patch it.
+
+**What did *not* move: the historical ADP→points curve.** ADP does two jobs
+(`LEAGUE_ADP_SPEC.md` is the long version). Value — "what does a market's TE1
+score" — is a function of positional *rank* fit across `LABEL_SEASONS`, and FFC
+covers all seven where Sleeper has no `adp_2qb` before 2020. Cost — "who occupies
+that rank and what will he cost" — is what was broken and what moved. Rank is
+rank, so an FFC-fit curve applies to Sleeper ranks without contradiction. Moving
+the curve too is defensible; **measure it against the board, don't assert it.**
+
+Consequence worth knowing before reading a screen: **board ranks barely moved
+(TE median −1.5) while prices moved enormously.** The two sources largely agree
+on ordering *within* a position and disagree on cross-position price, so the
+swap fixed the cost side, which is the side that was wrong. Also note **the
+movement panels in `app.py` and `web/` still read FFC history** and are
+therefore a different market from the board they sit beside. Sleeper history
+began accumulating 2026-08-20 via `sleeper_adp.snapshot` and, like every ADP
+history here, cannot be backfilled.
+
+**Sleeper publishes no dispersion, so `stdev` still comes from FFC** by
+normalized-name join — the answer `config.py` had already written down when it
+sketched this swap for FantasyPros. Where FFC has no row at all (Sleeper's board
+is ~3.7x deeper) the stdev is **imputed from the round's typical dispersion, not
+floored**: `slot_scale`'s 0.5 floor would assert a pick lands within half a pick
+of its ADP, i.e. near-certainty about the players we know least about. The first
+implementation forward-filled over the *joined board* instead of a dense round
+index, which handed a round-21 player round 1's dispersion — caught by
+`test_missing_dispersion_is_imputed_from_its_round_not_floored`, which is the
+worked example of why that test exists.
+
 **`player_id` means two different things, and they are different types.** The
 draft board's `player_id` is **FFC's, an Int64**; `archetypes.scores`,
 `features.build` and the nflverse tables key on **gsis_id, a String**
@@ -446,6 +500,12 @@ A `LeagueProfile` carries a roster format **and the ADP market that prices it**
 as one object, because the 2026 superflex bug was exactly what happens when
 those two drift apart. Never set a roster format without setting the market;
 `profiles.customize` exists for one-off variants.
+
+`adp_source` is the third half of that same pairing: **`"ffc"` or `"sleeper"`**,
+validated in `__post_init__` so a typo raises instead of falling back. The Shiva
+Bowl is `"sleeper"` — see the source-swap note in the traps below for why, and
+note it governs **this season's board only**. The historical curve is FFC under
+either source.
 
 ```bash
 FF_EDGE_PROFILE=standard_12 uv run python -c "from src import board; print(board.build()['players'].head())"

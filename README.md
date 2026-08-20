@@ -118,6 +118,7 @@ normalizes what comes back.
 | `src/nflverse.py` | Cached wrappers over `nflreadpy` — production, opportunity, context. |
 | `src/sleeper.py` | Read-only Sleeper client, including the `previous_league_id` walk. |
 | `src/adp.py` | FFC ADP, daily snapshots, and pick-survival probability. |
+| `src/sleeper_adp.py` | Sleeper's own ADP — the numbers the draft room shows. Prices the Shiva Bowl board; FFC still supplies dispersion. |
 | `src/ids.py` | The join layer. All cross-source ID and name matching lives here. |
 | `src/props.py` | FanDuel player prop lines — season-long today, weekly in-season. |
 | `src/news.py` | Free news ingestion: Google News RSS, depth charts, Sleeper trending. |

@@ -1,7 +1,40 @@
 # ff-edge — handoff
 
-**Session date:** 2026-08-18. **Shiva Bowl drafts 08-22 at 19:00 — four days.**
-**State:** 462 tests pass, 2 skip (with both env vars). **`main` is the only branch.**
+**Session date:** 2026-08-20. **Shiva Bowl drafts 08-22 at 19:00 — two days.**
+**State:** 474 tests pass, 2 skip (with both env vars).
+**Branch:** `worktree-league-adp` carries the ADP source swap; `main` is otherwise current.
+
+---
+
+## New 08-20: the board is priced from Sleeper's ADP, not FFC's
+
+The complaint that started it was that the board did not reflect what players
+actually cost. It didn't — it was reading a market nobody in this league can
+see. **Sleeper publishes its own ADP and the draft room displays it**, and
+`adp_2qb` in Sleeper's projections feed reproduces the on-screen numbers to
+within 0.3. `src/sleeper_adp.py` fetches it; `LeagueProfile.adp_source` selects
+it; `shiva_bowl` is now `"sleeper"`.
+
+The disagreement is large and two-directional — TEs a median 25 picks earlier
+than FFC inside the top 150, QBs 27 later, **Trey McBride 65.7 → 19.8**. Board
+ranks barely moved (TE median −1.5); *prices* moved enormously, which is the
+side that was wrong.
+
+Three things to know before touching it:
+
+- **`999.0` is Sleeper's "undrafted" sentinel, never null, and it sorts
+  correctly** — so it hides from every ascending query while poisoning any mean
+  or curve fit. Dropped on ingest.
+- **The historical ADP→points curve is still FFC** and that is deliberate; see
+  the value-vs-cost split in `LEAGUE_ADP_SPEC.md`.
+- **The movement panels in `app.py` and `web/` still read FFC history**, so they
+  are a different market from the board beside them. Sleeper history started
+  accumulating 08-20 and cannot be backfilled — those panels can switch once
+  two days exist. This is the one loose end.
+
+`LEAGUE_ADP_SPEC.md` now opens with a resolution block. The `src/market.py`
+per-position correction it designed was **deliberately not built**: Sleeper
+reproduces its central finding, and stacking both would double-count it.
 
 ---
 

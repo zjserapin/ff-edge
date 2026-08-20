@@ -1,9 +1,56 @@
 # LEAGUE_ADP_SPEC.md — pricing players at what they cost *here*
 
-Status: **measured, not built.** 2026-08-19. Written in response to "can we make
-ADP league-specific?", and the short answer is *partly, and not in the way the
-question assumes*. Read the Findings before the Design — the measurement changed
-what the design should be.
+Status: **resolved 2026-08-20, from a direction this document did not
+anticipate.** Read the resolution block immediately below before anything else.
+The measurement in here stands and is worth reading; the **Design section is
+superseded and was deliberately never built.**
+
+---
+
+## Resolution — the answer was a better market, not a correction
+
+This spec set out to *correct* FFC's national ADP toward the Shiva Bowl using
+three seasons of real picks. Then the actual source of the complaint turned out
+to be visible on screen: **Sleeper publishes its own ADP, the draft room shows
+it, and that is the number every manager in this league is looking at while they
+pick.** Herbert 33.6, Henry 31.1, Lamb 13.1 — read off the draft room and
+reproduced to within 0.3 by `adp_2qb` in Sleeper's projections feed.
+
+That reframes the whole problem. The question was never "how do we adjust a
+national market toward this league" but "why are we reading a market nobody in
+this league can see". The argument for the swap is **causal rather than
+statistical**: FFC's board predicts this draft from the outside, Sleeper's board
+partly *creates* it.
+
+**Built instead:** `src/sleeper_adp.py`, plus `adp_source` on `LeagueProfile`
+(validated, `"ffc"` or `"sleeper"`), plus a daily snapshot in `bootstrap`.
+`shiva_bowl` is now `"sleeper"`.
+
+**Deliberately not built: the `src/market.py` bias correction designed below.**
+Sleeper's board reproduces this document's central finding independently — TEs a
+median 25 picks earlier than FFC inside the top 150, against the −20/−9.5/−9.5
+residuals measured here from real drafts. Two unrelated methods agreeing that
+FFC is wrong about tight ends means the honest move is to stop reading FFC, not
+to keep reading it through a patch. **Stacking both corrections would double-
+count the same effect.** If a league-specific residual is ever wanted again,
+re-measure it *against Sleeper* — the old numbers are residuals against a market
+this project no longer uses.
+
+**What survives from this document and still governs:** the value-vs-cost split
+below. It is the reason the swap moved the 2026 board but left the historical
+ADP→points curve on FFC, and it is the thing to re-read before touching either.
+
+**What the swap did and did not move**, measured: board ranks barely changed
+(TE median −1.5) because the two sources largely agree on ordering *within* a
+position; prices changed enormously because they disagree on cross-position
+price. McBride went 65.7 → 19.8 while his board rank went 22 → 20. The
+complaint was that the board did not reflect true *cost*, and cost is precisely
+what moved.
+
+**Still open:** the movement panels in `app.py` and `web/` read FFC history and
+are now a different market from the board beside them. Sleeper history began
+accumulating 2026-08-20 and cannot be backfilled, so those panels cannot switch
+until there are two days of it.
 
 ---
 
@@ -126,6 +173,11 @@ changes `exp_points` or `par` as a side effect is wrong.
 
 ## Proposed design
 
+> **SUPERSEDED — never built.** Kept as the record of a design that was
+> correct for the problem as framed and became unnecessary when the framing
+> changed. See the resolution block at the top. Building this *on top of*
+> Sleeper ADP would double-count the tight-end effect both sources found.
+
 New module `src/market.py` — separate from `adp.py`, which stays the FFC client.
 
 - `market.draft_bias(league_ids, seasons_back=4) -> pl.DataFrame`
@@ -172,6 +224,9 @@ uncentered 828 2024 numbers read WR +4.5, RB +6.0 — that offset is an artifact
 of pool depth, not six positions' worth of reaching.
 
 ## What this changes on the 2026 board, concretely
+
+> **SUPERSEDED.** This projects the *proposed correction*, not what shipped.
+> For what actually changed, see the resolution block at the top.
 
 Three tight ends sit inside the top 100. With `TE: -10` on the cost side:
 

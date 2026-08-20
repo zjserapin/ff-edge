@@ -44,6 +44,7 @@ from src import ids
 from src import profiles as pf
 from src import scoring as sc
 from src import sleeper
+from src import sleeper_adp
 from src.config import (
     ECR_PAGE_STANDARD,
     ECR_PAGE_SUPERFLEX,
@@ -198,6 +199,12 @@ def draftable(
     board you draft off, it has to be the market that matches the format. That
     pairing is exactly what `profiles.LeagueProfile` exists to keep together.
 
+    Which *source* prices it also comes from the profile. The Shiva Bowl reads
+    Sleeper's own 2QB ADP, because that is the board its managers are looking at
+    while they pick — pricing a Sleeper league off FFC prices it against a market
+    nobody in the league can see. The curve stays FFC either way; see
+    `sleeper_adp` for why value and cost separate.
+
     Name-matched against Sleeper, since the two sources share no ids. Matching
     is on `ids.normalize`, and `keeper_match_report` says how many keepers
     failed to match so a silent miss cannot quietly leave a kept player on the
@@ -209,7 +216,10 @@ def draftable(
     scoring = scoring or profile.adp_scoring
     teams = teams or profile.adp_teams
     curve = curve if curve is not None else ex.adp_curve(profile=profile)
-    board = adp_mod.fetch(scoring, teams, season)
+    if profile.adp_source == "sleeper":
+        board = sleeper_adp.board(scoring, teams, season)
+    else:
+        board = adp_mod.fetch(scoring, teams, season)
     if not board.height or not curve.height:
         return pl.DataFrame()
 

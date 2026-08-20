@@ -48,6 +48,10 @@ from src.config import (
 )
 
 
+# Markets that can price a current-season board. Not a free-form string.
+ADP_SOURCES: frozenset[str] = frozenset({"ffc", "sleeper"})
+
+
 @dataclass(frozen=True)
 class LeagueProfile:
     """A format and the market that prices it, as one indivisible choice."""
@@ -73,8 +77,29 @@ class LeagueProfile:
     # profiles describe a format nobody has configured an account for.
     sleeper_backed: bool
 
+    # Which market prices *this season's* board: "ffc" or "sleeper". The
+    # historical curve is FFC either way — see `sleeper_adp` for why value and
+    # cost separate here.
+    #
+    # This belongs on the profile rather than in a call because it is the same
+    # class of pairing `adp_scoring` is. A league drafted inside Sleeper is
+    # drafted against Sleeper's numbers, so pricing it off FFC prices it off a
+    # board none of its managers can see. Choosing the source and choosing the
+    # format are one decision, made once, in the object that already carries it.
+    adp_source: str = "ffc"
+
     notes: str = ""
     assumptions: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        # Same reasoning as `resolve` raising on an unknown profile name: a
+        # misspelled source that fell back to FFC would price this league off
+        # the wrong market and look entirely plausible doing it.
+        if self.adp_source not in ADP_SOURCES:
+            known = ", ".join(sorted(ADP_SOURCES))
+            raise ValueError(
+                f"unknown adp_source {self.adp_source!r}; known sources: {known}"
+            )
 
 
 # Standard scoring is half-PPR with the reception point removed, and nothing
@@ -94,9 +119,13 @@ PROFILES: dict[str, LeagueProfile] = {
         adp_teams=LEAGUE_ADP_TEAMS,
         keepers=True,
         sleeper_backed=True,
+        adp_source="sleeper",
         notes=(
             "The real league. Roster, scoring, keepers and picks all come from "
-            "Sleeper at runtime; the values here are the offline fallback."
+            "Sleeper at runtime; the values here are the offline fallback. The "
+            "board is priced off Sleeper's own 2QB ADP — the numbers this "
+            "league's draft room shows its managers — with FFC supplying the "
+            "dispersion Sleeper does not publish."
         ),
     ),
     "standard_12": LeagueProfile(
